@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RemoteRG - リモートゲームプレイ</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #fff;
+        }
+        
+        .status {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .status.connected {
+            background: #2a4a2a;
+        }
+        
+        .status.error {
+            background: #4a2a2a;
+        }
+        
+        #video {
+            width: 100%;
+            max-width: 1280px;
+            background: #000;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            padding: 12px 24px;
+            background: #3a3a3a;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: #4a4a4a;
+        }
+        
+        button:active {
+            background: #2a2a2a;
+        }
+        
+        button.primary {
+            background: #0066cc;
+        }
+        
+        button.primary:hover {
+            background: #0055aa;
+        }
+        
+        .log {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            color: #aaa;
+        }
+        
+        .log-entry.error {
+            color: #ff6666;
+        }
+        
+        .log-entry.success {
+            color: #66ff66;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>RemoteRG</h1>
+        
+        <div id="status" class="status">
+            接続待機中...
+        </div>
+        
+        <video id="video" autoplay playsinline muted></video>
+        
+        <div class="controls">
+            <button id="connectBtn" class="primary">接続</button>
+            <button id="nextBtn">次へ (Enter)</button>
+            <button id="screenshotBtn">スクリーンショット</button>
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+    
+    <script>
+        const statusEl = document.getElementById('status');
+        const videoEl = document.getElementById('video');
+        const connectBtn = document.getElementById('connectBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const screenshotBtn = document.getElementById('screenshotBtn');
+        const logEl = document.getElementById('log');
+        
+        let ws = null;
+        let pc = null;
+        let dataChannel = null;
+        let remoteDescSet = false;                  // Answer適用済みか
+        const pendingIceCandidates = [];            // Answer前に届いた候補の一時バッファ
+        
+        function log(message, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        
+        function updateStatus(message, className = '') {
+            statusEl.textContent = message;
+            statusEl.className = `status ${className}`;
+        }
+        
+        async function connect() {
+            try {
+                updateStatus('接続中...');
+                log('WebSocket接続を開始...');
+                
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/signal`;
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    log('WebSocket接続確立', 'success');
+                    createPeerConnection();
+                };
+                
+                ws.onmessage = async (event) => {
+                    try {
+                        const message = JSON.parse(event.data);
+                        log(`受信: ${message.type}`);
+                        
+                        if (message.type === 'answer') {
+                            try {
+                                log(`Answer SDP (最初の100文字): ${message.sdp.substring(0, 100)}...`);
+                                await pc.setRemoteDescription({
+                                    type: 'answer',
+                                    sdp: message.sdp
+                                });
+                                remoteDescSet = true;
+                                log('Answerを設定', 'success');
+                                log(`現在のシグナリング状態: ${pc.signalingState}`);
+
+                                // Answer適用後に滞留ICE候補をまとめて適用
+                                while (pendingIceCandidates.length > 0) {
+                                    const candidate = pendingIceCandidates.shift();
+                                    try {
+                                        await pc.addIceCandidate(candidate);
+                                        log('ICE candidate追加（バッファから）', 'success');
+                                    } catch (error) {
+                                        log(`ICE candidate追加エラー（バッファ）: ${error}`, 'error');
+                                        console.error('addIceCandidate buffered error:', error);
+                                    }
+                                }
+                            } catch (error) {
+                                log(`Answer設定エラー: ${error}`, 'error');
+                                console.error('setRemoteDescription error:', error);
+                                console.error('Answer SDP:', message.sdp);
+                            }
+                        } else if (message.type === 'ice_candidate') {
+                            try {
+                                const candidateInit = {
+                                    candidate: message.candidate,
+                                    sdpMid: message.sdp_mid,
+                                    sdpMLineIndex: message.sdp_mline_index
+                                };
+
+                                if (!remoteDescSet) {
+                                    // RemoteDescription未設定ならバッファして後で適用
+                                    pendingIceCandidates.push(candidateInit);
+                                    log('ICE candidateをバッファに保存（Answer待ち）', 'info');
+                                } else {
+                                    await pc.addIceCandidate(candidateInit);
+                                    log('ICE candidate追加', 'success');
+                                }
+                            } catch (error) {
+                                log(`ICE candidate追加エラー: ${error}`, 'error');
+                                console.error('addIceCandidate error:', error);
+                            }
+                        }
+                    } catch (error) {
+                        log(`メッセージ処理エラー: ${error}`, 'error');
+                        console.error('Message processing error:', error);
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    log(`WebSocketエラー: ${error}`, 'error');
+                    updateStatus('接続エラー', 'error');
+                };
+                
+                ws.onclose = () => {
+                    log('WebSocket接続が閉じられました', 'error');
+                    updateStatus('切断されました', 'error');
+                };
+                
+            } catch (error) {
+                log(`接続エラー: ${error}`, 'error');
+                updateStatus('接続エラー', 'error');
+            }
+        }
+        
+        function createPeerConnection() {
+            log('PeerConnectionを作成...');
+            
+            // ホスト側と対称的にiceServersを空配列にする（STUN不要）
+            pc = new RTCPeerConnection({
+                iceServers: []
+            });
+            
+            pc.onicecandidate = (event) => {
+                if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'ice_candidate',
+                        candidate: event.candidate.candidate,
+                        sdp_mid: event.candidate.sdpMid,
+                        sdp_mline_index: event.candidate.sdpMLineIndex
+                    }));
+                }
+            };
+            
+            pc.ontrack = async (event) => {
+                log('ストリームを受信', 'success');
+                
+                // event.streamsが空の場合のフォールバック
+                if (event.streams && event.streams.length > 0) {
+                    videoEl.srcObject = event.streams[0];
+                } else if (event.track) {
+                    // trackから直接MediaStreamを作成
+                    videoEl.srcObject = new MediaStream([event.track]);
+                    log('TrackからMediaStreamを作成', 'success');
+                } else {
+                    log('ストリームもトラックも見つかりません', 'error');
+                    return;
+                }
+                
+                // 再生を開始（リトライ付き）
+                let retryCount = 0;
+                const maxRetries = 3;
+                while (retryCount < maxRetries) {
+                    try {
+                        await videoEl.play();
+                        log('動画の再生を開始', 'success');
+                        updateStatus('接続済み', 'connected');
+                        break;
+                    } catch (error) {
+                        retryCount++;
+                        if (retryCount >= maxRetries) {
+                            log(`動画の再生に失敗 (${maxRetries}回リトライ後): ${error}`, 'error');
+                            console.error('Video play error:', error);
+                        } else {
+                            log(`動画の再生リトライ ${retryCount}/${maxRetries}...`);
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        }
+                    }
+                }
+            };
+            
+            pc.onconnectionstatechange = () => {
+                const state = pc.connectionState;
+                log(`接続状態: ${state}`);
+                if (state === 'failed' || state === 'closed') {
+                    updateStatus(`接続失敗: ${state}`, 'error');
+                } else if (state === 'disconnected') {
+                    // disconnectedは一時的な状態の可能性があるため、警告のみ
+                    log(`接続が一時的に切断されました: ${state}`, 'error');
+                    updateStatus('接続が切断されました', 'error');
+                } else if (state === 'connected') {
+                    updateStatus('接続済み', 'connected');
+                }
+            };
+            
+            pc.oniceconnectionstatechange = () => {
+                const iceState = pc.iceConnectionState;
+                log(`ICE接続状態: ${iceState}`);
+                
+                // ICE接続状態に応じてUIを更新
+                if (iceState === 'connected' || iceState === 'completed') {
+                    updateStatus('接続済み', 'connected');
+                } else if (iceState === 'failed' || iceState === 'disconnected') {
+                    updateStatus(`ICE接続失敗: ${iceState}`, 'error');
+                }
+            };
+            
+            pc.onicegatheringstatechange = () => {
+                log(`ICE収集状態: ${pc.iceGatheringState}`);
+            };
+            
+            pc.onsignalingstatechange = () => {
+                log(`シグナリング状態: ${pc.signalingState}`);
+            };
+            
+            // Video受信用のtransceiverを追加（recvonly）
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            log('Video recvonly transceiverを追加', 'success');
+            
+            // DataChannelを作成
+            dataChannel = pc.createDataChannel('input', { ordered: true });
+            dataChannel.onopen = () => {
+                log('DataChannelが開きました', 'success');
+            };
+            dataChannel.onerror = (error) => {
+                log(`DataChannelエラー: ${error}`, 'error');
+            };
+            
+            // Offerを作成して送信
+            pc.createOffer().then(async (offer) => {
+                try {
+                    await pc.setLocalDescription(offer);
+                    log('Offerを作成して送信', 'success');
+                    log(`Offer SDP (最初の100文字): ${offer.sdp.substring(0, 100)}...`);
+                    
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'offer',
+                            sdp: offer.sdp
+                        }));
+                    }
+                } catch (error) {
+                    log(`LocalDescription設定エラー: ${error}`, 'error');
+                    console.error('setLocalDescription error:', error);
+                }
+            }).catch(error => {
+                log(`Offer作成エラー: ${error}`, 'error');
+                console.error('createOffer error:', error);
+            });
+        }
+        
+        function sendKey(key, down = true) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({
+                    type: 'key',
+                    key: key,
+                    down: down
+                }));
+                log(`キー送信: ${key} (down: ${down})`);
+            } else {
+                log('DataChannelが開いていません', 'error');
+            }
+        }
+        
+        function requestScreenshot() {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({
+                    type: 'screenshot_request'
+                }));
+                log('スクリーンショットリクエスト送信');
+            } else {
+                log('DataChannelが開いていません', 'error');
+            }
+        }
+        
+        connectBtn.addEventListener('click', connect);
+        nextBtn.addEventListener('click', () => {
+            sendKey('ENTER', true);
+            setTimeout(() => sendKey('ENTER', false), 100);
+        });
+        screenshotBtn.addEventListener('click', requestScreenshot);
+        
+        log('初期化完了');
+    </script>
+</body>
+</html>
+

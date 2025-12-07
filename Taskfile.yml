@@ -1,0 +1,16 @@
+version: "3"
+
+dotenv:
+  - "web/.env.local"
+
+tasks:
+  hostd:
+    dir: "desktop/services"
+    cmds:
+      - cargo run --bin hostd
+  web:
+    dir: "web"
+    cmds:
+      - pnpm run dev
+    env:
+      NODE_OPTIONS: "--import ./instrument.server.mjs"

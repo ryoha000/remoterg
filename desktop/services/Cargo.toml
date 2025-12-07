@@ -1,6 +1,8 @@
 [workspace]
 
 members = [
+  "core",
+  "encoder",
   "capture",
   "signaling",
   "webrtc",

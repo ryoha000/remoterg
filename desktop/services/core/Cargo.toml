@@ -1,0 +1,12 @@
+[package]
+name = "core-types"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["sync"] }
+
+
+
+

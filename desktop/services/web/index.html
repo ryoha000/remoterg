@@ -102,6 +102,17 @@
             font-size: 12px;
         }
         
+        .info {
+            background: #242424;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+        
         .log-entry {
             margin-bottom: 5px;
             color: #aaa;
@@ -123,6 +134,13 @@
         <div id="status" class="status">
             接続待機中...
         </div>
+
+        <div id="videoInfo" class="info">
+            pc: -
+            receiver: -
+            stream: -
+            track: -
+        </div>
         
         <video id="video" autoplay playsinline muted></video>
         
@@ -142,12 +160,50 @@
         const nextBtn = document.getElementById('nextBtn');
         const screenshotBtn = document.getElementById('screenshotBtn');
         const logEl = document.getElementById('log');
+        const videoInfoEl = document.getElementById('videoInfo');
         
         let ws = null;
         let pc = null;
         let dataChannel = null;
         let remoteDescSet = false;                  // Answer適用済みか
         const pendingIceCandidates = [];            // Answer前に届いた候補の一時バッファ
+        let statsIntervalId = null;                 // 受信統計のポーリング
+        let frameCbCount = 0;                       // requestVideoFrameCallbackの呼び出し回数
+        let candidateLogged = false;                // 選択候補のログ出力を一度だけ行う
+        const urlParams = new URLSearchParams(window.location.search);
+        const codecParam = (urlParams.get('codec') || 'h264').toLowerCase();
+
+        function renderVideoDebug(extra = {}) {
+            if (!videoInfoEl) return;
+            const receiver = pc?.getReceivers().find(r => r.track?.kind === 'video');
+            const track = receiver?.track || videoEl.srcObject?.getVideoTracks?.()[0];
+            const stream = videoEl.srcObject;
+            const lines = [];
+            lines.push(`pc: ${pc ? 'yes' : 'no'}`);
+            lines.push(`receiver: ${receiver ? receiver.transport ? 'yes (with transport)' : 'yes' : 'no'}`);
+            lines.push(`stream: ${stream ? `id=${stream.id} tracks=${stream.getTracks().length}` : 'none'}`);
+            if (track) {
+                lines.push(`track: kind=${track.kind} id=${track.id}`);
+                lines.push(`  readyState=${track.readyState} muted=${track.muted} enabled=${track.enabled}`);
+                lines.push(`  contentHint=${track.contentHint || '-'}`);
+            } else {
+                lines.push('track: none');
+            }
+            if (receiver?.transport) {
+                const t = receiver.transport;
+                lines.push(`transport: ice=${t.iceTransport?.state ?? '-'} dtls=${t.dtlsTransport?.state ?? '-'}`);
+            }
+            if (extra.inbound) {
+                const inbound = extra.inbound;
+                lines.push(`inbound: bytes=${inbound.bytesReceived ?? '-'} frames=${inbound.framesReceived ?? '-'}`);
+                lines.push(`         width=${inbound.frameWidth ?? '-'} height=${inbound.frameHeight ?? '-'} fps=${inbound.framesPerSecond ?? '-'}`);
+            }
+            if (extra.trackReport) {
+                const tr = extra.trackReport;
+                lines.push(`track stats: decoded=${tr.framesDecoded ?? '-'} dropped=${tr.framesDropped ?? '-'} freeze=${tr.freezeCount ?? '-'}`);
+            }
+            videoInfoEl.textContent = lines.join('\n');
+        }
         
         function log(message, type = 'info') {
             const entry = document.createElement('div');
@@ -271,7 +327,11 @@
             };
             
             pc.ontrack = async (event) => {
-                log('ストリームを受信', 'success');
+                log(`ストリームを受信 (tracks=${event.streams?.[0]?.getTracks().length ?? 0})`, 'success');
+                if (event.track) {
+                    log(`トラック情報 kind=${event.track.kind} id=${event.track.id} readyState=${event.track.readyState}`);
+                }
+                renderVideoDebug();
                 
                 // event.streamsが空の場合のフォールバック
                 if (event.streams && event.streams.length > 0) {
@@ -293,11 +353,31 @@
                         await videoEl.play();
                         log('動画の再生を開始', 'success');
                         updateStatus('接続済み', 'connected');
+
+                        // 受信統計の定期取得を開始
+                        startStatsLogging();
+
+                        // フレーム到達の有無を軽く確認（多すぎないよう間引き）
+                        if ('requestVideoFrameCallback' in videoEl) {
+                            const frameLogger = () => {
+                                frameCbCount++;
+                                if (frameCbCount <= 5 || frameCbCount % 60 === 0) {
+                                    log(`requestVideoFrameCallback: frame #${frameCbCount}`);
+                                }
+                                videoEl.requestVideoFrameCallback(frameLogger);
+                            };
+                            videoEl.requestVideoFrameCallback(frameLogger);
+                        } else {
+                            log('requestVideoFrameCallback未サポート、代わりにgetStatsのみ確認');
+                        }
+                renderVideoDebug();
+
                         break;
                     } catch (error) {
                         retryCount++;
                         if (retryCount >= maxRetries) {
-                            log(`動画の再生に失敗 (${maxRetries}回リトライ後): ${error}`, 'error');
+                            const reason = error?.message || error?.name || `${error}`;
+                            log(`動画の再生に失敗 (${maxRetries}回リトライ後): ${reason}`, 'error');
                             console.error('Video play error:', error);
                         } else {
                             log(`動画の再生リトライ ${retryCount}/${maxRetries}...`);
@@ -312,6 +392,7 @@
                 log(`接続状態: ${state}`);
                 if (state === 'failed' || state === 'closed') {
                     updateStatus(`接続失敗: ${state}`, 'error');
+                    stopStatsLogging();
                 } else if (state === 'disconnected') {
                     // disconnectedは一時的な状態の可能性があるため、警告のみ
                     log(`接続が一時的に切断されました: ${state}`, 'error');
@@ -319,6 +400,7 @@
                 } else if (state === 'connected') {
                     updateStatus('接続済み', 'connected');
                 }
+                renderVideoDebug();
             };
             
             pc.oniceconnectionstatechange = () => {
@@ -328,9 +410,12 @@
                 // ICE接続状態に応じてUIを更新
                 if (iceState === 'connected' || iceState === 'completed') {
                     updateStatus('接続済み', 'connected');
+                    startStatsLogging();
                 } else if (iceState === 'failed' || iceState === 'disconnected') {
                     updateStatus(`ICE接続失敗: ${iceState}`, 'error');
+                    stopStatsLogging();
                 }
+                renderVideoDebug();
             };
             
             pc.onicegatheringstatechange = () => {
@@ -339,11 +424,34 @@
             
             pc.onsignalingstatechange = () => {
                 log(`シグナリング状態: ${pc.signalingState}`);
+                renderVideoDebug();
             };
             
             // Video受信用のtransceiverを追加（recvonly）
-            pc.addTransceiver('video', { direction: 'recvonly' });
+            const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
             log('Video recvonly transceiverを追加', 'success');
+
+            // codec指定: デフォルトh264。?codec=any で制約を外す
+            if (codecParam === 'h264') {
+                try {
+                    const capabilities = RTCRtpSender.getCapabilities('video');
+                    const h264Codecs = (capabilities?.codecs ?? []).filter(c =>
+                        c.mimeType === 'video/H264' &&
+                        (c.sdpFmtpLine ?? '').includes('packetization-mode=1')
+                    );
+                    if (h264Codecs.length > 0 && typeof videoTransceiver.setCodecPreferences === 'function') {
+                        videoTransceiver.setCodecPreferences(h264Codecs);
+                        log(`H.264 codec preferenceを適用 (${h264Codecs.length}件)`, 'success');
+                    } else {
+                        log('H.264 codec preferenceを設定できませんでした（対象なし/未対応ブラウザ）', 'error');
+                    }
+                } catch (error) {
+                    log(`codec preference設定エラー: ${error}`, 'error');
+                    console.error('setCodecPreferences error:', error);
+                }
+            } else {
+                log(`codec preferenceを適用せず (codec=${codecParam})`);
+            }
             
             // DataChannelを作成
             dataChannel = pc.createDataChannel('input', { ordered: true });
@@ -400,6 +508,98 @@
                 log('DataChannelが開いていません', 'error');
             }
         }
+
+        async function startStatsLogging() {
+            if (!pc) return;
+            // すでにポーリング中ならスキップ
+            if (statsIntervalId !== null) return;
+
+            const receiver = pc.getReceivers().find(r => r.track?.kind === 'video');
+            if (!receiver) {
+                log('stats: videoレシーバーが見つかりませんでした');
+                return;
+            }
+
+            // 受信パラメータ（payload typeやfmtp）を一度ログ
+            try {
+                const params = receiver.getParameters();
+                if (params?.codecs?.length) {
+                    params.codecs.forEach(c => {
+                        log(`recv params codec pt=${c.payloadType} mime=${c.mimeType} fmtp=${c.sdpFmtpLine ?? ''}`);
+                    });
+                }
+            } catch (err) {
+                log(`recv params取得エラー: ${err}`, 'error');
+            }
+
+            statsIntervalId = setInterval(async () => {
+                try {
+                    const reports = await receiver.getStats();
+                    let inbound = null;
+                    let trackReport = null;
+                    let selectedPair = null;
+                    const allPairs = [];
+                    const locals = {};
+                    const remotes = {};
+                    reports.forEach(report => {
+                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            inbound = report;
+                        } else if (report.type === 'track') {
+                            trackReport = report;
+                        } else if (report.type === 'candidate-pair') {
+                            allPairs.push(report);
+                            if (report.nominated && report.state === 'succeeded') {
+                                selectedPair = report;
+                            }
+                        } else if (report.type === 'local-candidate') {
+                            locals[report.id] = report;
+                        } else if (report.type === 'remote-candidate') {
+                            remotes[report.id] = report;
+                        }
+                    });
+
+                    if (inbound) {
+                        log(`stats inbound: bytes=${inbound.bytesReceived ?? '-'} frames=${inbound.framesReceived ?? '-'} packetsLost=${inbound.packetsLost ?? '-'}`);
+                    } else {
+                        log('stats: inbound-rtpなし');
+                    }
+
+                    if (trackReport) {
+                        log(`stats track: decoded=${trackReport.framesDecoded ?? '-'} dropped=${trackReport.framesDropped ?? '-'} freeze=${trackReport.freezeCount ?? '-'}`);
+                    }
+
+                    renderVideoDebug({ inbound, trackReport });
+
+                    if (!candidateLogged) {
+                        if (selectedPair) {
+                            const localCand = locals[selectedPair.localCandidateId];
+                            const remoteCand = remotes[selectedPair.remoteCandidateId];
+                            log(`selected candidate: local=${localCand?.address ?? '?'}:${localCand?.port ?? '?'} (${localCand?.candidateType ?? '?'}) -> remote=${remoteCand?.address ?? '?'}:${remoteCand?.port ?? '?'} (${remoteCand?.candidateType ?? '?'}) state=${selectedPair.state}`);
+                            candidateLogged = true;
+                        } else if (allPairs.length) {
+                            // nominatedが無い場合、最初のsucceededを参考までに出す
+                            const firstSucceeded = allPairs.find(p => p.state === 'succeeded');
+                            if (firstSucceeded) {
+                                const localCand = locals[firstSucceeded.localCandidateId];
+                                const remoteCand = remotes[firstSucceeded.remoteCandidateId];
+                                log(`candidate (non-nominated): local=${localCand?.address ?? '?'}:${localCand?.port ?? '?'} (${localCand?.candidateType ?? '?'}) -> remote=${remoteCand?.address ?? '?'}:${remoteCand?.port ?? '?'} (${remoteCand?.candidateType ?? '?'}) state=${firstSucceeded.state}`);
+                                candidateLogged = true;
+                            }
+                        }
+                    }
+                } catch (err) {
+                    log(`stats取得エラー: ${err}`, 'error');
+                }
+            }, 2000);
+        }
+
+        function stopStatsLogging() {
+            if (statsIntervalId !== null) {
+                clearInterval(statsIntervalId);
+                statsIntervalId = null;
+            }
+            renderVideoDebug();
+        }
         
         connectBtn.addEventListener('click', connect);
         nextBtn.addEventListener('click', () => {
@@ -409,6 +609,7 @@
         screenshotBtn.addEventListener('click', requestScreenshot);
         
         log('初期化完了');
+        renderVideoDebug();
     </script>
 </body>
 </html>

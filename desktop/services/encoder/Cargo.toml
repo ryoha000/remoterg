@@ -1,0 +1,18 @@
+[package]
+name = "encoder"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["h264"]
+h264 = ["openh264"]
+vp9 = ["vpx-encode/vp9"]
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+openh264 = { version = "0.9", optional = true }
+vpx-encode = { version = "0.6.2", optional = true }
+core-types = { path = "../core" }
+

@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use core_types::{EncodeJob, EncodeResult, VideoCodec, VideoEncoderFactory};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use webrtc_rs::api::interceptor_registry::register_default_interceptors;
-use webrtc_rs::api::media_engine::MediaEngine;
+use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_VP9};
+use webrtc_rs::api::setting_engine::SettingEngine;
 use webrtc_rs::api::APIBuilder;
 use webrtc_rs::data_channel::data_channel_message::DataChannelMessage as RTCDataChannelMessage;
 use webrtc_rs::data_channel::RTCDataChannel;
@@ -15,25 +18,15 @@ use webrtc_rs::peer_connection::configuration::RTCConfiguration;
 use webrtc_rs::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc_rs::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc_rs::peer_connection::RTCPeerConnection;
+use webrtc_rs::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
+use webrtc_rs::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+use webrtc_rs::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
+use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
+use webrtc_rs::stats::StatsReportType;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_rs::track::track_local::TrackLocal;
-use webrtc_rs::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 
-use capture::Frame;
-
-/// WebRTCサービスのメッセージ（内部用）
-#[derive(Debug, Clone)]
-pub enum WebRtcMessage {
-    SetOffer { sdp: String },
-    AddIceCandidate { candidate: String, sdp_mid: Option<String>, sdp_mline_index: Option<u16> },
-}
-
-/// シグナリングサービスへの応答メッセージ
-#[derive(Debug, Clone)]
-pub enum SignalingResponse {
-    Answer { sdp: String },
-    IceCandidate { candidate: String, sdp_mid: Option<String>, sdp_mline_index: Option<u16> },
-}
+use core_types::{DataChannelMessage, Frame, SignalingResponse, WebRtcMessage};
 
 /// WebRTCサービス
 pub struct WebRtcService {
@@ -41,15 +34,15 @@ pub struct WebRtcService {
     message_rx: mpsc::Receiver<WebRtcMessage>,
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
+    encoder_factory: Arc<dyn VideoEncoderFactory>,
 }
 
 /// Video trackとエンコーダーの状態
 struct VideoTrackState {
     track: Arc<TrackLocalStaticSample>,
-    encoder: openh264::encoder::Encoder,
     width: u32,
     height: u32,
-    sps_pps_sent: bool, // SPS/PPSが送信済みかどうか
+    keyframe_sent: bool, // 初期キーフレーム送信済みか
 }
 
 /// Answer SDPのm-line情報
@@ -72,13 +65,13 @@ fn parse_answer_m_lines(answer_sdp: &str) -> Vec<MLineInfo> {
     let mut m_lines = Vec::new();
     let lines: Vec<&str> = answer_sdp.lines().collect();
     let mut m_line_index = 0;
-    
+
     for (i, line) in lines.iter().enumerate() {
         if line.starts_with("m=") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if !parts.is_empty() {
                 let media_type = parts[0].trim_start_matches("m=").to_string();
-                
+
                 // このm-lineのmidを探す（次のm=または終端まで）
                 let mut mid = None;
                 for next_line in lines.iter().skip(i + 1) {
@@ -90,7 +83,7 @@ fn parse_answer_m_lines(answer_sdp: &str) -> Vec<MLineInfo> {
                         break;
                     }
                 }
-                
+
                 m_lines.push(MLineInfo {
                     mid,
                     index: m_line_index,
@@ -100,97 +93,15 @@ fn parse_answer_m_lines(answer_sdp: &str) -> Vec<MLineInfo> {
             }
         }
     }
-    
-    m_lines
-}
 
-/// OpenH264のEncodedBitStreamからAnnex-B形式のH.264データを生成
-/// 戻り値: (Annex-B形式のデータ, SPS/PPSが含まれているか)
-fn annexb_from_bitstream(bitstream: &openh264::encoder::EncodedBitStream) -> (Vec<u8>, bool) {
-    const START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
-    let mut sample_data = Vec::new();
-    let mut has_sps_pps = false;
-    
-    let num_layers = bitstream.num_layers();
-    if num_layers == 0 {
-        warn!("EncodedBitStream has no layers");
-        return (sample_data, has_sps_pps);
-    }
-    
-    debug!("Processing {} layers", num_layers);
-    
-    for i in 0..num_layers {
-        if let Some(layer) = bitstream.layer(i) {
-            // すべてのレイヤーを処理（SPS/PPSは非ビデオレイヤーに含まれる可能性がある）
-            let nal_count = layer.nal_count();
-            debug!("Layer {}: {} NAL units", i, nal_count);
-            
-            if nal_count == 0 {
-                warn!("Layer {} has no NAL units", i);
-                continue;
-            }
-            
-            for j in 0..nal_count {
-                if let Some(nal_unit) = layer.nal_unit(j) {
-                    if nal_unit.is_empty() {
-                        warn!("NAL unit {} in layer {} is empty", j, i);
-                        continue;
-                    }
-                    
-                    debug!("NAL unit {} in layer {}: {} bytes", j, i, nal_unit.len());
-                    
-                    // NALユニットの先頭にスタートコードがあるかチェック
-                    let has_start_code = nal_unit.len() >= 4 
-                        && nal_unit[0] == 0x00 
-                        && nal_unit[1] == 0x00 
-                        && nal_unit[2] == 0x00 
-                        && nal_unit[3] == 0x01;
-                    
-                    // NAL typeを判定（スタートコードがある場合は4バイト目、ない場合は0バイト目）
-                    let nal_header_offset = if has_start_code { 4 } else { 0 };
-                    
-                    if nal_unit.len() <= nal_header_offset {
-                        warn!("NAL unit {} in layer {} is too small ({} bytes, offset {})", 
-                            j, i, nal_unit.len(), nal_header_offset);
-                        continue;
-                    }
-                    
-                    let nal_type = nal_unit[nal_header_offset] & 0x1F;
-                    debug!("NAL unit {} in layer {}: type={}, has_start_code={}", 
-                        j, i, nal_type, has_start_code);
-                    
-                    // SPS (type 7) または PPS (type 8) を検出
-                    if nal_type == 7 || nal_type == 8 {
-                        has_sps_pps = true;
-                        info!("Found SPS/PPS: type={}, size={} bytes", nal_type, nal_unit.len());
-                    }
-                    
-                    // スタートコードがない場合は追加
-                    if !has_start_code {
-                        sample_data.extend_from_slice(START_CODE);
-                    }
-                    
-                    // NALユニットを追加（スタートコードが既にある場合はそのまま、ない場合は追加済み）
-                    sample_data.extend_from_slice(nal_unit);
-                } else {
-                    warn!("NAL unit {} in layer {} is None", j, i);
-                }
-            }
-        } else {
-            warn!("Layer {} is None", i);
-        }
-    }
-    
-    debug!("Total sample data: {} bytes, has_sps_pps: {}", sample_data.len(), has_sps_pps);
-    
-    (sample_data, has_sps_pps)
+    m_lines
 }
 
 /// RTCIceCandidateから完全なSDP candidate文字列を生成
 fn format_ice_candidate(candidate: &RTCIceCandidate) -> String {
     // webrtc-rsのRTCIceCandidateから完全なSDP candidate文字列を生成
     // フォーマット: candidate:<foundation> <component> <protocol> <priority> <address> <port> typ <type> [raddr <raddr>] [rport <rport>] [generation <generation>]
-    
+
     let mut candidate_str = format!(
         "candidate:{} {} {} {} {} {}",
         candidate.foundation,
@@ -200,110 +111,38 @@ fn format_ice_candidate(candidate: &RTCIceCandidate) -> String {
         candidate.address,
         candidate.port
     );
-    
+
     // candidate typeを追加
     // RTCIceCandidateにはcandidate_typeフィールドがある可能性があるが、
     // 実際の構造を確認する必要がある。とりあえず、addressから推測する
-    let candidate_type = if candidate.address.starts_with("127.") || 
-                           candidate.address.starts_with("192.168.") ||
-                           candidate.address.starts_with("10.") ||
-                           candidate.address.starts_with("172.") ||
-                           candidate.address == "::1" ||
-                           candidate.address.starts_with("fe80:") {
+    let candidate_type = if candidate.address.starts_with("127.")
+        || candidate.address.starts_with("192.168.")
+        || candidate.address.starts_with("10.")
+        || candidate.address.starts_with("172.")
+        || candidate.address == "::1"
+        || candidate.address.starts_with("fe80:")
+    {
         "host"
     } else if candidate.address.starts_with("169.254.") {
         "host" // Link-local address
     } else {
         "srflx" // Server reflexive (STUN経由)
     };
-    
+
     candidate_str.push_str(&format!(" typ {}", candidate_type));
-    
+
     // related addressがある場合は追加
     // RTCIceCandidateにはrelated_addressフィールドがある可能性があるが、
     // 実際の構造を確認する必要がある
-    
+
     candidate_str
 }
 
-/// ダミーフレーム（真っ赤なフレーム）を生成してエンコードし、SPS/PPSを送信
-async fn send_sps_pps_frame(
-    track: &Arc<TrackLocalStaticSample>,
-    encoder: &mut openh264::encoder::Encoder,
-    width: u32,
-    height: u32,
-) -> Result<()> {
-    info!("Sending SPS/PPS frame: {}x{} (red frame)", width, height);
-    
-    // 真っ赤なフレームを生成（RGBA形式）
-    let rgba_size = (width * height * 4) as usize;
-    let mut rgba_data = vec![0u8; rgba_size];
-    for i in 0..(width * height) as usize {
-        let rgba_idx = i * 4;
-        rgba_data[rgba_idx] = 255;     // R
-        rgba_data[rgba_idx + 1] = 0;   // G
-        rgba_data[rgba_idx + 2] = 0;   // B
-        rgba_data[rgba_idx + 3] = 255;  // A
+fn codec_to_mime_type(codec: VideoCodec) -> String {
+    match codec {
+        VideoCodec::H264 => MIME_TYPE_H264.to_owned(),
+        VideoCodec::Vp9 => MIME_TYPE_VP9.to_string(),
     }
-    
-    // RGBAデータをRGBデータに変換
-    let rgb_size = (width * height * 3) as usize;
-    let mut rgb_data = Vec::with_capacity(rgb_size);
-    for i in 0..(width * height) as usize {
-        let rgba_idx = i * 4;
-        rgb_data.push(rgba_data[rgba_idx]);     // R
-        rgb_data.push(rgba_data[rgba_idx + 1]); // G
-        rgb_data.push(rgba_data[rgba_idx + 2]); // B
-    }
-    
-    // RGBデータからYUVBufferを作成
-    let yuv = openh264::formats::YUVBuffer::with_rgb(
-        width as usize,
-        height as usize,
-        &rgb_data,
-    );
-    
-    // H.264エンコード
-    match encoder.encode(&yuv) {
-        Ok(bitstream) => {
-            // Annex-B形式に変換
-            let (sample_data, has_sps_pps) = annexb_from_bitstream(&bitstream);
-            
-            if sample_data.is_empty() {
-                warn!("SPS/PPS frame data is empty, skipping");
-                return Ok(());
-            }
-            
-            info!("SPS/PPS frame: {} bytes (has SPS/PPS: {})", sample_data.len(), has_sps_pps);
-            
-            // webrtc_media::Sampleを作成
-            use webrtc_media::Sample;
-            use std::time::Duration;
-            use bytes::Bytes;
-            
-            let sample = Sample {
-                data: Bytes::from(sample_data),
-                duration: Duration::from_millis(33), // 30fps
-                ..Default::default()
-            };
-            
-            match track.write_sample(&sample).await {
-                Ok(_) => {
-                    info!("SPS/PPS frame sent to track");
-                }
-                Err(e) => {
-                    error!("Failed to write SPS/PPS sample to track: {}", e);
-                    return Err(anyhow::anyhow!("Failed to write SPS/PPS sample: {}", e));
-                }
-            }
-        }
-        Err(e) => {
-            warn!("Failed to encode SPS/PPS frame: {}", e);
-            return Err(anyhow::anyhow!("Failed to encode SPS/PPS frame: {}", e));
-        }
-    }
-    
-    Ok(())
 }
 
 impl WebRtcService {
@@ -311,6 +150,7 @@ impl WebRtcService {
         frame_rx: mpsc::Receiver<Frame>,
         signaling_tx: mpsc::Sender<SignalingResponse>,
         data_channel_tx: mpsc::Sender<DataChannelMessage>,
+        encoder_factory: Arc<dyn VideoEncoderFactory>,
     ) -> (Self, mpsc::Sender<WebRtcMessage>) {
         let (message_tx, message_rx) = mpsc::channel(100);
         (
@@ -319,6 +159,7 @@ impl WebRtcService {
                 message_rx,
                 signaling_tx,
                 data_channel_tx,
+                encoder_factory,
             },
             message_tx,
         )
@@ -327,25 +168,37 @@ impl WebRtcService {
     pub async fn run(mut self) -> Result<()> {
         info!("WebRtcService started");
 
+        // PLI/FIR などの RTCP フィードバックに応じてキーフレーム再送を行うための通知チャネル
+        let (keyframe_tx, mut keyframe_rx) = mpsc::unbounded_channel::<()>();
+        // ICE/DTLS が接続完了したかを共有するフラグ（接続前は送出しない）
+        let connection_ready = Arc::new(AtomicBool::new(false));
+
         // webrtc-rsのAPIを初期化
-        // H.264 Baseline/packetization-mode=1のみを登録（VP8/VP9を除外してH.264を優先）
         let mut m = MediaEngine::default();
-        
-        // デフォルトコーデックを登録した後、H.264のみを残すために
-        // 一旦すべてのコーデックを登録し、その後H.264を優先する設定を行う
-        // 注: webrtc-rsではregister_codecはRTCRtpCodecParametersを要求するため、
-        // デフォルトコーデック登録を使用し、Track側でH.264を指定することで優先させる
         m.register_default_codecs()?;
-        
+
         let mut registry = Registry::new();
         registry = register_default_interceptors(registry, &mut m)?;
+
+        // ループバック候補を含める（同一ホスト内接続を確実にするため）
+        let mut setting_engine = SettingEngine::default();
+        setting_engine.set_include_loopback_candidate(true);
+
         let api = APIBuilder::new()
             .with_media_engine(m)
+            .with_setting_engine(setting_engine)
             .with_interceptor_registry(registry)
             .build();
 
         let mut peer_connection: Option<Arc<RTCPeerConnection>> = None;
         let mut video_track_state: Option<VideoTrackState> = None;
+        let mut encode_job_txs: Option<Vec<std::sync::mpsc::Sender<EncodeJob>>> = None;
+        let mut encode_worker_index: usize = 0;
+        let mut encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>> = None;
+
+        let mut frame_count: u64 = 0;
+        let mut last_frame_ts: Option<u64> = None;
+        let mut last_frame_log = Instant::now();
 
         loop {
             tokio::select! {
@@ -353,111 +206,61 @@ impl WebRtcService {
                 frame = self.frame_rx.recv() => {
                     match frame {
                         Some(frame) => {
-                            debug!("Received frame: {}x{}", frame.width, frame.height);
-                            
-                            // Video trackが存在する場合、フレームをエンコードして送信
-                            if let Some(ref mut track_state) = video_track_state {
-                                // エンコーダーの解像度が変更された場合は再初期化
+                            let pipeline_start = Instant::now();
+                            let interarrival_ms = last_frame_ts
+                                .map(|prev| frame.timestamp.saturating_sub(prev))
+                                .unwrap_or(0);
+
+                            debug!(
+                                "Received frame: {}x{} (since_last={}ms)",
+                                frame.width, frame.height, interarrival_ms
+                            );
+
+                            // ICE/DTLS 接続完了まで映像送出を保留
+                            if !connection_ready.load(Ordering::Relaxed) {
+                                debug!("Connection not ready yet, dropping frame");
+                                continue;
+                            }
+
+                            // Video trackが存在する場合、エンコードワーカーへジョブを送信
+                            if let (Some(track_state), Some(job_txs)) =
+                                (video_track_state.as_mut(), encode_job_txs.as_ref())
+                            {
+                                // capture側のタイムスタンプ差分からフレーム間隔を推定（デフォルト22ms≒45fps）
+                                let frame_duration = if let Some(prev) = last_frame_ts {
+                                    let delta_ms = frame.timestamp.saturating_sub(prev).max(1);
+                                    Duration::from_millis(delta_ms)
+                                } else {
+                                    Duration::from_millis(22)
+                                };
+                                last_frame_ts = Some(frame.timestamp);
+
+                                // 解像度変更はワーカー内で再生成するが、ログは出しておく
                                 if track_state.width != frame.width || track_state.height != frame.height {
-                                    info!("Resizing encoder: {}x{} -> {}x{}", 
-                                        track_state.width, track_state.height, 
-                                        frame.width, frame.height);
-                                    // エンコーダーを再作成（解像度変更時）
-                                    // ビットレートを設定（解像度に応じて調整）
-                                    let bitrate = (frame.width * frame.height * 2) as u32; // 約2Mbps for 1280x720
-                                    let encoder_config = openh264::encoder::EncoderConfig::new(
-                                        frame.width,
-                                        frame.height
-                                    )
-                                    .set_bitrate_bps(bitrate)
-                                    .max_frame_rate(30.0)
-                                    .enable_skip_frame(false); // フレームスキップを無効化
-                                    track_state.encoder = openh264::encoder::Encoder::with_config(encoder_config)
-                                        .context("Failed to recreate encoder")?;
+                                    info!(
+                                        "Observed frame resize {}x{} -> {}x{} (encoder will recreate in worker)",
+                                        track_state.width, track_state.height, frame.width, frame.height
+                                    );
+                                    // トラック状態は最新解像度を保持（SPS/PPS再送時に使用）
                                     track_state.width = frame.width;
                                     track_state.height = frame.height;
-                                    track_state.sps_pps_sent = false; // 解像度変更時はSPS/PPSを再送信
-                                    
-                                    // 解像度変更時はSPS/PPSフレームを再送信
-                                    if let Err(e) = send_sps_pps_frame(&track_state.track, &mut track_state.encoder, frame.width, frame.height).await {
-                                        warn!("Failed to send SPS/PPS frame after resize: {}", e);
-                                    }
                                 }
-                                
-                                // SPS/PPSがまだ送信されていない場合は再送信
-                                if !track_state.sps_pps_sent {
-                                    warn!("SPS/PPS not sent yet, sending now");
-                                    if let Err(e) = send_sps_pps_frame(&track_state.track, &mut track_state.encoder, track_state.width, track_state.height).await {
-                                        warn!("Failed to send SPS/PPS frame: {}", e);
-                                    } else {
-                                        track_state.sps_pps_sent = true;
-                                    }
+
+                                // ラウンドロビンでワーカーに振り分け
+                                let worker_idx = encode_worker_index % job_txs.len().max(1);
+                                encode_worker_index = encode_worker_index.wrapping_add(1);
+
+                                if let Err(e) = job_txs[worker_idx].send(EncodeJob {
+                                    width: frame.width,
+                                    height: frame.height,
+                                    rgba: frame.data,
+                                    duration: frame_duration,
+                                    enqueue_at: pipeline_start,
+                                }) {
+                                    warn!("Failed to queue encode job: {}", e);
                                 }
-                                
-                                // RGBAデータをRGBデータに変換（アルファチャンネルを削除）
-                                let rgb_size = (frame.width * frame.height * 3) as usize;
-                                let mut rgb_data = Vec::with_capacity(rgb_size);
-                                for i in 0..(frame.width * frame.height) as usize {
-                                    let rgba_idx = i * 4;
-                                    rgb_data.push(frame.data[rgba_idx]);     // R
-                                    rgb_data.push(frame.data[rgba_idx + 1]); // G
-                                    rgb_data.push(frame.data[rgba_idx + 2]); // B
-                                    // Aチャンネルはスキップ
-                                }
-                                
-                                // RGBデータからYUVBufferを作成
-                                let yuv = openh264::formats::YUVBuffer::with_rgb(
-                                    frame.width as usize,
-                                    frame.height as usize,
-                                    &rgb_data,
-                                );
-                                
-                                // H.264エンコード
-                                match track_state.encoder.encode(&yuv) {
-                                    Ok(bitstream) => {
-                                        debug!("Encoded bitstream: {} layers", bitstream.num_layers());
-                                        // Annex-B形式に変換
-                                        let (sample_data, has_sps_pps) = annexb_from_bitstream(&bitstream);
-                                        
-                                        // SPS/PPSが含まれている場合、フラグを更新
-                                        if has_sps_pps {
-                                            track_state.sps_pps_sent = true;
-                                        }
-                                        
-                                        if sample_data.is_empty() {
-                                            warn!("Encoded frame data is empty, skipping");
-                                        } else if sample_data.len() < 5 {
-                                            // スタートコード（4バイト）+ NALヘッダー（1バイト）= 5バイトが最小
-                                            warn!("Encoded frame too small ({} bytes), skipping", sample_data.len());
-                                        } else {
-                                            debug!("Total encoded frame: {} bytes (SPS/PPS: {})", 
-                                                sample_data.len(), has_sps_pps);
-                                            
-                                            // webrtc_media::Sampleを作成
-                                            use webrtc_media::Sample;
-                                            use std::time::Duration;
-                                            use bytes::Bytes;
-                                            
-                                            let sample = Sample {
-                                                data: Bytes::from(sample_data),
-                                                duration: Duration::from_millis(33), // 30fps
-                                                ..Default::default()
-                                            };
-                                            
-                                            match track_state.track.write_sample(&sample).await {
-                                                Ok(_) => {
-                                                    debug!("Frame sent to track: {}x{}", frame.width, frame.height);
-                                                }
-                                                Err(e) => {
-                                                    error!("Failed to write sample to track: {}", e);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to encode frame: {}", e);
-                                    }
-                                }
+                            } else {
+                                debug!("Video track not ready or encoder worker not available, dropping frame");
                             }
                         }
                         None => {
@@ -466,68 +269,221 @@ impl WebRtcService {
                         }
                     }
                 }
+                // エンコード結果受信（ワーカー -> メイン）
+                encoded = async {
+                    if let Some(rx) = encode_result_rx.as_mut() {
+                        rx.recv().await
+                    } else {
+                        None
+                    }
+                } => {
+                    if let Some(result) = encoded {
+                        if let Some(ref mut track_state) = video_track_state {
+                            if result.is_keyframe {
+                                track_state.keyframe_sent = true;
+                            }
+
+                            use webrtc_media::Sample;
+                            use bytes::Bytes;
+
+                            let sample = Sample {
+                                data: Bytes::from(result.sample_data),
+                                duration: result.duration,
+                                ..Default::default()
+                            };
+
+                            let write_start = Instant::now();
+                            match track_state.track.write_sample(&sample).await {
+                                Ok(_) => {
+                                    let write_dur = write_start.elapsed();
+                                    frame_count += 1;
+                                    let elapsed = last_frame_log.elapsed();
+                                    if elapsed.as_secs_f32() >= 5.0 {
+                                        info!("Video frames sent: {} (last {}s)", frame_count, elapsed.as_secs());
+                                        frame_count = 0;
+                                        last_frame_log = Instant::now();
+                                    }
+
+                                    debug!(
+                                        "pipeline timings: rgb={}ms encode={}ms pack={}ms write={}ms total={}ms size={}B",
+                                        result.rgb_dur.as_millis(),
+                                        result.encode_dur.as_millis(),
+                                        result.pack_dur.as_millis(),
+                                        write_dur.as_millis(),
+                                        result.total_dur.as_millis(),
+                                        result.sample_size,
+                                    );
+                                }
+                                Err(e) => {
+                                    error!("Failed to write sample to track: {}", e);
+                                }
+                            }
+                        } else {
+                            debug!("Received encoded frame but video track is not ready");
+                        }
+                    }
+                }
+                // PLI/FIR によるキーフレーム再送要求
+                keyframe_req = keyframe_rx.recv() => {
+                    if keyframe_req.is_some() {
+                        if let Some(ref mut track_state) = video_track_state {
+                            info!("Keyframe requested via RTCP; awaiting next keyframe from encoder");
+                            track_state.keyframe_sent = false;
+                        } else {
+                            debug!("Keyframe requested but video track is not ready yet");
+                        }
+                    }
+                }
                 // メッセージ受信
                 msg = self.message_rx.recv() => {
                     match msg {
                         Some(WebRtcMessage::SetOffer { sdp }) => {
                             info!("SetOffer received, generating answer");
-                            
+
                             // ICE設定（ホストオンリー）
                             let config = RTCConfiguration {
                                 ice_servers: vec![],
                                 ..Default::default()
                             };
-                            
+
                             // PeerConnectionを作成
                             let pc = Arc::new(api.new_peer_connection(config).await
                                 .context("Failed to create peer connection")?);
-                            
+
                             // OfferをRemoteDescriptionとして設定
                             let offer = RTCSessionDescription::offer(sdp)
                                 .context("Failed to parse offer SDP")?;
+                            info!("Offer SDP received:\n{}", offer.sdp);
                             pc.set_remote_description(offer).await
                                 .context("Failed to set remote description")?;
-                            
-                            // Video trackを作成して追加
-                            // H.264 Baseline/packetization-mode=1に固定したcodec capabilityを設定
+
+                            // Video trackを作成して追加（encoderが提供するコーデックに合わせる）
+                            let codec = self.encoder_factory.codec();
+                            let mime_type = codec_to_mime_type(codec);
+                            info!("Using video codec: {:?}", codec);
+
                             let video_track = Arc::new(TrackLocalStaticSample::new(
                                 RTCRtpCodecCapability {
-                                    mime_type: "video/H264".to_string(),
-                                    clock_rate: 90000,
-                                    channels: 0,
-                                    sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f".to_string(),
-                                    rtcp_feedback: vec![],
+                                    mime_type: mime_type.clone(),
+                                    ..Default::default()
                                 },
                                 "video".to_string(),
                                 "stream".to_string(),
                             ));
-                            
+
                             // Transceiverを追加（sendonly）
-                            let _transceiver = pc.add_track(video_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+                            let sender: Arc<RTCRtpSender> = pc.add_track(video_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
                                 .await
                                 .context("Failed to add video track")?;
-                            
+
                             info!("Video track added to peer connection");
-                            
-                            // OpenH264エンコーダーを初期化（デフォルト解像度1280x720）
-                            // CameraVideoRealTime用途・bitrate・intra_periodを明示設定
-                            let encoder_config = openh264::encoder::EncoderConfig::new(1280, 720)
-                                .set_bitrate_bps(2_000_000) // 2Mbps
-                                .max_frame_rate(30.0) // 30fps
-                                .enable_skip_frame(false); // フレームスキップを無効化
-                            let encoder = openh264::encoder::Encoder::with_config(encoder_config)
-                                .context("Failed to create OpenH264 encoder")?;
-                            
+
+                            // RTCP 受信ループを開始し、PLI/FIR を受けたらキーフレーム再送を要求
+                            let keyframe_tx_rtcp = keyframe_tx.clone();
+                            let sender_for_rtcp = sender.clone();
+                            tokio::spawn(async move {
+                                loop {
+                                    match sender_for_rtcp.read_rtcp().await {
+                                        Ok((pkts, _)) => {
+                                            for pkt in pkts {
+                                                if pkt.as_any().downcast_ref::<PictureLossIndication>().is_some()
+                                                    || pkt.as_any().downcast_ref::<FullIntraRequest>().is_some()
+                                                {
+                                                    debug!("RTCP feedback (PLI/FIR) received, requesting keyframe");
+                                                    let _ = keyframe_tx_rtcp.send(());
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            debug!("RTCP read loop finished: {}", err);
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+
+                            // RTCP をドレインするループ（NACK 等を確実に処理）
+                            let sender_for_rtcp_drain = sender.clone();
+                            tokio::spawn(async move {
+                                let mut rtcp_buf = vec![0u8; 1500];
+                                while let Ok((_, _)) = sender_for_rtcp_drain.read(&mut rtcp_buf).await {}
+                            });
+
+                            // 送信トラックのパラメータ・送信統計・transceiver 状態を定期ログ（5秒間隔）
+                            let sender_for_log = sender.clone();
+                            let pc_for_log = pc.clone();
+                            tokio::spawn(async move {
+                                loop {
+                                    tokio::time::sleep(Duration::from_secs(5)).await;
+
+                                    // パラメータ（webrtc-rs 0.14 では get_parameters は Result ではなく値を返す）
+                                    let params = sender_for_log.get_parameters().await;
+                                    let ssrcs: Vec<_> = params.encodings.iter().map(|e| e.ssrc).collect();
+                                    let pts: Vec<_> = params
+                                        .rtp_parameters
+                                        .codecs
+                                        .iter()
+                                        .map(|c| (c.payload_type, c.capability.mime_type.clone()))
+                                        .collect();
+                                    info!("sender params: ssrcs={:?}, codecs={:?}", ssrcs, pts);
+
+                                    // sender/get_stats 相当の情報（OutboundRTP）を PeerConnection 経由で確認
+                                    let stats = pc_for_log.get_stats().await;
+                                    let mut outbound_logged = false;
+                                    for report in stats.reports.values() {
+                                        if let StatsReportType::OutboundRTP(out) = report {
+                                            if out.kind == "video" {
+                                                info!(
+                                                    "sender stats: ssrc={} bytes_sent={} packets_sent={} nack={} pli={:?} fir={:?}",
+                                                    out.ssrc,
+                                                    out.bytes_sent,
+                                                    out.packets_sent,
+                                                    out.nack_count,
+                                                    out.pli_count,
+                                                    out.fir_count,
+                                                );
+                                                outbound_logged = true;
+                                            }
+                                        }
+                                    }
+                                    if !outbound_logged {
+                                        info!("sender stats: outbound video RTP not found in get_stats");
+                                    }
+
+                                    // transceiver の希望方向・現在方向を確認
+                                    let transceivers = pc_for_log.get_transceivers().await;
+                                    for (idx, t) in transceivers.iter().enumerate() {
+                                        info!(
+                                            "transceiver[{}]: mid={:?} kind={:?} direction={:?} current_direction={:?}",
+                                            idx,
+                                            t.mid(),
+                                            t.kind(),
+                                            t.direction(),
+                                            t.current_direction()
+                                        );
+                                    }
+                                }
+                            });
+
+                            // エンコードワーカーを起動（初期解像度1280x720）
+                            // CPU負荷分散のため論理コア数ベースでワーカーを生成
+                            let worker_count = std::thread::available_parallelism()
+                                .map(|n| n.get().max(1))
+                                .unwrap_or(2);
+                            let (job_txs, res_rx) =
+                                self.encoder_factory.start_workers(worker_count, 1280, 720);
+                            encode_job_txs = Some(job_txs);
+                            encode_result_rx = Some(res_rx);
+
                             // SPS/PPSの送出はLocalDescription設定後、最初のフレーム処理時に実行
                             // 初期値はfalseに設定（交渉完了後に送信）
                             video_track_state = Some(VideoTrackState {
                                 track: video_track,
-                                encoder,
                                 width: 1280,
                                 height: 720,
-                                sps_pps_sent: false, // LocalDescription設定後に送信
+                                keyframe_sent: false,
                             });
-                            
+
                             // DataChannelハンドラを設定
                             let dc_tx = self.data_channel_tx.clone();
                             pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
@@ -570,14 +526,20 @@ impl WebRtcService {
                                     }));
                                 })
                             }));
-                            
+
                             // Answerを生成
                             let answer = pc.create_answer(None).await
                                 .context("Failed to create answer")?;
+                            info!("Answer SDP generated:\n{}", answer.sdp);
 
                             // Answer SDPからm-line情報を解析（ICEハンドラ設定に使用）
                             let m_lines = parse_answer_m_lines(&answer.sdp);
                             info!("Answer SDP parsed: {} m-lines", m_lines.len());
+                            info!(
+                                "Answer SDP includes mime {}: {}",
+                                mime_type,
+                                answer.sdp.contains(&mime_type)
+                            );
 
                             // ICE candidateのイベントハンドラを LocalDescription 設定前に登録して、
                             // 初期ホスト候補を取りこぼさないようにする
@@ -590,7 +552,7 @@ impl WebRtcService {
                                     if let Some(candidate) = candidate {
                                         // RTCIceCandidateから完全なSDP candidate文字列を生成
                                         let candidate_str = format_ice_candidate(&candidate);
-                                        
+
                                         // candidateのcomponentからm-lineを特定
                                         // component 1 = RTP, component 2 = RTCP
                                         let sdp_mid = if candidate.component == 1 {
@@ -600,7 +562,7 @@ impl WebRtcService {
                                         } else {
                                             None
                                         };
-                                        
+
                                         let sdp_mline_index = if candidate.component == 1 {
                                             m_lines.iter()
                                                 .find(|m| m.media_type == "video")
@@ -608,10 +570,10 @@ impl WebRtcService {
                                         } else {
                                             None
                                         };
-                                        
-                                        info!("ICE candidate: {} (mid: {:?}, mline_index: {:?})", 
+
+                                        info!("ICE candidate: {} (mid: {:?}, mline_index: {:?})",
                                             candidate_str, sdp_mid, sdp_mline_index);
-                                        
+
                                         if let Err(e) = signaling_tx.send(SignalingResponse::IceCandidate {
                                             candidate: candidate_str,
                                             sdp_mid,
@@ -628,30 +590,34 @@ impl WebRtcService {
                             // LocalDescriptionとして設定
                             pc.set_local_description(answer.clone()).await
                                 .context("Failed to set local description")?;
-                            
-                            // LocalDescription設定後、SPS/PPSを送信（交渉完了後に確実に送信）
-                            if let Some(ref mut track_state) = video_track_state {
-                                info!("Sending SPS/PPS frame after LocalDescription set");
-                                if let Err(e) = send_sps_pps_frame(&track_state.track, &mut track_state.encoder, track_state.width, track_state.height).await {
-                                    warn!("Failed to send SPS/PPS frame after LocalDescription: {}", e);
-                                } else {
-                                    track_state.sps_pps_sent = true;
-                                    info!("SPS/PPS frame sent successfully after LocalDescription");
+
+                            // 念のため送信開始を明示的にトリガー（start_rtp_senders 依存の補完）
+                            // すでに送信開始済みの場合は ErrRTPSenderSendAlreadyCalled になるので debug ログのみ
+                            let sender_for_start = sender.clone();
+                            tokio::spawn(async move {
+                                let params = sender_for_start.get_parameters().await;
+                                match sender_for_start.send(&params).await {
+                                    Ok(_) => info!("RTCRtpSender::send() invoked explicitly"),
+                                    Err(e) => debug!("RTCRtpSender::send() explicit call returned: {}", e),
                                 }
-                            }
-                            
+                            });
+
                             // Answerをシグナリングサービスに送信
-                            if let Err(e) = self.signaling_tx.send(SignalingResponse::Answer { 
-                                sdp: answer.sdp 
+                            if let Err(e) = self.signaling_tx.send(SignalingResponse::Answer {
+                                sdp: answer.sdp
                             }).await {
                                 error!("Failed to send answer to signaling service: {}", e);
                             } else {
                                 info!("Answer sent to signaling service");
                             }
-                            
+
                             // PeerConnection状態の監視
                             let pc_for_state = pc.clone();
+                            let connection_ready_pc = connection_ready.clone();
+                            let keyframe_tx_on_connect = keyframe_tx.clone();
                             pc_for_state.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
+                                let connection_ready_pc = connection_ready_pc.clone();
+                                let keyframe_tx_on_connect = keyframe_tx_on_connect.clone();
                                 Box::pin(async move {
                                     match state {
                                         RTCPeerConnectionState::New => {
@@ -659,18 +625,25 @@ impl WebRtcService {
                                         }
                                         RTCPeerConnectionState::Connecting => {
                                             info!("PeerConnection state: Connecting");
+                                            connection_ready_pc.store(false, Ordering::Relaxed);
                                         }
                                         RTCPeerConnectionState::Connected => {
                                             info!("PeerConnection state: Connected - Media stream should be active");
+                                            connection_ready_pc.store(true, Ordering::Relaxed);
+                                            // 接続確立時に即座にキーフレーム送出を要求
+                                            let _ = keyframe_tx_on_connect.send(());
                                         }
                                         RTCPeerConnectionState::Disconnected => {
                                             warn!("PeerConnection state: Disconnected - Connection lost");
+                                            connection_ready_pc.store(false, Ordering::Relaxed);
                                         }
                                         RTCPeerConnectionState::Failed => {
                                             error!("PeerConnection state: Failed - Connection failed");
+                                            connection_ready_pc.store(false, Ordering::Relaxed);
                                         }
                                         RTCPeerConnectionState::Closed => {
                                             info!("PeerConnection state: Closed");
+                                            connection_ready_pc.store(false, Ordering::Relaxed);
                                         }
                                         RTCPeerConnectionState::Unspecified => {
                                             debug!("PeerConnection state: Unspecified");
@@ -678,10 +651,12 @@ impl WebRtcService {
                                     }
                                 })
                             }));
-                            
+
                             // ICE接続状態の監視
                             let pc_for_ice = pc.clone();
+                            let connection_ready_ice = connection_ready.clone();
                             pc_for_ice.on_ice_connection_state_change(Box::new(move |state| {
+                                let connection_ready_ice = connection_ready_ice.clone();
                                 Box::pin(async move {
                                     match state {
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::New => {
@@ -689,21 +664,27 @@ impl WebRtcService {
                                         }
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Checking => {
                                             info!("ICE connection state: Checking");
+                                            connection_ready_ice.store(false, Ordering::Relaxed);
                                         }
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Connected => {
                                             info!("ICE connection state: Connected - ICE connection established");
+                                            connection_ready_ice.store(true, Ordering::Relaxed);
                                         }
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Completed => {
                                             info!("ICE connection state: Completed - ICE gathering complete");
+                                            connection_ready_ice.store(true, Ordering::Relaxed);
                                         }
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Failed => {
                                             error!("ICE connection state: Failed - ICE connection failed");
+                                            connection_ready_ice.store(false, Ordering::Relaxed);
                                         }
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Disconnected => {
                                             warn!("ICE connection state: Disconnected - ICE connection lost");
+                                            connection_ready_ice.store(false, Ordering::Relaxed);
                                         }
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Closed => {
                                             info!("ICE connection state: Closed");
+                                            connection_ready_ice.store(false, Ordering::Relaxed);
                                         }
                                         webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Unspecified => {
                                             debug!("ICE connection state: Unspecified");
@@ -711,7 +692,8 @@ impl WebRtcService {
                                     }
                                 })
                             }));
-                            
+
+
                             // Track受信のハンドラを設定
                             let pc_for_track = pc.clone();
                             pc_for_track.on_track(Box::new(move |track, _receiver, _transceiver| {
@@ -719,7 +701,7 @@ impl WebRtcService {
                                     info!("Track received: {}", track.kind());
                                 })
                             }));
-                            
+
                             peer_connection = Some(pc.clone());
                         }
                         Some(WebRtcMessage::AddIceCandidate { candidate, sdp_mid, sdp_mline_index }) => {
@@ -757,14 +739,4 @@ impl WebRtcService {
         info!("WebRtcService stopped");
         Ok(())
     }
-    
 }
-
-/// DataChannelメッセージ
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DataChannelMessage {
-    Key { key: String, down: bool },
-    MouseWheel { delta: i32 },
-    ScreenshotRequest,
-}
-

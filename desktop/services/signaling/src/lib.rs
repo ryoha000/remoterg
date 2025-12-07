@@ -1,13 +1,17 @@
 use anyhow::Result;
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
+    http::Request,
+    middleware::{self, Next},
     response::{Html, Response},
     routing::get,
     Router,
 };
+use core_types::{SignalingResponse, WebRtcMessage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tower_http::services::ServeDir;
@@ -22,28 +26,32 @@ pub enum SignalingMessage {
     #[serde(rename = "answer")]
     Answer { sdp: String },
     #[serde(rename = "ice_candidate")]
-    IceCandidate { candidate: String, sdp_mid: Option<String>, sdp_mline_index: Option<u16> },
+    IceCandidate {
+        candidate: String,
+        sdp_mid: Option<String>,
+        sdp_mline_index: Option<u16>,
+    },
 }
 
 /// シグナリングサービスの状態
 #[derive(Clone)]
 struct SignalingState {
-    webrtc_tx: mpsc::Sender<webrtc::WebRtcMessage>,
-    signaling_response_tx: broadcast::Sender<webrtc::SignalingResponse>,
+    webrtc_tx: mpsc::Sender<WebRtcMessage>,
+    signaling_response_tx: broadcast::Sender<SignalingResponse>,
 }
 
 /// シグナリングサービス
 pub struct SignalingService {
     port: u16,
-    webrtc_tx: mpsc::Sender<webrtc::WebRtcMessage>,
-    signaling_rx: mpsc::Receiver<webrtc::SignalingResponse>,
+    webrtc_tx: mpsc::Sender<WebRtcMessage>,
+    signaling_rx: mpsc::Receiver<SignalingResponse>,
 }
 
 impl SignalingService {
     pub fn new(
         port: u16,
-        webrtc_tx: mpsc::Sender<webrtc::WebRtcMessage>,
-        signaling_rx: mpsc::Receiver<webrtc::SignalingResponse>,
+        webrtc_tx: mpsc::Sender<WebRtcMessage>,
+        signaling_rx: mpsc::Receiver<SignalingResponse>,
     ) -> Self {
         Self {
             port,
@@ -56,8 +64,8 @@ impl SignalingService {
         info!("Starting SignalingService on port {}", self.port);
 
         // グローバルな応答チャンネルを各接続で共有するため、broadcastチャンネルを使用
-        let (signaling_response_tx, _) = broadcast::channel::<webrtc::SignalingResponse>(100);
-        
+        let (signaling_response_tx, _) = broadcast::channel::<SignalingResponse>(100);
+
         // WebRTCサービスからの応答をbroadcastチャンネルに転送するタスク
         let global_tx = signaling_response_tx.clone();
         tokio::spawn(async move {
@@ -77,13 +85,33 @@ impl SignalingService {
         let app = Router::new()
             .route("/", get(serve_index))
             .route("/signal", get(handle_websocket))
-            .nest_service("/static", ServeDir::new("static"))
-            .with_state(state);
+            .route("/ping", get(ping))
+            // .nest_service("/static", ServeDir::new("static"))
+            .with_state(state)
+            // 全てのリクエストをログに残す
+            .layer(middleware::from_fn(log_requests));
 
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", self.port)).await?;
-        info!("SignalingService listening on http://0.0.0.0:{}", self.port);
+        // IPv6 デュアルスタックでバインドし、失敗した場合は IPv4 にフォールバック
+        let v6_addr = format!("[::]:{}", self.port);
+        let listener = match tokio::net::TcpListener::bind(&v6_addr).await {
+            Ok(listener) => {
+                info!(
+                    "SignalingService listening on http://{} (dual stack)",
+                    v6_addr
+                );
+                listener
+            }
+            Err(e) => {
+                warn!("IPv6 dual-stack bind failed ({}), falling back to IPv4", e);
+                let v4_addr = format!("0.0.0.0:{}", self.port);
+                let listener = tokio::net::TcpListener::bind(&v4_addr).await?;
+                info!("SignalingService listening on http://{}", v4_addr);
+                listener
+            }
+        };
 
         axum::serve(listener, app).await?;
+        info!("SignalingService stopped");
         Ok(())
     }
 }
@@ -92,11 +120,21 @@ async fn serve_index() -> Html<&'static str> {
     Html(include_str!("../../web/index.html"))
 }
 
-async fn handle_websocket(
-    ws: WebSocketUpgrade,
-    State(state): State<SignalingState>,
-) -> Response {
+async fn ping() -> &'static str {
+    "pong"
+}
+
+async fn handle_websocket(ws: WebSocketUpgrade, State(state): State<SignalingState>) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+async fn log_requests(req: Request<Body>, next: Next) -> Response {
+    // リクエストメソッドとパスを記録
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    info!("Incoming request: {} {}", method, uri);
+
+    next.run(req).await
 }
 
 /// SDPのm-line情報
@@ -111,13 +149,13 @@ struct MLine {
 pub(crate) fn parse_offer_m_lines(offer_sdp: &str) -> Vec<MLine> {
     let mut m_lines = Vec::new();
     let lines: Vec<&str> = offer_sdp.lines().collect();
-    
+
     for (index, line) in lines.iter().enumerate() {
         if line.starts_with("m=") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if !parts.is_empty() {
                 let media_type = parts[0].trim_start_matches("m=").to_string();
-                
+
                 // このm-lineのmidを探す（次のm=または終端まで）
                 let mut mid = None;
                 for next_line in lines.iter().skip(index + 1) {
@@ -129,7 +167,7 @@ pub(crate) fn parse_offer_m_lines(offer_sdp: &str) -> Vec<MLine> {
                         break;
                     }
                 }
-                
+
                 m_lines.push(MLine {
                     media_type,
                     mid,
@@ -138,7 +176,7 @@ pub(crate) fn parse_offer_m_lines(offer_sdp: &str) -> Vec<MLine> {
             }
         }
     }
-    
+
     m_lines
 }
 
@@ -146,7 +184,7 @@ pub(crate) fn parse_offer_m_lines(offer_sdp: &str) -> Vec<MLine> {
 pub(crate) fn generate_answer_from_offer(offer_sdp: &str) -> String {
     let m_lines = parse_offer_m_lines(offer_sdp);
     debug!("Parsed {} m-lines from offer", m_lines.len());
-    
+
     // Answerの基本ヘッダー
     let mut answer_lines = vec![
         "v=0".to_string(),
@@ -154,7 +192,7 @@ pub(crate) fn generate_answer_from_offer(offer_sdp: &str) -> String {
         "s=-".to_string(),
         "t=0 0".to_string(),
     ];
-    
+
     // BUNDLEグループを生成（midのリスト）
     if !m_lines.is_empty() {
         let bundle_mids: Vec<String> = m_lines
@@ -164,9 +202,9 @@ pub(crate) fn generate_answer_from_offer(offer_sdp: &str) -> String {
             .collect();
         answer_lines.push(format!("a=group:BUNDLE {}", bundle_mids.join(" ")));
     }
-    
+
     answer_lines.push("a=msid-semantic: WMS".to_string());
-    
+
     // 各m-lineに対してAnswerを生成
     for (index, m_line) in m_lines.iter().enumerate() {
         match m_line.media_type.as_str() {
@@ -205,7 +243,7 @@ pub(crate) fn generate_answer_from_offer(offer_sdp: &str) -> String {
             }
         }
     }
-    
+
     // CRLFで結合（WebRTCではCRLFが必要）
     answer_lines.join("\r\n") + "\r\n"
 }
@@ -218,7 +256,7 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
     // 現時点では、WebRTCサービスがグローバルなチャンネルを使用するため、
     // 各接続は同じチャンネルを共有します（最初の接続のみが動作）
     let webrtc_tx = state.webrtc_tx.clone();
-    
+
     // broadcastチャンネルからこの接続用の受信チャンネルを作成
     let mut signaling_response_rx = state.signaling_response_tx.subscribe();
 
@@ -229,7 +267,7 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         debug!("Received message: {}", text);
-                        
+
                         // JSONをパース
                         match serde_json::from_str::<SignalingMessage>(&text) {
                             Ok(SignalingMessage::Offer { sdp }) => {
@@ -237,7 +275,7 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
                                 // WebRTCサービスにOfferを転送
                                 // 簡易実装: 応答チャンネルも一緒に送信する必要があるが、
                                 // 現時点ではグローバルなチャンネルを使用
-                                if let Err(e) = webrtc_tx.send(webrtc::WebRtcMessage::SetOffer { sdp }).await {
+                                if let Err(e) = webrtc_tx.send(WebRtcMessage::SetOffer { sdp }).await {
                                     error!("Failed to send offer to WebRTC service: {}", e);
                                     break;
                                 }
@@ -246,7 +284,7 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
                             Ok(SignalingMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index }) => {
                                 debug!("ICE candidate received, forwarding to WebRTC service");
                                 // WebRTCサービスにICE candidateを転送
-                                if let Err(e) = webrtc_tx.send(webrtc::WebRtcMessage::AddIceCandidate {
+                                if let Err(e) = webrtc_tx.send(WebRtcMessage::AddIceCandidate {
                                     candidate,
                                     sdp_mid,
                                     sdp_mline_index,
@@ -282,7 +320,7 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
                 match result {
                     Ok(response) => {
                         match response {
-                            webrtc::SignalingResponse::Answer { sdp } => {
+                            SignalingResponse::Answer { sdp } => {
                                 info!("Answer received from WebRTC service, sending to client");
                                 let answer = SignalingMessage::Answer { sdp };
                                 match serde_json::to_string(&answer) {
@@ -298,7 +336,7 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
                                     }
                                 }
                             }
-                            webrtc::SignalingResponse::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
+                            SignalingResponse::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
                                 debug!("ICE candidate received from WebRTC service, sending to client");
                                 let ice_candidate = SignalingMessage::IceCandidate {
                                     candidate,
@@ -343,11 +381,11 @@ mod tests {
         let offer = SignalingMessage::Offer {
             sdp: "test sdp".to_string(),
         };
-        
+
         let json = serde_json::to_string(&offer).unwrap();
         assert!(json.contains("offer"));
         assert!(json.contains("test sdp"));
-        
+
         let deserialized: SignalingMessage = serde_json::from_str(&json).unwrap();
         match deserialized {
             SignalingMessage::Offer { sdp } => {
@@ -374,7 +412,7 @@ m=application 9 UDP/DTLS/SCTP webrtc-datachannel
 c=IN IP4 0.0.0.0
 a=mid:1
 "#;
-        
+
         let m_lines = parse_offer_m_lines(offer_sdp);
         assert_eq!(m_lines.len(), 2);
         assert_eq!(m_lines[0].media_type, "video");
@@ -400,12 +438,12 @@ c=IN IP4 0.0.0.0
 a=mid:1
 a=sendrecv
 "#;
-        
+
         let answer_sdp = generate_answer_from_offer(offer_sdp);
-        
+
         // CRLFが使用されていることを確認
         assert!(answer_sdp.contains("\r\n"));
-        
+
         // m-lineの順序が保持されていることを確認
         let lines: Vec<&str> = answer_sdp.lines().collect();
         let mut m_line_indices = Vec::new();
@@ -414,13 +452,13 @@ a=sendrecv
                 m_line_indices.push(i);
             }
         }
-        
+
         // applicationが先、videoが後であることを確認
         let application_line = lines[m_line_indices[0]];
         let video_line = lines[m_line_indices[1]];
         assert!(application_line.contains("application"));
         assert!(video_line.contains("video"));
-        
+
         // midの順序も確認
         let mut mids = Vec::new();
         for line in &lines {
@@ -441,9 +479,9 @@ t=0 0
 m=video 9 UDP/TLS/RTP/SAVPF 96
 a=mid:0
 "#;
-        
+
         let answer_sdp = generate_answer_from_offer(offer_sdp);
-        
+
         // CRLFが使用されていることを確認（LFのみではない）
         assert!(answer_sdp.contains("\r\n"));
         // 最後がCRLFで終わっていることを確認

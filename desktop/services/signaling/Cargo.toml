@@ -14,5 +14,5 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 futures = "0.3"
-webrtc = { path = "../webrtc" }
+core-types = { path = "../core" }
 

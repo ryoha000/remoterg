@@ -2,7 +2,7 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
-use webrtc::DataChannelMessage;
+use core_types::DataChannelMessage;
 
 /// 入力サービス
 pub struct InputService {

@@ -1,41 +1,40 @@
-import { useEffect, useRef, useState } from 'react'
-import { useStore } from '@tanstack/react-store'
-import { Store } from '@tanstack/store'
+import { useEffect, useRef, useState } from "react";
+import { useStore } from "@tanstack/react-store";
+import { Store } from "@tanstack/store";
 
-import { Send, X, ChevronRight } from 'lucide-react'
-import { Streamdown } from 'streamdown'
+import { Send, X, ChevronRight } from "lucide-react";
+import { Streamdown } from "streamdown";
 
-import { fetchServerSentEvents, useChat } from '@tanstack/ai-react'
-import { clientTools } from '@tanstack/ai-client'
-import type { UIMessage } from '@tanstack/ai-react'
+import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
+import { clientTools } from "@tanstack/ai-client";
+import type { UIMessage } from "@tanstack/ai-react";
 
-import GuitarRecommendation from './example-GuitarRecommendation'
-import { recommendGuitarToolDef } from '@/lib/example.guitar-tools'
+import GuitarRecommendation from "./example-GuitarRecommendation";
+import { recommendGuitarToolDef } from "@/lib/example.guitar-tools";
 
 const recommendGuitarToolClient = recommendGuitarToolDef.client(({ id }) => ({
   id: +id,
-}))
+}));
 
-const tools = clientTools(recommendGuitarToolClient)
+const tools = clientTools(recommendGuitarToolClient);
 
-export const showAIAssistant = new Store(false)
+export const showAIAssistant = new Store(false);
 
 function Messages({ messages }: { messages: Array<UIMessage> }) {
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop =
-        messagesContainerRef.current.scrollHeight
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
-  }, [messages])
+  }, [messages]);
 
   if (!messages.length) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
         Ask me anything! I'm here to help.
       </div>
-    )
+    );
   }
 
   return (
@@ -44,16 +43,16 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
         <div
           key={id}
           className={`py-3 ${
-            role === 'assistant'
-              ? 'bg-gradient-to-r from-orange-500/5 to-red-600/5'
-              : 'bg-transparent'
+            role === "assistant"
+              ? "bg-gradient-to-r from-orange-500/5 to-red-600/5"
+              : "bg-transparent"
           }`}
         >
           {parts.map((part, index) => {
-            if (part.type === 'text' && part.content) {
+            if (part.type === "text" && part.content) {
               return (
                 <div key={index} className="flex items-start gap-2 px-4">
-                  {role === 'assistant' ? (
+                  {role === "assistant" ? (
                     <div className="w-6 h-6 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 flex items-center justify-center text-xs font-medium text-white flex-shrink-0">
                       AI
                     </div>
@@ -66,33 +65,29 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
                     <Streamdown>{part.content}</Streamdown>
                   </div>
                 </div>
-              )
+              );
             }
-            if (
-              part.type === 'tool-call' &&
-              part.name === 'recommendGuitar' &&
-              part.output
-            ) {
+            if (part.type === "tool-call" && part.name === "recommendGuitar" && part.output) {
               return (
                 <div key={part.id} className="max-w-[80%] mx-auto">
                   <GuitarRecommendation id={String(part.output?.id)} />
                 </div>
-              )
+              );
             }
           })}
         </div>
       ))}
     </div>
-  )
+  );
 }
 
 export default function AIAssistant() {
-  const isOpen = useStore(showAIAssistant)
+  const isOpen = useStore(showAIAssistant);
   const { messages, sendMessage } = useChat({
-    connection: fetchServerSentEvents('/demo/api/tanchat'),
+    connection: fetchServerSentEvents("/demo/api/tanchat"),
     tools,
-  })
-  const [input, setInput] = useState('')
+  });
+  const [input, setInput] = useState("");
 
   return (
     <div className="relative z-50">
@@ -126,10 +121,10 @@ export default function AIAssistant() {
           <div className="p-3 border-t border-orange-500/20">
             <form
               onSubmit={(e) => {
-                e.preventDefault()
+                e.preventDefault();
                 if (input.trim()) {
-                  sendMessage(input)
-                  setInput('')
+                  sendMessage(input);
+                  setInput("");
                 }
               }}
             >
@@ -140,18 +135,17 @@ export default function AIAssistant() {
                   placeholder="Type your message..."
                   className="w-full rounded-lg border border-orange-500/20 bg-gray-800/50 pl-3 pr-10 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:border-transparent resize-none overflow-hidden"
                   rows={1}
-                  style={{ minHeight: '36px', maxHeight: '120px' }}
+                  style={{ minHeight: "36px", maxHeight: "120px" }}
                   onInput={(e) => {
-                    const target = e.target as HTMLTextAreaElement
-                    target.style.height = 'auto'
-                    target.style.height =
-                      Math.min(target.scrollHeight, 120) + 'px'
+                    const target = e.target as HTMLTextAreaElement;
+                    target.style.height = "auto";
+                    target.style.height = Math.min(target.scrollHeight, 120) + "px";
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && input.trim()) {
-                      e.preventDefault()
-                      sendMessage(input)
-                      setInput('')
+                    if (e.key === "Enter" && !e.shiftKey && input.trim()) {
+                      e.preventDefault();
+                      sendMessage(input);
+                      setInput("");
                     }
                   }}
                 />
@@ -168,5 +162,5 @@ export default function AIAssistant() {
         </div>
       )}
     </div>
-  )
+  );
 }

@@ -1,4 +1,4 @@
-Welcome to your new TanStack app! 
+Welcome to your new TanStack app!
 
 # Getting Started
 
@@ -29,8 +29,6 @@ pnpm test
 
 This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
 
-
-
 ## Shadcn
 
 Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
@@ -38,7 +36,6 @@ Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
 ```bash
 pnpm dlx shadcn@latest add button
 ```
-
 
 ## T3Env
 
@@ -54,10 +51,6 @@ import { env } from "@/env";
 console.log(env.VITE_APP_TITLE);
 ```
 
-
-
-
-
 # TanStack Chat Application
 
 Am example chat application built with TanStack Start, TanStack Store, and Claude AI.
@@ -71,18 +64,21 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 ## ✨ Features
 
 ### AI Capabilities
-- 🤖 Powered by Claude 3.5 Sonnet 
+
+- 🤖 Powered by Claude 3.5 Sonnet
 - 📝 Rich markdown formatting with syntax highlighting
 - 🎯 Customizable system prompts for tailored AI behavior
 - 🔄 Real-time message updates and streaming responses (coming soon)
 
 ### User Experience
+
 - 🎨 Modern UI with Tailwind CSS and Lucide icons
 - 🔍 Conversation management and history
 - 🔐 Secure API key management
 - 📋 Markdown rendering with code highlighting
 
 ### Technical Features
+
 - 📦 Centralized state management with TanStack Store
 - 🔌 Extensible architecture for multiple AI providers
 - 🛠️ TypeScript for type safety
@@ -90,14 +86,15 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 ## Architecture
 
 ### Tech Stack
+
 - **Frontend Framework**: TanStack Start
 - **Routing**: TanStack Router
 - **State Management**: TanStack Store
 - **Styling**: Tailwind CSS
 - **AI Integration**: Anthropic's Claude API
 
-
 ## Routing
+
 This project uses [TanStack Router](https://tanstack.com/router). The initial setup is a file based router. Which means that the routes are managed as files in `src/routes`.
 
 ### Adding A Route
@@ -157,7 +154,6 @@ export const Route = createRootRoute({
 The `<TanStackRouterDevtools />` component is not required so you can remove it if you don't want it in your layout.
 
 More information on layouts can be found in the [Layouts documentation](https://tanstack.com/router/latest/docs/framework/react/guide/routing-concepts#layouts).
-
 
 ## Data Fetching
 

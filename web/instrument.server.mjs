@@ -4,9 +4,7 @@ const dsn =
   // When this file runs under Node (dev/server), Vite replacements are not available
   process.env.VITE_SENTRY_DSN ??
   process.env.SENTRY_DSN ??
-  (typeof import.meta !== "undefined"
-    ? import.meta.env?.VITE_SENTRY_DSN
-    : undefined);
+  (typeof import.meta !== "undefined" ? import.meta.env?.VITE_SENTRY_DSN : undefined);
 
 if (dsn) {
   Sentry.init({

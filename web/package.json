@@ -8,7 +8,11 @@
     "serve": "vite preview",
     "test": "vitest run",
     "deploy": "wrangler deploy",
-    "start": "node --import ./.output/server/instrument.server.mjs .output/server/index.mjs"
+    "start": "node --import ./.output/server/instrument.server.mjs .output/server/index.mjs",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.13.8",
@@ -53,6 +57,8 @@
     "@vitejs/plugin-react": "^5.0.4",
     "babel-plugin-react-compiler": "^1.0.0",
     "jsdom": "^27.0.0",
+    "oxfmt": "^0.17.0",
+    "oxlint": "^1.32.0",
     "typescript": "^5.7.2",
     "vite": "^7.1.7",
     "vitest": "^3.0.5",

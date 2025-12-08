@@ -431,24 +431,30 @@
             const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
             log('Video recvonly transceiverを追加', 'success');
 
-            // codec指定: デフォルトh264。?codec=any で制約を外す
-            if (codecParam === 'h264') {
+            // codec指定: デフォルトh264。?codec=vp9 / ?codec=any も許可
+            const applyCodecPreference = (mime, filterFn) => {
                 try {
                     const capabilities = RTCRtpSender.getCapabilities('video');
-                    const h264Codecs = (capabilities?.codecs ?? []).filter(c =>
-                        c.mimeType === 'video/H264' &&
-                        (c.sdpFmtpLine ?? '').includes('packetization-mode=1')
-                    );
-                    if (h264Codecs.length > 0 && typeof videoTransceiver.setCodecPreferences === 'function') {
-                        videoTransceiver.setCodecPreferences(h264Codecs);
-                        log(`H.264 codec preferenceを適用 (${h264Codecs.length}件)`, 'success');
+                    const codecs = (capabilities?.codecs ?? []).filter(filterFn);
+                    if (codecs.length > 0 && typeof videoTransceiver.setCodecPreferences === 'function') {
+                        videoTransceiver.setCodecPreferences(codecs);
+                        log(`${mime} codec preferenceを適用 (${codecs.length}件)`, 'success');
                     } else {
-                        log('H.264 codec preferenceを設定できませんでした（対象なし/未対応ブラウザ）', 'error');
+                        log(`${mime} codec preferenceを設定できませんでした（対象なし/未対応ブラウザ）`, 'error');
                     }
                 } catch (error) {
-                    log(`codec preference設定エラー: ${error}`, 'error');
+                    log(`codec preference設定エラー (${mime}): ${error}`, 'error');
                     console.error('setCodecPreferences error:', error);
                 }
+            };
+
+            if (codecParam === 'h264') {
+                applyCodecPreference('H.264', c =>
+                    c.mimeType === 'video/H264' &&
+                    (c.sdpFmtpLine ?? '').includes('packetization-mode=1')
+                );
+            } else if (codecParam === 'vp9') {
+                applyCodecPreference('VP9', c => c.mimeType === 'video/VP9');
             } else {
                 log(`codec preferenceを適用せず (codec=${codecParam})`);
             }

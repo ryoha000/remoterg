@@ -467,9 +467,10 @@ impl WebRtcService {
 
                             // エンコードワーカーを起動（初期解像度1280x720）
                             // CPU負荷分散のため論理コア数ベースでワーカーを生成
-                            let worker_count = std::thread::available_parallelism()
-                                .map(|n| n.get().max(1))
-                                .unwrap_or(2);
+                            // let worker_count = std::thread::available_parallelism()
+                            //     .map(|n| n.get().max(1))
+                            //     .unwrap_or(2);
+                            let worker_count = 2;
                             let (job_txs, res_rx) =
                                 self.encoder_factory.start_workers(worker_count, 1280, 720);
                             encode_job_txs = Some(job_txs);

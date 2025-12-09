@@ -1,6 +1,6 @@
 # RemoteRG 実装状況メモ
 
-最終更新: 2025年12月（VideoTrackへのフレーム投入実装完了）
+最終更新: 2025年12月（VP8/VP9エンコードとDataChannel配線を追加）
 
 ## プロジェクト概要
 
@@ -10,94 +10,63 @@
 
 ## 現在の実装状況
 
-### ✅ 実装完了
+### ✅ 実装完了 / 実装中
 
-#### 1. プロジェクト構造
-- Rustワークスペース構成（`desktop/services/`）
-- マイクロサービス風のクレート分割：
-  - `capture`: キャプチャサービス
-  - `signaling`: HTTP/WebSocketシグナリングサーバ
-  - `webrtc`: WebRTC接続管理（スケルトン）
-  - `input`: 入力処理サービス（スケルトン）
-  - `hostd`: 統合バイナリ
+#### 1. ワークスペース構成・共有型
+- Rustワークスペース（`desktop/services/`）に`core-types`（共有DTO）と`encoder`（映像エンコード）を追加
+- 依存方針: 各サービスは`core-types`のみに依存し、組み立ては`hostd`のみが担当（サービス間直接依存なし）
 
 #### 2. CaptureService
-- **状態**: ダミーフレーム生成機能を実装
+- **状態**: ダミーフレーム生成を強化
 - **機能**:
-  - グラデーション画像のダミーフレーム生成（RGBA形式）
-  - 設定可能な解像度・FPS
-  - `tokio::mpsc`チャンネル経由でのフレーム送信
-  - 開始/停止/設定変更コマンドの受信
-- **テスト**: ユニットテスト実装済み
-- **未実装**: Windows GraphicsCapture APIによる実際のウィンドウキャプチャ
+  - 10色パレットの単色フレームを事前生成し、45fps想定でローテーション送出
+  - 解像度・FPSの更新、開始/停止コマンドを受信して動的に切替
+  - `tokio::mpsc`経由でフレームを配信
+- **未実装**: Windows GraphicsCapture APIによる実キャプチャ
 
-#### 3. SignalingService
-- **状態**: WebSocketシグナリングサーバ実装済み
+#### 3. Encoder クレート
+- **状態**: 複数コーデック対応のワーカー型エンコーダーを実装
 - **機能**:
-  - HTTPサーバ（Axum）によるWeb UI配信
-  - WebSocketエンドポイント (`/signal`)
-  - SDP Offer受信とWebRTCサービスへの転送
-  - WebRTCサービスからのAnswer/ICE candidate受信とクライアントへの送信
-  - ICE candidateの受信とWebRTCサービスへの転送
-- **実装詳細**:
-  - broadcastチャンネルを使用してWebRTCサービスからの応答を受信
-  - 各WebSocket接続はbroadcastチャンネルを購読して応答を受信
-- **制限事項**: 
-  - 現在はbroadcastチャンネルを使用した簡易実装のため、複数接続時の応答の正確な配信が保証されない
-  - 接続ごとのチャンネル管理は未実装（TODO: 複数接続対応）
+  - OpenH264（0.9）によるH.264エンコード
+  - libvpx（vpx-rs 0.2.1）によるVP8/VP9エンコード（I420変換込み）
+  - 複数ワーカーを起動して結果を1つのチャネルに集約、初期数は`hostd`側で2
+- **未実装**: ハードウェアエンコード
 
-#### 4. Web UI（クライアント側）
-- **状態**: 基本的なUIとWebRTC接続処理を実装
+#### 4. WebRtcService
+- **状態**: webrtc-rs 0.14 を用いた実装が完成
 - **機能**:
-  - 接続ボタンによるWebSocket接続
-  - PeerConnection作成とOffer送信
-  - Answer受信とRemoteDescription設定
-  - 接続状態の表示とログ出力
-  - エラーハンドリングと詳細ログ
-- **ファイル**: `desktop/services/web/index.html`
+  - Offer受信→実際のAnswer生成、ICE候補送受信
+  - 受信コーデック指定を解釈し、利用可能な`encoder`ファクトリから VP9 > VP8 > H.264 の優先順で選択
+  - TrackLocalStaticSampleで映像トラックを生成し、接続完了までフレームをドロップしてから送出
+  - PLI/FIR 受信時のキーフレーム再送要求、RTCP/統計ログ
+  - DataChannelを開き、JSONメッセージを`InputService`へ中継
+- **既知**: 複数接続は未対応（グローバルチャネル前提）
 
-#### 5. WebRtcService
-- **状態**: webrtc-rsを使用した実装完了
-- **実装済み機能**:
-  - webrtc-rs（0.14）を使用したPeerConnectionの作成
-  - Offerを受信して実際のAnswerを生成
-  - ICE candidateの処理（受信・送信）
-  - PeerConnection状態の監視
-  - Track受信のハンドラ設定
-  - SignalingServiceへの応答送信（broadcastチャンネル経由）
-  - **VideoTrackへのフレーム投入（実装完了）**
-    - H.264用のTrackLocalStaticSampleを作成してPeerConnectionに追加
-    - OpenH264エンコーダーを使用したH.264エンコーディング
-    - CaptureServiceのRGBAフレームをYUVに変換してエンコード
-    - エンコードされたフレームをWebRTC VideoTrackに送信
-- **構造**:
-  - CaptureServiceからのフレーム受信チャンネル
-  - SignalingServiceとのメッセージパッシング
-  - webrtc-rsのAPIを使用したPeerConnection管理
-  - OpenH264エンコーダーによるH.264エンコーディング
-- **未実装**: 
-  - DataChannelの実装
-  - 接続ごとのチャンネル管理（現在はbroadcastチャンネルで簡易実装）
-
-#### 6. InputService
-- **状態**: スケルトン実装
+#### 5. SignalingService
+- **状態**: AxumベースのHTTP/WebSocketシグナリングサーバ
 - **機能**:
-  - DataChannelメッセージの受信とログ出力
-  - キー入力・マウスホイール・スクリーンショットリクエストのメッセージ定義
-- **未実装**: Win32 SendInput APIによる実際の入力注入
+  - `/` で `desktop/services/web/index.html` を配信、`/signal` で WebSocket
+  - Offer/ICEをWebRtcServiceへ転送し、Answer/ICEをクライアントへ返却
+  - グローバルbroadcastチャンネルで応答を配信（複数接続時は競合の可能性あり）
 
-#### 7. hostd（統合バイナリ）
-- **状態**: 全サービスを統合した単一バイナリ実装済み
+#### 6. Web UI（`desktop/services/web/index.html`）
+- **状態**: デバッグ用シングルHTMLを拡充
 - **機能**:
-  - CLIオプション（ポート番号、ログレベル）
-  - 全サービスの並列実行（tokio::select!）
-  - チャンネルによるサービス間通信の設定
-  - **CaptureServiceの自動開始**
-    - 起動時に自動的にダミーフレーム生成を開始
-- **修正履歴**:
-  - WebRTCメッセージチャネルの配線ミスを修正（2025年12月）
-    - `WebRtcService::new`から返されるチャネルを正しく使用するように変更
-    - SignalingServiceからWebRtcServiceへのメッセージ転送が正常に動作するようになった
+  - コーデック選択（VP8/VP9/H.264/自動）、Video recvonly transceiver
+  - DataChannelでキー入力・スクリーンショット要求を送信
+  - Answer適用前のICEバッファリング、接続状態/ICE状態/受信統計の詳細ログ
+  - `requestVideoFrameCallback` と `getStats` で受信確認
+
+#### 7. InputService
+- **状態**: 受信メッセージをログ出力するスケルトン
+- **未実装**: Win32 SendInputによる入力注入、スクリーンショット応答
+
+#### 8. hostd（統合バイナリ）
+- **状態**: 全サービスを束ねるCLIバイナリ
+- **機能**:
+  - `--port`, `--log-level` オプション
+  - コーデックfeature（`vp9`/`vp8`/`h264`）をビルド時に選択、未指定ならコンパイルエラー
+  - 起動直後にCaptureServiceへStartを送信し、全サービスを並列実行
 
 ### 📋 テスト状況
 
@@ -122,90 +91,59 @@ cargo run --bin hostd -- --port 9000 --log-level debug
 ## 現在の制限事項・既知の問題
 
 ### 1. 複数接続対応が不完全
-- **原因**: broadcastチャンネルを使用した簡易実装のため、接続ごとの正確な応答配信が保証されない
-- **影響**: 複数のクライアントが同時に接続した場合、応答が正しく配信されない可能性がある
-- **対応**: 接続ごとのチャンネル管理を実装する必要がある（TODO）
+- **原因**: broadcastチャンネルを前提とした簡易実装
+- **影響**: 複数クライアント同時接続時に応答の取り違えが起こり得る
+- **対応**: 接続ID単位のチャンネル管理とPeerConnection管理を導入する
 
-### 2. VideoTrackへのフレーム投入 ✅ 実装完了
-- **状態**: 実装完了
-- **実装内容**:
-  - H.264用のTrackLocalStaticSampleを作成してPeerConnectionに追加
-  - OpenH264エンコーダーを使用したH.264エンコーディング
-  - CaptureServiceのRGBAフレームをYUVBufferに変換
-  - エンコードされたフレームをwebrtc_media::Sampleとして送信
+### 2. 実キャプチャ未実装
+- **現状**: 単色ダミーフレームのみ（事前生成）
+- **必要**: Windows GraphicsCapture API統合とリサイズ/フレームレート協調
 
-### 3. 実際のウィンドウキャプチャ未実装
-- **現状**: ダミーフレームのみ生成
-- **必要**: Windows GraphicsCapture APIの統合
-- **依存**: Windows SDK、適切なRustバインディング
+### 3. 入力注入・スクリーンショット未実装
+- **現状**: DataChannelメッセージはInputServiceでログ出力のみ
+- **必要**: Win32 SendInputによるキー/マウス注入、スクリーンショット応答の実装
 
-### 4. DataChannel未実装
-- **現状**: PeerConnectionは作成されているが、DataChannelの確立とメッセージ処理が未実装
-- **必要**: DataChannelの確立、クライアントからの入力メッセージ受信、InputServiceへの転送
-- **依存**: webrtc-rsのDataChannel APIの調査と実装
+### 4. DataChannel/接続管理の粗さ
+- **現状**: グローバルチャネル前提、単一接続向け。再接続・複数接続の切り替えを考慮していない
+- **必要**: 接続ごとのDataChannelハンドラ分離、切断時のリソース解放
 
-### 5. 入力注入未実装
-- **現状**: ログ出力のみ
-- **必要**: Win32 SendInput APIの実装
-- **依存**: `windows-rs`または`winapi`クレート
-
-### 6. スクリーンショット機能未実装
-- **現状**: リクエスト受信のみ
-- **必要**: キャプチャフレームの保存とクライアントへの送信
+### 5. エンコードはソフトウェアのみ
+- **現状**: OpenH264/libvpxのソフトウェア実装。CPU負荷が高くなる可能性
+- **必要**: ハードウェアエンコード検討（NVENC/AMF/QuickSync等）と負荷計測
 
 ## 次のステップ（優先順位順）
 
 ### 短期（動作確認フェーズ）
 
-1. **接続ごとのチャンネル管理の実装** ⚠️ 棚上げ
-   - 現在はbroadcastチャンネルで簡易実装
-   - 接続ごとに独立した応答チャンネルを管理する必要がある
-   - WebRTCサービスが接続IDとチャンネルのマッピングを管理
-   - 複数接続時の正確な応答配信を保証
-
-2. **VideoTrackへのフレーム投入** ✅ 実装完了
-   - H.264用のTrackLocalStaticSampleを作成してPeerConnectionに追加
-   - OpenH264エンコーダーを使用したH.264エンコーディング
-   - CaptureServiceのRGBAフレームをYUVBufferに変換してエンコード
-   - エンコードされたフレームをWebRTC VideoTrackに送信
-
-3. **GraphicsCapture APIの統合**
-   - Windows GraphicsCapture APIの調査
-   - Rustバインディングの選択（`windows-rs`など）
-   - HWND指定によるウィンドウキャプチャの実装
+1. **接続ごとのチャンネル管理の実装**
+   - WebSocketごとに応答チャネル/PeerConnection/encoderワーカーを分離する
+2. **GraphicsCapture統合**
+   - HWND指定で実際のウィンドウをキャプチャし、解像度・FPS変更に追従させる
+3. **DataChannel入力・スクリーンショット実装**
+   - Win32 SendInputによるキー/マウス注入
+   - スクリーンショット取得とクライアント返却
+4. **エンコード負荷の検証**
+   - CPU使用率計測、ハードウェアエンコード手段の調査
 
 ### 中期（機能実装フェーズ）
 
-4. **DataChannelの実装** ⚠️ 棚上げ
-   - WebRTC DataChannelの確立
-   - クライアントからの入力メッセージ受信
-   - InputServiceへの転送
-
-5. **Win32 SendInputの実装**
-   - キー入力の注入
-   - マウス操作の注入
-   - ゲーム操作への抽象化
+5. **複数コーデック/帯域に応じた設定最適化**
+   - VP8/VP9/H.264 の選択ロジックやビットレート設定の最適化
+6. **セッション管理の強化**
+   - タイムアウト、切断処理、再接続時のクリーンアップ
 
 ### 長期（品質向上フェーズ）
 
-6. **スクリーンショット機能**
-   - フレームの保存（ホスト側）
-   - クライアントへの画像送信
-   - ダウンロード機能
-
 7. **C# UI（WinUI）の実装**
    - IPCプロトコルの定義
-   - UI実装
-   - 設定管理
+   - UI実装と設定管理
 
 8. **セキュリティ機能**
    - PINコード認証
    - Tailscale統合時のアクセス制御
 
 9. **パフォーマンス最適化**
-    - エンコーディング最適化
-    - レイテンシ削減
-    - メモリ使用量の最適化
+   - レイテンシ削減、メモリ使用量削減、ハードウェアエンコード対応
 
 ## アーキテクチャ
 
@@ -231,7 +169,7 @@ cargo run --bin hostd -- --port 9000 --log-level debug
 │  │WebRtcService │                  │
 │  │ (webrtc-rs)  │                  │
 │  └──────┬───────┘                  │
-│         │ DataChannel (未実装)     │
+│         │ DataChannel (受信→ログ) │
 │         ↓                          │
 │  ┌──────────────┐                  │
 │  │InputService  │                  │
@@ -286,13 +224,13 @@ cargo run --bin hostd -- --port 9000 --log-level debug
 - **CLI**: clap
 
 ### フロントエンド（Web）
-- **WebRTC**: ブラウザネイティブAPI
-- **UI**: バニラJavaScript + HTML/CSS
+- `desktop/services/web/index.html`: バニラJavaScript + WebRTCデバッグUI
+- `web/`: TanStack Start / ReactベースのPoC（現状ホストとは未連携）
 
 ### 現在使用中
-- **WebRTC**: webrtc-rs 0.14（Rustネイティブ実装）
-- **H.264エンコーディング**: openh264 0.4
-- **WebRTCメディア**: webrtc-media 0.11
+- **WebRTC**: webrtc-rs 0.14, webrtc-media 0.11
+- **映像エンコード**: openh264 0.9（H.264）、vpx-rs 0.2.1（VP8/VP9）
+- **共有DTO**: core-types クレート
 - **バイト処理**: bytes 1.0
 
 ### 将来追加予定
@@ -309,6 +247,8 @@ remoterg/
 │   ├── services/              # Rustワークスペース
 │   │   ├── Cargo.toml        # ワークスペース設定
 │   │   ├── README.md          # サービス詳細ドキュメント
+│   │   ├── core/              # 共有DTO・型（core-types）
+│   │   ├── encoder/           # 映像エンコード（H.264/VP8/VP9）
 │   │   ├── capture/           # キャプチャサービス
 │   │   ├── signaling/         # シグナリングサービス
 │   │   ├── webrtc/            # WebRTCサービス
@@ -317,7 +257,7 @@ remoterg/
 │   │   └── web/               # Web UI
 │   │       └── index.html
 │   └── frontend/              # C# UI（未実装）
-└── web/                       # 将来のWebクライアント拡張（未使用）
+└── web/                       # TanStack Start/ReactベースのWebクライアントPoC
 ```
 
 ## 開発メモ
@@ -332,16 +272,18 @@ remoterg/
 - ✅ PeerConnectionの作成と状態監視
 - ✅ ダミーフレームの生成と送信
 - ✅ SignalingServiceからWebRtcServiceへのメッセージ転送（チャネル配線修正後）
-- ✅ **VideoTrackへのフレーム投入（H.264エンコーディング）**
-  - CaptureServiceのRGBAダミーフレームをH.264エンコード
-  - WebRTC VideoTrack経由でブラウザに送信
+- ✅ **VideoTrackへのフレーム投入（VP8/VP9/H.264 ソフトウェアエンコード）**
+  - CaptureServiceのRGBAダミーフレームを encoder クレート経由でVP9/VP8/H.264 にエンコード（初期2ワーカー）
+  - WebRTC VideoTrack経由でブラウザに送信（VP9 > VP8 > H.264 の優先順で選択）
   - ブラウザのvideoタグでダミーフレームが表示されることを確認
+- ✅ DataChannel開通（クライアント → WebRtcService → InputService でJSONメッセージを受信しログ出力）
 
 ### 棚上げ・未実装項目
-- ⚠️ 接続ごとのチャンネル管理（現在はbroadcastチャンネルで簡易実装）
-- ⚠️ DataChannelの実装
+- ⚠️ 接続ごとのチャンネル管理（グローバルbroadcast依存）
 - ⚠️ 実際のウィンドウキャプチャ（Windows GraphicsCapture API）
 - ⚠️ Win32 SendInputによる入力注入
+- ⚠️ スクリーンショット取得・返却
+- ⚠️ ハードウェアエンコード検討（NVENC/AMF/QuickSync）
 
 ### 参考資料
 - [SPEC.md](SPEC.md): プロダクト仕様
@@ -349,40 +291,37 @@ remoterg/
 
 ## 注意事項
 
-- webrtc-rsを使用した実際のWebRTC Answer生成まで実装完了
-- **VideoTrackへのフレーム投入が実装完了** - ダミーフレームがH.264エンコードされてブラウザに送信される
-- 現在の実装は**動作確認可能な最小構成**です
-- 実際のゲームプレイには、上記の未実装機能（DataChannel、実際のキャプチャ、入力注入）の追加が必要です
-- 複数接続対応は簡易実装のため、本番環境では接続ごとのチャンネル管理が必要です
-- Windows固有のAPI統合が必要なため、クロスプラットフォーム対応は現時点では考慮していません
+- webrtc-rsで実際のAnswer/ICE生成まで実装済み（VP8/VP9/H.264ソフトウェアエンコード）
+- **VideoTrack送信は実装済み**：ダミーフレームをエンコードしブラウザに表示可（CPU負荷は未計測）
+- DataChannelは開通しているが、入力注入・スクリーンショット処理は未実装（ログのみ）
+- 現状は動作確認用の最小構成。実プレイには実キャプチャ・入力注入・複数接続対応が必須
+- 本番運用には接続ごとのチャンネル管理や再接続ハンドリングが必要
+- Windows専用機能を前提としており、クロスプラットフォーム対応は未検討
 
 ## 実装の詳細
 
 ### webrtc-rs統合
-- **バージョン**: 0.14
-- **使用方法**: `webrtc-rs`という別名で依存関係に追加（ローカルの`webrtc`クレートと名前衝突を回避）
+- **バージョン**: 0.14（`webrtc-rs`別名で依存）
 - **実装内容**:
-  - MediaEngineとInterceptorRegistryの初期化
-  - PeerConnectionの作成と設定（ICE設定はホストオンリー）
-  - Offerの受信とAnswerの生成
-  - ICE candidateの処理（受信・送信）
-  - PeerConnection状態の監視
-  - Track受信のハンドラ設定
-  - **VideoTrack送信の実装**:
-    - H.264用のTrackLocalStaticSampleを作成
-    - PeerConnectionにTrackを追加（add_track）
-    - OpenH264エンコーダーでH.264エンコーディング
-    - webrtc_media::Sampleとしてフレームを送信
+  - MediaEngine + InterceptorRegistry 初期化、host-only ICE（STUNなし）
+  - Offer受信→Answer生成、ICE候補送受信
+  - PeerConnection/ICE状態・RTCP (PLI/FIR)・送信統計の監視
+  - Track受信ハンドラの設定
+  - **VideoTrack送信**:
+    - TrackLocalStaticSampleを追加し、接続完了まではフレームをドロップ
+    - 要求/ビルド済みコーデックから VP9 > VP8 > H.264 を選択し encoder ワーカーに投入
+    - webrtc_media::Sampleとして送出し、PLI/FIRでキーフレーム再送をトリガー
+  - **DataChannel**:
+    - ブラウザのDataChannelを受信し、JSONを`InputService`へ転送（現状ログのみ）
 
-### H.264エンコーディング統合
-- **エンコーダー**: OpenH264 0.4
-- **実装内容**:
-  - EncoderConfig::new()でエンコーダーを初期化
-  - CaptureServiceのRGBAフレームをYUVBuffer::with_rgb()でYUVに変換
-  - Encoder::encode()でH.264エンコード
-  - エンコードされたビットストリームをwebrtc_media::Sampleに変換
-  - TrackLocalStaticSample::write_sample()で送信
-- **解像度**: デフォルト1280x720、フレームごとに動的変更対応
+### 映像エンコード統合
+- **H.264 (OpenH264 0.9)**:
+  - RGB変換→YUVBuffer→OpenH264エンコード、Annex-Bへ整形（SPS/PPS検出）
+- **VP8/VP9 (vpx-rs 0.2.1)**:
+  - RGBA→I420変換後にlibvpxでリアルタイムエンコード、初期数フレームを強制キーフレーム
+- **共通**:
+  - 初期解像度1280x720、ワーカー数は`hostd`で2に設定（ラウンドロビン投入）
+  - EncodeResultをtokioチャネルで集約し、Trackへ書き込み
 
 ### シグナリングフロー
 1. クライアントがWebSocket経由でOfferを送信
@@ -394,24 +333,18 @@ remoterg/
 
 ### 修正履歴
 
+#### 2025年12月: VP8/VP9対応とDataChannel配線
+- **実装内容**:
+  - `encoder`クレートを追加し、OpenH264 0.9 / vpx-rs 0.2.1 によるVP8/VP9/H.264ソフトウェアエンコードを実装（複数ワーカー）
+  - Web UIにコーデック選択UIを追加し、WebRtcService側で優先順選択を実装
+  - DataChannelメッセージをInputServiceに中継（現在はログ）
+  - hostdでコーデックfeatureを必須化し、起動時にCaptureServiceを自動開始
+- **結果**: VP8/VP9/H.264いずれでもダミーフレームを送出でき、DataChannel経由で入力リクエストを受信可能（処理は未実装）
+
 #### 2025年12月: WebRTCメッセージチャネル配線の修正
 - **問題**: `hostd`でWebRTCメッセージ用チャネルを二重に作成していたため、SignalingServiceからWebRtcServiceへのメッセージ転送が機能していなかった
 - **修正内容**:
   - `hostd/src/main.rs`で重複していたチャネル作成を削除
   - `WebRtcService::new`から返される`webrtc_msg_tx`をそのまま`SignalingService`に渡すように変更
 - **結果**: Offer/Answerのやり取りが正常に動作するようになった
-
-#### 2025年12月: VideoTrackへのフレーム投入実装
-- **実装内容**:
-  - `index.html`にvideo recvonly transceiverを追加
-  - `WebRtcService`にH.264用のTrackLocalStaticSampleを追加
-  - OpenH264エンコーダーを使用したH.264エンコーディング実装
-  - CaptureServiceのRGBAフレームをYUVBufferに変換してエンコード
-  - エンコードされたフレームをwebrtc_media::Sampleとして送信
-  - `hostd`でCaptureServiceを起動時に自動開始
-- **依存関係追加**:
-  - `openh264 = "0.4"` - H.264エンコーディング
-  - `webrtc-media = "0.11"` - WebRTCメディアサンプル
-  - `bytes = "1.0"` - バイトデータ処理
-- **結果**: ブラウザのvideoタグにダミーフレームがH.264エンコードされて表示されるようになった
 

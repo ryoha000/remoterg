@@ -4,16 +4,16 @@ use vpx_rs::enc::CodecId;
 use super::{EncodeJob, EncodeResult, VideoCodec, VideoEncoderFactory};
 use crate::vpx_common::start_vpx_encode_workers;
 
-/// VP9 ファクトリ（libvpxベース）
-pub struct Vp9EncoderFactory;
+/// VP8 ファクトリ（libvpxベース）
+pub struct Vp8EncoderFactory;
 
-impl Vp9EncoderFactory {
+impl Vp8EncoderFactory {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl VideoEncoderFactory for Vp9EncoderFactory {
+impl VideoEncoderFactory for Vp8EncoderFactory {
     fn start_workers(
         &self,
         worker_count: usize,
@@ -23,10 +23,10 @@ impl VideoEncoderFactory for Vp9EncoderFactory {
         Vec<std::sync::mpsc::Sender<EncodeJob>>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
-        start_vpx_encode_workers(CodecId::VP9, "vp9", worker_count, init_width, init_height)
+        start_vpx_encode_workers(CodecId::VP8, "vp8", worker_count, init_width, init_height)
     }
 
     fn codec(&self) -> VideoCodec {
-        VideoCodec::Vp9
+        VideoCodec::Vp8
     }
 }

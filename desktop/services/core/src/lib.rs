@@ -15,6 +15,7 @@ pub struct Frame {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoCodec {
     H264,
+    Vp8,
     Vp9,
 }
 

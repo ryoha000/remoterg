@@ -261,6 +261,13 @@ pub mod openh264 {
     }
 }
 
+#[cfg(any(feature = "vp8", feature = "vp9"))]
+mod vpx_common;
+
 #[cfg(feature = "vp9")]
 #[path = "vp9_vpx.rs"]
 pub mod vp9;
+
+#[cfg(feature = "vp8")]
+#[path = "vp8_vpx.rs"]
+pub mod vp8;

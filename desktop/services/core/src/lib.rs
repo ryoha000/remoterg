@@ -12,11 +12,24 @@ pub struct Frame {
 }
 
 /// ビデオコーデックの種類
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VideoCodec {
     H264,
     Vp8,
     Vp9,
+}
+
+impl std::str::FromStr for VideoCodec {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "h264" | "h.264" => Ok(VideoCodec::H264),
+            "vp8" => Ok(VideoCodec::Vp8),
+            "vp9" => Ok(VideoCodec::Vp9),
+            other => Err(format!("unsupported codec string: {}", other)),
+        }
+    }
 }
 
 /// エンコード要求
@@ -65,6 +78,7 @@ pub trait VideoEncoderFactory: Send + Sync {
 pub enum WebRtcMessage {
     SetOffer {
         sdp: String,
+        codec: Option<VideoCodec>,
     },
     AddIceCandidate {
         candidate: String,
@@ -78,6 +92,9 @@ pub enum WebRtcMessage {
 pub enum SignalingResponse {
     Answer {
         sdp: String,
+    },
+    Error {
+        message: String,
     },
     IceCandidate {
         candidate: String,

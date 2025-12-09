@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["vp8"]
+default = ["vp8", "vp9", "h264"]
 h264 = ["openh264"]
 vp8 = ["vpx-rs"]
 vp9 = ["vpx-rs"]

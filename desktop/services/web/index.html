@@ -312,7 +312,11 @@
                         const message = JSON.parse(event.data);
                         log(`受信: ${message.type}`);
                         
-                        if (message.type === 'answer') {
+                        if (message.type === 'error') {
+                            log(`サーバーエラー: ${message.message}`, 'error');
+                            updateStatus('接続エラー', 'error');
+                            try { ws?.close(); } catch (e) {}
+                        } else if (message.type === 'answer') {
                             try {
                                 log(`Answer SDP (最初の100文字): ${message.sdp.substring(0, 100)}...`);
                                 await pc.setRemoteDescription({
@@ -555,7 +559,8 @@
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
                             type: 'offer',
-                            sdp: offer.sdp
+                            sdp: offer.sdp,
+                            codec: selectedCodec
                         }));
                     }
                 } catch (error) {

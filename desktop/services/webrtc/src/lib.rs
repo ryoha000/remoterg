@@ -1,5 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use core_types::{EncodeJob, EncodeResult, VideoCodec, VideoEncoderFactory};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,7 +35,7 @@ pub struct WebRtcService {
     message_rx: mpsc::Receiver<WebRtcMessage>,
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
-    encoder_factory: Arc<dyn VideoEncoderFactory>,
+    encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
 }
 
 /// Video trackとエンコーダーの状態
@@ -151,7 +152,7 @@ impl WebRtcService {
         frame_rx: mpsc::Receiver<Frame>,
         signaling_tx: mpsc::Sender<SignalingResponse>,
         data_channel_tx: mpsc::Sender<DataChannelMessage>,
-        encoder_factory: Arc<dyn VideoEncoderFactory>,
+        encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
     ) -> (Self, mpsc::Sender<WebRtcMessage>) {
         let (message_tx, message_rx) = mpsc::channel(100);
         (
@@ -160,10 +161,34 @@ impl WebRtcService {
                 message_rx,
                 signaling_tx,
                 data_channel_tx,
-                encoder_factory,
+                encoder_factories,
             },
             message_tx,
         )
+    }
+
+    fn select_encoder_factory(
+        &self,
+        requested: Option<VideoCodec>,
+    ) -> Result<(Arc<dyn VideoEncoderFactory>, VideoCodec)> {
+        if let Some(codec) = requested {
+            if let Some(factory) = self.encoder_factories.get(&codec) {
+                return Ok((factory.clone(), codec));
+            } else {
+                bail!(
+                    "要求されたコーデックはビルドで有効化されていません: {:?}",
+                    codec
+                );
+            }
+        }
+
+        for codec in [VideoCodec::Vp9, VideoCodec::Vp8, VideoCodec::H264] {
+            if let Some(factory) = self.encoder_factories.get(&codec) {
+                return Ok((factory.clone(), codec));
+            }
+        }
+
+        bail!("利用可能なエンコーダが存在しません（feature未有効）");
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -338,9 +363,23 @@ impl WebRtcService {
                 // メッセージ受信
                 msg = self.message_rx.recv() => {
                     match msg {
-                        Some(WebRtcMessage::SetOffer { sdp }) => {
+                        Some(WebRtcMessage::SetOffer { sdp, codec }) => {
                             info!("SetOffer received, generating answer");
 
+                            let (encoder_factory, selected_codec) =
+                                match self.select_encoder_factory(codec) {
+                                    Ok(res) => res,
+                                    Err(e) => {
+                                        warn!("{}", e);
+                                        let _ = self
+                                            .signaling_tx
+                                            .send(SignalingResponse::Error {
+                                                message: e.to_string(),
+                                            })
+                                            .await;
+                                        continue;
+                                    }
+                                };
                             // ICE設定（ホストオンリー）
                             let config = RTCConfiguration {
                                 ice_servers: vec![],
@@ -359,7 +398,7 @@ impl WebRtcService {
                                 .context("Failed to set remote description")?;
 
                             // Video trackを作成して追加（encoderが提供するコーデックに合わせる）
-                            let codec = self.encoder_factory.codec();
+                            let codec = selected_codec;
                             let mime_type = codec_to_mime_type(codec);
                             info!("Using video codec: {:?}", codec);
 
@@ -472,8 +511,11 @@ impl WebRtcService {
                             //     .map(|n| n.get().max(1))
                             //     .unwrap_or(2);
                             let worker_count = 2;
-                            let (job_txs, res_rx) =
-                                self.encoder_factory.start_workers(worker_count, 1280, 720);
+                            let (job_txs, res_rx) = encoder_factory.start_workers(
+                                worker_count,
+                                1280,
+                                720,
+                            );
                             encode_job_txs = Some(job_txs);
                             encode_result_rx = Some(res_rx);
 

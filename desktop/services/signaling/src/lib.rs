@@ -11,10 +11,9 @@ use axum::{
     routing::get,
     Router,
 };
-use core_types::{SignalingResponse, WebRtcMessage};
+use core_types::{SignalingResponse, VideoCodec, WebRtcMessage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
-use tower_http::services::ServeDir;
 use tracing::{debug, error, info, warn};
 
 /// シグナリングメッセージ
@@ -22,9 +21,15 @@ use tracing::{debug, error, info, warn};
 #[serde(tag = "type")]
 pub enum SignalingMessage {
     #[serde(rename = "offer")]
-    Offer { sdp: String },
+    Offer {
+        sdp: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        codec: Option<String>,
+    },
     #[serde(rename = "answer")]
     Answer { sdp: String },
+    #[serde(rename = "error")]
+    Error { message: String },
     #[serde(rename = "ice_candidate")]
     IceCandidate {
         candidate: String,
@@ -138,6 +143,8 @@ async fn log_requests(req: Request<Body>, next: Next) -> Response {
 }
 
 /// SDPのm-line情報
+#[cfg(test)]
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct MLine {
     media_type: String, // "video", "application" など
@@ -146,6 +153,8 @@ struct MLine {
 }
 
 /// Offer SDPからm-lineの順序を解析
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn parse_offer_m_lines(offer_sdp: &str) -> Vec<MLine> {
     let mut m_lines = Vec::new();
     let lines: Vec<&str> = offer_sdp.lines().collect();
@@ -181,6 +190,8 @@ pub(crate) fn parse_offer_m_lines(offer_sdp: &str) -> Vec<MLine> {
 }
 
 /// Offerに基づいてAnswer SDPを生成
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn generate_answer_from_offer(offer_sdp: &str) -> String {
     let m_lines = parse_offer_m_lines(offer_sdp);
     debug!("Parsed {} m-lines from offer", m_lines.len());
@@ -248,6 +259,20 @@ pub(crate) fn generate_answer_from_offer(offer_sdp: &str) -> String {
     answer_lines.join("\r\n") + "\r\n"
 }
 
+fn parse_codec_param(codec: Option<String>) -> Result<Option<VideoCodec>, String> {
+    if let Some(codec_str) = codec {
+        if codec_str.eq_ignore_ascii_case("any") || codec_str.is_empty() {
+            return Ok(None);
+        }
+        codec_str
+            .parse::<VideoCodec>()
+            .map(Some)
+            .map_err(|e| format!("無効なcodec指定: {}", e))
+    } else {
+        Ok(None)
+    }
+}
+
 async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
     info!("WebSocket client connected");
 
@@ -270,12 +295,28 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
 
                         // JSONをパース
                         match serde_json::from_str::<SignalingMessage>(&text) {
-                            Ok(SignalingMessage::Offer { sdp }) => {
+                            Ok(SignalingMessage::Offer { sdp, codec }) => {
+                                let parsed_codec = match parse_codec_param(codec) {
+                                    Ok(c) => c,
+                                    Err(msg) => {
+                                        let error_msg = SignalingMessage::Error { message: msg };
+                                        if let Ok(response_json) = serde_json::to_string(&error_msg) {
+                                            let _ = socket.send(Message::Text(response_json)).await;
+                                        }
+                                        continue;
+                                    }
+                                };
                                 debug!("Offer received, forwarding to WebRTC service");
                                 // WebRTCサービスにOfferを転送
                                 // 簡易実装: 応答チャンネルも一緒に送信する必要があるが、
                                 // 現時点ではグローバルなチャンネルを使用
-                                if let Err(e) = webrtc_tx.send(WebRtcMessage::SetOffer { sdp }).await {
+                                if let Err(e) = webrtc_tx
+                                    .send(WebRtcMessage::SetOffer {
+                                        sdp,
+                                        codec: parsed_codec,
+                                    })
+                                    .await
+                                {
                                     error!("Failed to send offer to WebRTC service: {}", e);
                                     break;
                                 }
@@ -336,6 +377,20 @@ async fn handle_socket(mut socket: WebSocket, state: SignalingState) {
                                     }
                                 }
                             }
+                            SignalingResponse::Error { message } => {
+                                let err_msg = SignalingMessage::Error { message };
+                                match serde_json::to_string(&err_msg) {
+                                    Ok(response_json) => {
+                                        if let Err(e) = socket.send(Message::Text(response_json)).await {
+                                            error!("Failed to send error to client: {}", e);
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to serialize error: {}", e);
+                                    }
+                                }
+                            }
                             SignalingResponse::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
                                 debug!("ICE candidate received from WebRTC service, sending to client");
                                 let ice_candidate = SignalingMessage::IceCandidate {
@@ -380,6 +435,7 @@ mod tests {
     fn test_signaling_message_serialization() {
         let offer = SignalingMessage::Offer {
             sdp: "test sdp".to_string(),
+            codec: Some("vp8".to_string()),
         };
 
         let json = serde_json::to_string(&offer).unwrap();
@@ -388,8 +444,9 @@ mod tests {
 
         let deserialized: SignalingMessage = serde_json::from_str(&json).unwrap();
         match deserialized {
-            SignalingMessage::Offer { sdp } => {
+            SignalingMessage::Offer { sdp, codec } => {
                 assert_eq!(sdp, "test sdp");
+                assert_eq!(codec, Some("vp8".to_string()));
             }
             _ => panic!("Expected Offer"),
         }

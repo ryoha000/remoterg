@@ -1,6 +1,41 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver};
+
+/// Capture の初期設定/変更パラメータ
+#[derive(Debug, Clone)]
+pub struct CaptureConfig {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            width: 1280,
+            height: 720,
+            fps: 45,
+        }
+    }
+}
+
+/// Capture サービスへのメッセージ
+#[derive(Debug, Clone)]
+pub enum CaptureMessage {
+    Start { hwnd: u64 },
+    Stop,
+    UpdateConfig { width: u32, height: u32, fps: u32 },
+}
+
+/// Capture サービスの実行結果 Future 型
+pub type CaptureFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+pub type CaptureFrameSender = Sender<Frame>;
+pub type CaptureCommandReceiver = Receiver<CaptureMessage>;
 
 /// キャプチャフレーム
 #[derive(Debug, Clone)]
@@ -109,4 +144,13 @@ pub enum DataChannelMessage {
     Key { key: String, down: bool },
     MouseWheel { delta: i32 },
     ScreenshotRequest,
+}
+
+/// Capture 実装の共通トレイト
+pub trait CaptureBackend: Send {
+    fn new(frame_tx: CaptureFrameSender, command_rx: CaptureCommandReceiver) -> Self
+    where
+        Self: Sized;
+
+    fn run(self) -> CaptureFuture;
 }

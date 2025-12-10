@@ -4,6 +4,7 @@ members = [
   "core",
   "encoder",
   "capture",
+  "capturemock",
   "signaling",
   "webrtc",
   "input",

@@ -1,0 +1,31 @@
+[package]
+name = "hostd"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "hostd"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+capture = { path = "../capture" }
+capturemock = { path = "../capturemock", optional = true }
+signaling = { path = "../signaling" }
+webrtc = { path = "../webrtc" }
+encoder = { path = "../encoder" }
+input = { path = "../input" }
+core-types = { path = "../core" }
+clap = { version = "4.5", features = ["derive"] }
+
+[features]
+default = ["vp8", "vp9", "h264"]
+h264 = ["encoder/h264"]
+vp8 = ["encoder/vp8"]
+vp9 = ["encoder/vp9"]
+mock = ["capturemock"]

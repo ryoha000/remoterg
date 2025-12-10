@@ -69,8 +69,11 @@ impl CaptureService {
                         }
                         Some(CaptureMessage::UpdateConfig { width, height, fps }) => {
                             info!("Update config (mock): {}x{} @ {}fps", width, height, fps);
-                            config.width = width;
-                            config.height = height;
+                            config.size = if width == 0 || height == 0 {
+                                core_types::CaptureSize::UseSourceSize
+                            } else {
+                                core_types::CaptureSize::Custom { width, height }
+                            };
                             config.fps = fps;
                             frame_index = 0;
                             let regen_start = Instant::now();
@@ -143,11 +146,15 @@ impl CaptureService {
         let frames: Vec<Frame> = (0..count as u64)
             .map(|i| Self::generate_dummy_frame(config, i))
             .collect();
+        let (width, height) = match &config.size {
+            core_types::CaptureSize::UseSourceSize => (0, 0),
+            core_types::CaptureSize::Custom { width, height } => (*width, *height),
+        };
         info!(
             "Pre-generated {} frames for {}x{} @{}fps in {}ms",
             frames.len(),
-            config.width,
-            config.height,
+            width,
+            height,
             config.fps,
             start.elapsed().as_millis()
         );
@@ -155,8 +162,15 @@ impl CaptureService {
     }
 
     fn generate_dummy_frame(config: &CaptureConfig, frame_index: u64) -> Frame {
+        let (width, height) = match &config.size {
+            core_types::CaptureSize::UseSourceSize => {
+                // mock では UseSourceSize の場合はデフォルトサイズを使用
+                (1280, 720)
+            }
+            core_types::CaptureSize::Custom { width, height } => (*width, *height),
+        };
         // 単色フレームを生成
-        let size = (config.width * config.height * 4) as usize;
+        let size = (width * height * 4) as usize;
         let mut data = vec![0u8; size];
 
         // 画面内は完全単色。事前生成ではパレット順に1色1フレームだけ持つ
@@ -171,8 +185,8 @@ impl CaptureService {
         }
 
         Frame {
-            width: config.width,
-            height: config.height,
+            width,
+            height,
             data,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -218,8 +232,10 @@ mod tests {
     #[test]
     fn test_dummy_frame_generation() {
         let config = CaptureConfig {
-            width: 640,
-            height: 480,
+            size: core_types::CaptureSize::Custom {
+                width: 640,
+                height: 480,
+            },
             fps: 30,
         };
 

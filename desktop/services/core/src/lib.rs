@@ -5,19 +5,26 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver};
 
+/// キャプチャサイズの指定方法
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureSize {
+    /// 元画面サイズを使用
+    UseSourceSize,
+    /// カスタムサイズを指定
+    Custom { width: u32, height: u32 },
+}
+
 /// Capture の初期設定/変更パラメータ
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
-    pub width: u32,
-    pub height: u32,
+    pub size: CaptureSize,
     pub fps: u32,
 }
 
 impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
-            width: 1280,
-            height: 720,
+            size: CaptureSize::UseSourceSize,
             fps: 45,
         }
     }

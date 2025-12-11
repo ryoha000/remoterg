@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc as tokio_mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use vpx_rs::{
     enc::{CodecId, Encoder, EncoderConfig, EncoderFrameFlags, RateControl, Timebase},
     EncodingDeadline, ImageFormat, Packet, YUVImageData,
@@ -89,8 +89,6 @@ pub fn create_vpx_encoder(
 pub fn start_vpx_encode_worker(
     codec_id: CodecId,
     codec_name: &'static str,
-    init_width: u32,
-    init_height: u32,
 ) -> (
     std::sync::mpsc::Sender<EncodeJob>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
@@ -99,34 +97,36 @@ pub fn start_vpx_encode_worker(
     let (res_tx, res_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
     std::thread::spawn(move || {
-        let mut width = init_width;
-        let mut height = init_height;
+        let mut width = 0;
+        let mut height = 0;
         let mut pts: i64 = 0;
         let mut force_kf_remaining: usize = 3; // 接続初期に数フレーム連続でキーフレームを送って復号を安定化
-
-        let mut encoder = match create_vpx_encoder(codec_id, width, height) {
-            Ok(enc) => enc,
-            Err(e) => {
-                warn!("{} encoder: failed to create encoder: {}", codec_name, e);
-                return;
-            }
-        };
+        let mut encoder: Option<Encoder<u8>> = None;
 
         while let Ok(job) = job_rx.recv() {
-            if job.width != width || job.height != height {
+            // 最初のフレームまたは解像度変更時にエンコーダーを作成/再作成
+            if encoder.is_none() || job.width != width || job.height != height {
+                if encoder.is_some() {
+                    info!(
+                        "{} encoder: resizing encoder {}x{} -> {}x{}",
+                        codec_name, width, height, job.width, job.height
+                    );
+                }
                 width = job.width;
                 height = job.height;
                 match create_vpx_encoder(codec_id, width, height) {
                     Ok(enc) => {
-                        encoder = enc;
+                        encoder = Some(enc);
                         force_kf_remaining = 3; // リサイズ時も直後にキーフレームを送る
                     }
                     Err(e) => {
-                        warn!("{} encoder: recreate failed: {}", codec_name, e);
+                        warn!("{} encoder: failed to create encoder: {}", codec_name, e);
                         continue;
                     }
                 }
             }
+
+            let encoder = encoder.as_mut().expect("encoder should be initialized");
 
             let rgb_start = Instant::now();
             let i420 = rgba_to_i420(&job.rgba, job.width, job.height);
@@ -209,8 +209,6 @@ pub fn start_vpx_encode_workers(
     codec_id: CodecId,
     codec_name: &'static str,
     worker_count: usize,
-    init_width: u32,
-    init_height: u32,
 ) -> (
     Vec<std::sync::mpsc::Sender<EncodeJob>>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
@@ -220,7 +218,7 @@ pub fn start_vpx_encode_workers(
     let (merged_tx, merged_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
     for _ in 0..worker_count {
-        let (job_tx, mut res_rx) = start_vpx_encode_worker(codec_id, codec_name, init_width, init_height);
+        let (job_tx, mut res_rx) = start_vpx_encode_worker(codec_id, codec_name);
         job_txs.push(job_tx);
 
         let merged_tx_clone = merged_tx.clone();

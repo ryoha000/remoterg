@@ -263,10 +263,17 @@ impl WebRtcService {
 
                                 // 解像度変更はワーカー内で再生成するが、ログは出しておく
                                 if track_state.width != frame.width || track_state.height != frame.height {
-                                    info!(
-                                        "Observed frame resize {}x{} -> {}x{} (encoder will recreate in worker)",
-                                        track_state.width, track_state.height, frame.width, frame.height
-                                    );
+                                    if track_state.width == 0 && track_state.height == 0 {
+                                        info!(
+                                            "Observed first frame {}x{} (encoder will initialize in worker)",
+                                            frame.width, frame.height
+                                        );
+                                    } else {
+                                        info!(
+                                            "Observed frame resize {}x{} -> {}x{} (encoder will recreate in worker)",
+                                            track_state.width, track_state.height, frame.width, frame.height
+                                        );
+                                    }
                                     // トラック状態は最新解像度を保持（SPS/PPS再送時に使用）
                                     track_state.width = frame.width;
                                     track_state.height = frame.height;
@@ -505,26 +512,23 @@ impl WebRtcService {
                                 }
                             });
 
-                            // エンコードワーカーを起動（初期解像度1280x720）
+                            // エンコードワーカーを起動
                             // CPU負荷分散のため論理コア数ベースでワーカーを生成
                             // let worker_count = std::thread::available_parallelism()
                             //     .map(|n| n.get().max(1))
                             //     .unwrap_or(2);
                             let worker_count = 2;
-                            let (job_txs, res_rx) = encoder_factory.start_workers(
-                                worker_count,
-                                1280,
-                                720,
-                            );
+                            let (job_txs, res_rx) = encoder_factory.start_workers(worker_count);
                             encode_job_txs = Some(job_txs);
                             encode_result_rx = Some(res_rx);
 
                             // SPS/PPSの送出はLocalDescription設定後、最初のフレーム処理時に実行
                             // 初期値はfalseに設定（交渉完了後に送信）
+                            // 解像度は最初のフレームが来たときに設定される
                             video_track_state = Some(VideoTrackState {
                                 track: video_track,
-                                width: 1280,
-                                height: 720,
+                                width: 0,
+                                height: 0,
                                 keyframe_sent: false,
                             });
 

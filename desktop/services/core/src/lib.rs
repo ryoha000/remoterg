@@ -104,8 +104,6 @@ pub trait VideoEncoderFactory: Send + Sync {
     fn start_workers(
         &self,
         worker_count: usize,
-        init_width: u32,
-        init_height: u32,
     ) -> (
         Vec<std::sync::mpsc::Sender<EncodeJob>>,
         UnboundedReceiver<EncodeResult>,

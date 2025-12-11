@@ -25,13 +25,11 @@ pub mod openh264 {
         fn start_workers(
             &self,
             worker_count: usize,
-            init_width: u32,
-            init_height: u32,
         ) -> (
             Vec<std::sync::mpsc::Sender<EncodeJob>>,
             tokio_mpsc::UnboundedReceiver<EncodeResult>,
         ) {
-            start_encode_workers(worker_count, init_width, init_height)
+            start_encode_workers(worker_count)
         }
 
         fn codec(&self) -> VideoCodec {
@@ -124,10 +122,7 @@ pub mod openh264 {
     }
 
     /// OpenH264エンコードワーカーを生成
-    fn start_encode_worker(
-        init_width: u32,
-        init_height: u32,
-    ) -> (
+    fn start_encode_worker() -> (
         std::sync::mpsc::Sender<EncodeJob>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
@@ -135,26 +130,31 @@ pub mod openh264 {
         let (res_tx, res_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
         std::thread::spawn(move || {
-            let mut width = init_width;
-            let mut height = init_height;
-            let mut encoder = create_encoder(width, height).expect("failed to create encoder");
+            let mut width = 0;
+            let mut height = 0;
+            let mut encoder: Option<openh264::encoder::Encoder> = None;
 
             while let Ok(job) = job_rx.recv() {
-                if job.width != width || job.height != height {
-                    info!(
-                        "encoder worker: resizing encoder {}x{} -> {}x{}",
-                        width, height, job.width, job.height
-                    );
+                // 最初のフレームまたは解像度変更時にエンコーダーを作成/再作成
+                if encoder.is_none() || job.width != width || job.height != height {
+                    if encoder.is_some() {
+                        info!(
+                            "encoder worker: resizing encoder {}x{} -> {}x{}",
+                            width, height, job.width, job.height
+                        );
+                    }
                     width = job.width;
                     height = job.height;
                     match create_encoder(width, height) {
-                        Ok(enc) => encoder = enc,
+                        Ok(enc) => encoder = Some(enc),
                         Err(e) => {
-                            warn!("encoder worker: failed to recreate encoder: {}", e);
+                            warn!("encoder worker: failed to create encoder: {}", e);
                             continue;
                         }
                     }
                 }
+
+                let encoder = encoder.as_mut().expect("encoder should be initialized");
 
                 let rgb_start = Instant::now();
                 let rgb_size = (job.width * job.height * 3) as usize;
@@ -221,8 +221,6 @@ pub mod openh264 {
     /// エンコードワーカーを複数起動し、結果を1つのチャネルに集約する
     fn start_encode_workers(
         worker_count: usize,
-        init_width: u32,
-        init_height: u32,
     ) -> (
         Vec<std::sync::mpsc::Sender<EncodeJob>>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
@@ -232,7 +230,7 @@ pub mod openh264 {
         let (merged_tx, merged_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
         for _ in 0..worker_count {
-            let (job_tx, mut res_rx) = start_encode_worker(init_width, init_height);
+            let (job_tx, mut res_rx) = start_encode_worker();
             job_txs.push(job_tx);
 
             let merged_tx_clone = merged_tx.clone();

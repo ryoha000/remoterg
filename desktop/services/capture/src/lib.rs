@@ -83,7 +83,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
 
         // リサイズが必要な場合
         let final_data = if dst_width != src_width || dst_height != src_height {
-            Self::resize_image(rgba_data, src_width, src_height, dst_width, dst_height)?
+            resize_image_impl(rgba_data, src_width, src_height, dst_width, dst_height)?
         } else {
             rgba_data.to_vec()
         };
@@ -128,36 +128,35 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     }
 }
 
-impl CaptureHandler {
-    fn resize_image(
-        src_data: &[u8],
-        src_width: u32,
-        src_height: u32,
-        dst_width: u32,
-        dst_height: u32,
-    ) -> Result<Vec<u8>> {
-        let dst_stride = dst_width * 4;
-        let mut dst_data = vec![0u8; (dst_stride * dst_height) as usize];
+/// 画像リサイズ処理の実装（ベンチマーク用に公開）
+pub fn resize_image_impl(
+    src_data: &[u8],
+    src_width: u32,
+    src_height: u32,
+    dst_width: u32,
+    dst_height: u32,
+) -> Result<Vec<u8>> {
+    let dst_stride = dst_width * 4;
+    let mut dst_data = vec![0u8; (dst_stride * dst_height) as usize];
 
-        for y in 0..dst_height {
-            let src_y = (y * src_height) / dst_height;
-            for x in 0..dst_width {
-                let src_x = (x * src_width) / dst_width;
+    for y in 0..dst_height {
+        let src_y = (y * src_height) / dst_height;
+        for x in 0..dst_width {
+            let src_x = (x * src_width) / dst_width;
 
-                let src_offset = (src_y * src_width + src_x) * 4;
-                let dst_offset = (y * dst_width + x) * 4;
+            let src_offset = (src_y * src_width + src_x) * 4;
+            let dst_offset = (y * dst_width + x) * 4;
 
-                if (src_offset + 4) as usize <= src_data.len()
-                    && (dst_offset + 4) as usize <= dst_data.len()
-                {
-                    dst_data[dst_offset as usize..(dst_offset + 4) as usize]
-                        .copy_from_slice(&src_data[src_offset as usize..(src_offset + 4) as usize]);
-                }
+            if (src_offset + 4) as usize <= src_data.len()
+                && (dst_offset + 4) as usize <= dst_data.len()
+            {
+                dst_data[dst_offset as usize..(dst_offset + 4) as usize]
+                    .copy_from_slice(&src_data[src_offset as usize..(src_offset + 4) as usize]);
             }
         }
-
-        Ok(dst_data)
     }
+
+    Ok(dst_data)
 }
 
 impl CaptureService {

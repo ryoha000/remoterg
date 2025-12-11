@@ -60,10 +60,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_capture_service_real() -> Result<()> {
-        // デスクトップウィンドウを使用（常に存在する）
-        let hwnd = unsafe { get_desktop_window() };
-        // let hwnd_raw = hwnd.0 as u64;
-        let hwnd_raw = 0xF0548;
+        // キャプチャ可能なウィンドウを探す
+        use windows_capture::window::Window;
+        let windows = Window::enumerate()
+            .map_err(|e| anyhow::anyhow!("Failed to enumerate windows: {:?}", e))?;
+
+        let hwnd_raw = if let Some(window) = windows.first() {
+            println!("Using window: {}", window.title().unwrap_or_default());
+            window.as_raw_hwnd() as u64
+        } else {
+            // フォールバック: デスクトップウィンドウを使用
+            let hwnd = unsafe { get_desktop_window() };
+            println!("No capturable windows found, using desktop window");
+            hwnd.0 as u64
+        };
 
         // チャネルを作成
         let (frame_tx, mut frame_rx) = mpsc::channel(10);

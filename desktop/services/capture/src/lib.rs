@@ -1,63 +1,24 @@
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use core_types::{
     CaptureBackend, CaptureCommandReceiver, CaptureConfig, CaptureFrameSender, CaptureFuture,
     CaptureMessage, Frame,
 };
-use std::mem::size_of;
+use std::sync::mpsc;
 use std::time::Instant;
-use tokio::time::{sleep, Duration};
-use tracing::{debug, info};
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    ReleaseDC, SelectObject, SetStretchBltMode, StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, SRCCOPY,
+use tokio::time::Duration;
+use tracing::{debug, error, info};
+use windows_capture::capture::{
+    CaptureControl, Context as CaptureContext, GraphicsCaptureApiHandler,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
-use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
-use windows::Win32::Foundation::HMODULE;
-use windows::core::PCSTR;
+use windows_capture::frame::Frame as WindowsFrame;
+use windows_capture::graphics_capture_api::InternalCaptureControl;
+use windows_capture::settings::{
+    ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+    MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+};
+use windows_capture::window::Window;
 
-// PrintWindow flags
-const PW_RENDERFULLCONTENT: u32 = 0x00000002;
-
-// PrintWindow関数の型定義
-type PrintWindowFn = unsafe extern "system" fn(
-    hwnd: HWND,
-    hdc: HDC,
-    flags: u32,
-) -> windows::Win32::Foundation::BOOL;
-
-unsafe fn print_window(hwnd: HWND, hdc: HDC, flags: u32) -> Result<bool> {
-    // user32.dllは既にロードされているはずなので、LoadLibraryAを使用
-    // user32.dllは既にロードされているので、参照カウントが増えるだけ
-    let user32 = LoadLibraryA(PCSTR::from_raw(b"user32.dll\0".as_ptr()))
-        .map_err(|e| anyhow::anyhow!("Failed to load user32.dll: {:?}", e))?;
-    let _lib_guard = LibraryGuard { module: user32 };
-
-    let proc_name = PCSTR::from_raw(b"PrintWindow\0".as_ptr());
-    let print_window_ptr = GetProcAddress(user32, proc_name);
-    if print_window_ptr.is_none() {
-        bail!("PrintWindow not found");
-    }
-
-    let print_window_fn: PrintWindowFn = std::mem::transmute(print_window_ptr.unwrap());
-    Ok(print_window_fn(hwnd, hdc, flags).as_bool())
-}
-
-struct LibraryGuard {
-    module: HMODULE,
-}
-
-impl Drop for LibraryGuard {
-    fn drop(&mut self) {
-        // user32.dllはシステムライブラリなので、FreeLibraryは呼ばなくても問題ない
-        // ただし、参照カウントを減らすために呼ぶこともできる
-        // windows-rsにはFreeLibraryがないため、ここでは何もしない
-    }
-}
-
-/// 実キャプチャサービス（GDIによる HWND キャプチャ）
+/// 実キャプチャサービス（windows-captureクレートによる HWND キャプチャ）
 pub struct CaptureService {
     frame_tx: CaptureFrameSender,
     command_rx: CaptureCommandReceiver,
@@ -76,14 +37,158 @@ impl CaptureBackend for CaptureService {
     }
 }
 
+/// windows-captureのハンドラ実装
+struct CaptureHandler {
+    frame_tx: mpsc::Sender<Frame>,
+    config: CaptureConfig,
+    last_frame_log: Instant,
+}
+
+impl GraphicsCaptureApiHandler for CaptureHandler {
+    type Flags = CaptureConfigWithSender;
+    type Error = anyhow::Error;
+
+    fn new(ctx: CaptureContext<Self::Flags>) -> Result<Self, Self::Error> {
+        info!("CaptureHandler::new called");
+        Ok(Self {
+            frame_tx: ctx.flags.frame_tx.clone(),
+            config: ctx.flags.config.clone(),
+            last_frame_log: Instant::now(),
+        })
+    }
+
+    fn on_frame_arrived(
+        &mut self,
+        frame: &mut WindowsFrame,
+        _capture_control: InternalCaptureControl,
+    ) -> Result<(), Self::Error> {
+        debug!("on_frame_arrived called");
+        let frame_start = Instant::now();
+
+        // FrameBufferを取得してRGBAデータを読み取る
+        let frame_buffer = frame.buffer()?;
+
+        // パディングなしのバッファを取得
+        let mut buffer = Vec::new();
+        let rgba_data = frame_buffer.as_nopadding_buffer(&mut buffer);
+
+        let src_width = frame_buffer.width();
+        let src_height = frame_buffer.height();
+
+        // リサイズが必要かチェック
+        let (dst_width, dst_height) = match &self.config.size {
+            core_types::CaptureSize::UseSourceSize => (src_width, src_height),
+            core_types::CaptureSize::Custom { width, height } => (*width, *height),
+        };
+
+        // リサイズが必要な場合
+        let final_data = if dst_width != src_width || dst_height != src_height {
+            Self::resize_image(rgba_data, src_width, src_height, dst_width, dst_height)?
+        } else {
+            rgba_data.to_vec()
+        };
+
+        // core_types::Frameに変換
+        let core_frame = Frame {
+            width: dst_width,
+            height: dst_height,
+            data: final_data,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        };
+
+        // フレームを送信（同期送信）
+        let send_start = Instant::now();
+
+        // std::sync::mpscを使って同期送信
+        if let Err(e) = self.frame_tx.send(core_frame) {
+            error!("Failed to send frame: {}", e);
+        }
+
+        let send_dur = send_start.elapsed();
+        let total_dur = frame_start.elapsed();
+
+        if self.last_frame_log.elapsed().as_secs_f32() >= 5.0 {
+            info!(
+                "capture running (windows-capture): send={}ms total={}ms",
+                send_dur.as_millis(),
+                total_dur.as_millis(),
+            );
+            self.last_frame_log = Instant::now();
+        }
+
+        Ok(())
+    }
+
+    fn on_closed(&mut self) -> Result<(), Self::Error> {
+        info!("Capture session closed");
+        Ok(())
+    }
+}
+
+impl CaptureHandler {
+    fn resize_image(
+        src_data: &[u8],
+        src_width: u32,
+        src_height: u32,
+        dst_width: u32,
+        dst_height: u32,
+    ) -> Result<Vec<u8>> {
+        let dst_stride = dst_width * 4;
+        let mut dst_data = vec![0u8; (dst_stride * dst_height) as usize];
+
+        for y in 0..dst_height {
+            let src_y = (y * src_height) / dst_height;
+            for x in 0..dst_width {
+                let src_x = (x * src_width) / dst_width;
+
+                let src_offset = (src_y * src_width + src_x) * 4;
+                let dst_offset = (y * dst_width + x) * 4;
+
+                if (src_offset + 4) as usize <= src_data.len()
+                    && (dst_offset + 4) as usize <= dst_data.len()
+                {
+                    dst_data[dst_offset as usize..(dst_offset + 4) as usize]
+                        .copy_from_slice(&src_data[src_offset as usize..(src_offset + 4) as usize]);
+                }
+            }
+        }
+
+        Ok(dst_data)
+    }
+}
+
 impl CaptureService {
     async fn run_inner(mut self) -> Result<()> {
-        info!("CaptureService (real) started");
+        info!("CaptureService (windows-capture) started");
 
-        let mut is_capturing = false;
+        // std::sync::mpscチャンネルを作成（キャプチャスレッドからtokioタスクへのブリッジ）
+        let (std_frame_tx, std_frame_rx) = mpsc::channel();
+        let tokio_frame_tx = self.frame_tx.clone();
+
+        // std::sync::mpscからtokio::sync::mpscへのブリッジタスク
+        let bridge_handle = tokio::spawn(async move {
+            loop {
+                match std_frame_rx.recv() {
+                    Ok(frame) => {
+                        if let Err(e) = tokio_frame_tx.send(frame).await {
+                            error!("Failed to forward frame to tokio channel: {}", e);
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        debug!("std_frame_rx channel closed");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut capture_control: Option<CaptureControl<CaptureHandler, anyhow::Error>> = None;
         let mut target_hwnd: Option<u64> = None;
         let mut config = CaptureConfig::default();
-        let mut last_frame_log = Instant::now();
 
         loop {
             tokio::select! {
@@ -92,11 +197,32 @@ impl CaptureService {
                         Some(CaptureMessage::Start { hwnd }) => {
                             info!("Start capture for HWND: {hwnd}");
                             target_hwnd = Some(hwnd);
-                            is_capturing = true;
+
+                            // 既存のキャプチャを停止
+                            if let Some(control) = capture_control.take() {
+                                if let Err(e) = control.stop() {
+                                    error!("Failed to stop previous capture: {:?}", e);
+                                }
+                            }
+
+                            // 新しいキャプチャセッションを開始
+                            match Self::start_capture(hwnd, &config, std_frame_tx.clone()).await {
+                                Ok(control) => {
+                                    capture_control = Some(control);
+                                    info!("Capture started successfully");
+                                }
+                                Err(e) => {
+                                    error!("Failed to start capture: {:?}", e);
+                                }
+                            }
                         }
                         Some(CaptureMessage::Stop) => {
                             info!("Stop capture");
-                            is_capturing = false;
+                            if let Some(control) = capture_control.take() {
+                                if let Err(e) = control.stop() {
+                                    error!("Failed to stop capture: {:?}", e);
+                                }
+                            }
                         }
                         Some(CaptureMessage::UpdateConfig { width, height, fps }) => {
                             info!("Update config: {}x{} @ {}fps", width, height, fps);
@@ -106,6 +232,29 @@ impl CaptureService {
                                 core_types::CaptureSize::Custom { width, height }
                             };
                             config.fps = fps.max(1);
+
+                            // キャプチャ中ならセッションを再作成
+                            if capture_control.is_some() {
+                                if let Some(hwnd_raw) = target_hwnd {
+                                    // 既存のキャプチャを停止
+                                    if let Some(control) = capture_control.take() {
+                                        if let Err(e) = control.stop() {
+                                            error!("Failed to stop capture session: {:?}", e);
+                                        }
+                                    }
+
+                                    // 新しい設定で再開
+                                    match Self::start_capture(hwnd_raw, &config, std_frame_tx.clone()).await {
+                                        Ok(control) => {
+                                            capture_control = Some(control);
+                                            info!("Capture restarted with new config");
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to restart capture session: {:?}", e);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         None => {
                             debug!("Command channel closed");
@@ -113,231 +262,79 @@ impl CaptureService {
                         }
                     }
                 }
-                _ = sleep(Duration::from_millis(1000 / config.fps.max(1) as u64)) => {
-                    if is_capturing {
-                        if let Some(hwnd_raw) = target_hwnd {
-                            let hwnd = HWND(hwnd_raw as *mut _);
-                            let frame_start = Instant::now();
-                            match Self::capture_frame(hwnd, &config) {
-                                Ok(mut frame) => {
-                                    // 実送出時刻で timestamp を更新
-                                    frame.timestamp = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_millis() as u64;
-                                    let send_start = Instant::now();
-                                    if let Err(e) = self.frame_tx.send(frame).await {
-                                        tracing::error!("Failed to send frame: {}", e);
-                                        break;
-                                    }
-                                    let send_dur = send_start.elapsed();
-                                    let total_dur = frame_start.elapsed();
-
-                                    if last_frame_log.elapsed().as_secs_f32() >= 5.0 {
-                                        info!(
-                                            "capture running (real): send={}ms total={}ms",
-                                            send_dur.as_millis(),
-                                            total_dur.as_millis(),
-                                        );
-                                        last_frame_log = Instant::now();
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Capture failed: {e:?}");
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
 
-        info!("CaptureService (real) stopped");
+        // クリーンアップ
+        if let Some(control) = capture_control.take() {
+            let _ = control.stop();
+        }
+
+        // std_frame_txを閉じてブリッジタスクを終了させる
+        drop(std_frame_tx);
+        let _ = bridge_handle.await;
+
+        info!("CaptureService (windows-capture) stopped");
         Ok(())
     }
 
-    fn capture_frame(hwnd: HWND, config: &CaptureConfig) -> Result<Frame> {
-        unsafe {
-            // クライアント領域のサイズを取得
-            let mut rect = RECT::default();
-            GetClientRect(hwnd, &mut rect).context("GetClientRect failed")?;
-            let src_width = (rect.right - rect.left) as i32;
-            let src_height = (rect.bottom - rect.top) as i32;
-            if src_width <= 0 || src_height <= 0 {
-                bail!("Invalid source size: {}x{}", src_width, src_height);
-            }
+    async fn start_capture(
+        hwnd: u64,
+        config: &CaptureConfig,
+        frame_tx: mpsc::Sender<Frame>,
+    ) -> Result<CaptureControl<CaptureHandler, anyhow::Error>> {
+        info!("start_capture called for HWND: {hwnd}");
 
-            let (dst_width, dst_height) = match &config.size {
-                core_types::CaptureSize::UseSourceSize => (src_width, src_height),
-                core_types::CaptureSize::Custom { width, height } => {
-                    (*width as i32, *height as i32)
-                }
-            };
+        // HWNDからWindowを作成
+        let window = Window::from_raw_hwnd(hwnd as *mut _);
+        info!("Window created from HWND");
 
-            // スクリーンDCを取得（互換性のあるDCを作成するため）
-            let hdc_screen = GetDC(HWND::default());
-            if hdc_screen.0.is_null() {
-                bail!("GetDC failed");
-            }
-            let _screen_guard = ScreenDcGuard { hdc: hdc_screen };
-
-            // メモリDCを作成
-            let hdc_mem = CreateCompatibleDC(hdc_screen);
-            if hdc_mem.0.is_null() {
-                bail!("CreateCompatibleDC failed");
-            }
-            let _mem_guard = MemDcGuard { hdc: hdc_mem };
-
-            // ビットマップを作成
-            let hbitmap = CreateCompatibleBitmap(hdc_screen, dst_width, dst_height);
-            if hbitmap.0.is_null() {
-                bail!("CreateCompatibleBitmap failed");
-            }
-            let _bmp_guard = BitmapGuard { hbitmap };
-
-            let old_obj = SelectObject(hdc_mem, hbitmap);
-            if old_obj.0.is_null() {
-                bail!("SelectObject failed");
-            }
-
-            // スケーリングが必要な場合は、まず元のサイズでキャプチャしてからリサイズ
-            if dst_width != src_width || dst_height != src_height {
-                // 一時的なメモリDCとビットマップを作成（元のサイズ用）
-                let hdc_temp = CreateCompatibleDC(hdc_screen);
-                if hdc_temp.0.is_null() {
-                    bail!("CreateCompatibleDC failed for temp");
-                }
-                let _temp_guard = MemDcGuard { hdc: hdc_temp };
-
-                let hbitmap_temp = CreateCompatibleBitmap(hdc_screen, src_width, src_height);
-                if hbitmap_temp.0.is_null() {
-                    bail!("CreateCompatibleBitmap failed for temp");
-                }
-                let _temp_bmp_guard = BitmapGuard { hbitmap: hbitmap_temp };
-
-                let old_obj_temp = SelectObject(hdc_temp, hbitmap_temp);
-                if old_obj_temp.0.is_null() {
-                    bail!("SelectObject failed for temp");
-                }
-
-                // PrintWindowで元のサイズのビットマップにコピー
-                // PW_RENDERFULLCONTENTフラグを使用して、完全なコンテンツをレンダリング
-                if !print_window(hwnd, hdc_temp, PW_RENDERFULLCONTENT)? {
-                    // PW_RENDERFULLCONTENTが失敗する場合（古いWindowsバージョンなど）、
-                    // フラグなしで再試行
-                    if !print_window(hwnd, hdc_temp, 0)? {
-                        bail!("PrintWindow failed");
-                    }
-                }
-
-                // 一時ビットマップから最終ビットマップにスケーリング
-                SetStretchBltMode(hdc_mem, HALFTONE);
-                if !StretchBlt(
-                    hdc_mem, 0, 0, dst_width, dst_height,
-                    hdc_temp, 0, 0, src_width, src_height,
-                    SRCCOPY,
-                )
-                .as_bool()
-                {
-                    bail!("StretchBlt failed");
-                }
-            } else {
-                // スケーリングが不要な場合は、直接PrintWindowを使用
-                // PW_RENDERFULLCONTENTフラグを使用して、完全なコンテンツをレンダリング
-                if !print_window(hwnd, hdc_mem, PW_RENDERFULLCONTENT)? {
-                    // PW_RENDERFULLCONTENTが失敗する場合（古いWindowsバージョンなど）、
-                    // フラグなしで再試行
-                    if !print_window(hwnd, hdc_mem, 0)? {
-                        bail!("PrintWindow failed");
-                    }
-                }
-            }
-
-            let mut bmi = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: dst_width,
-                    biHeight: -dst_height, // top-down
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                bmiColors: [Default::default(); 1],
-            };
-
-            let stride = (dst_width * 32 + 31) / 32 * 4;
-            let mut data = vec![0u8; (stride * dst_height) as usize];
-
-            let lines = GetDIBits(
-                hdc_mem,
-                hbitmap,
-                0,
-                dst_height as u32,
-                Some(data.as_mut_ptr() as *mut _),
-                &mut bmi,
-                DIB_RGB_COLORS,
-            );
-            if lines == 0 {
-                bail!("GetDIBits failed");
-            }
-
-            // BGRX -> RGBA
-            for px in data.chunks_exact_mut(4) {
-                let b = px[0];
-                let g = px[1];
-                let r = px[2];
-                px[0] = r;
-                px[1] = g;
-                px[2] = b;
-                px[3] = 255;
-            }
-
-            Ok(Frame {
-                width: dst_width as u32,
-                height: dst_height as u32,
-                data,
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64,
-            })
+        // Windowが有効かチェック（警告のみ、デスクトップウィンドウなどは無効でも試行）
+        if !window.is_valid() {
+            info!("Window is not valid for capture according to is_valid(), but will try anyway");
+        } else {
+            info!("Window is valid for capture");
         }
+
+        // FPSからミリ秒への変換
+        let fps_ms = Duration::from_millis(1000 / config.fps.max(1) as u64);
+        info!("FPS: {}, interval: {:?}", config.fps, fps_ms);
+
+        // Settingsを作成（Windowを直接渡す）
+        let settings = Settings::new(
+            window,
+            CursorCaptureSettings::Default,
+            DrawBorderSettings::Default,
+            SecondaryWindowSettings::Default,
+            MinimumUpdateIntervalSettings::Custom(fps_ms),
+            DirtyRegionSettings::Default,
+            ColorFormat::Rgba8,
+            CaptureConfigWithSender {
+                config: config.clone(),
+                frame_tx,
+            },
+        );
+        info!("Settings created");
+
+        // キャプチャを開始（フリースレッドモード）
+        // start_free_threadedはブロックする可能性があるため、tokio::task::spawn_blockingで実行
+        info!("Starting capture with start_free_threaded...");
+        let control_result =
+            tokio::task::spawn_blocking(move || CaptureHandler::start_free_threaded(settings))
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to spawn capture thread: {:?}", e))?;
+
+        let control =
+            control_result.map_err(|e| anyhow::anyhow!("Failed to start capture: {:?}", e))?;
+        info!("Capture started successfully, CaptureControl returned");
+
+        Ok(control)
     }
 }
 
-struct ScreenDcGuard {
-    hdc: HDC,
-}
-
-impl Drop for ScreenDcGuard {
-    fn drop(&mut self) {
-        unsafe {
-            ReleaseDC(HWND::default(), self.hdc);
-        }
-    }
-}
-
-struct MemDcGuard {
-    hdc: HDC,
-}
-
-impl Drop for MemDcGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = DeleteDC(self.hdc);
-        }
-    }
-}
-
-struct BitmapGuard {
-    hbitmap: HBITMAP,
-}
-
-impl Drop for BitmapGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = DeleteObject(self.hbitmap);
-        }
-    }
+/// CaptureHandlerに渡すための設定とフレーム送信チャンネルを含む構造体
+#[derive(Clone)]
+struct CaptureConfigWithSender {
+    config: CaptureConfig,
+    frame_tx: mpsc::Sender<Frame>,
 }

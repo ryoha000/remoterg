@@ -35,7 +35,7 @@ impl Default for CaptureConfig {
 pub enum CaptureMessage {
     Start { hwnd: u64 },
     Stop,
-    UpdateConfig { width: u32, height: u32, fps: u32 },
+    UpdateConfig { size: CaptureSize, fps: u32 },
 }
 
 /// Capture サービスの実行結果 Future 型

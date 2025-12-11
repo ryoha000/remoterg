@@ -223,13 +223,16 @@ impl CaptureService {
                                 }
                             }
                         }
-                        Some(CaptureMessage::UpdateConfig { width, height, fps }) => {
-                            info!("Update config: {}x{} @ {}fps", width, height, fps);
-                            config.size = if width == 0 || height == 0 {
-                                core_types::CaptureSize::UseSourceSize
-                            } else {
-                                core_types::CaptureSize::Custom { width, height }
-                            };
+                        Some(CaptureMessage::UpdateConfig { size, fps }) => {
+                            match &size {
+                                core_types::CaptureSize::UseSourceSize => {
+                                    info!("Update config: UseSourceSize @ {}fps", fps);
+                                }
+                                core_types::CaptureSize::Custom { width, height } => {
+                                    info!("Update config: {}x{} @ {}fps", width, height, fps);
+                                }
+                            }
+                            config.size = size;
                             config.fps = fps.max(1);
 
                             // キャプチャ中ならセッションを再作成

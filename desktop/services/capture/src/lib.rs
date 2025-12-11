@@ -14,6 +14,48 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, HALFTONE, HBITMAP, HDC, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+use windows::Win32::Foundation::HMODULE;
+use windows::core::PCSTR;
+
+// PrintWindow flags
+const PW_RENDERFULLCONTENT: u32 = 0x00000002;
+
+// PrintWindow関数の型定義
+type PrintWindowFn = unsafe extern "system" fn(
+    hwnd: HWND,
+    hdc: HDC,
+    flags: u32,
+) -> windows::Win32::Foundation::BOOL;
+
+unsafe fn print_window(hwnd: HWND, hdc: HDC, flags: u32) -> Result<bool> {
+    // user32.dllは既にロードされているはずなので、LoadLibraryAを使用
+    // user32.dllは既にロードされているので、参照カウントが増えるだけ
+    let user32 = LoadLibraryA(PCSTR::from_raw(b"user32.dll\0".as_ptr()))
+        .map_err(|e| anyhow::anyhow!("Failed to load user32.dll: {:?}", e))?;
+    let _lib_guard = LibraryGuard { module: user32 };
+
+    let proc_name = PCSTR::from_raw(b"PrintWindow\0".as_ptr());
+    let print_window_ptr = GetProcAddress(user32, proc_name);
+    if print_window_ptr.is_none() {
+        bail!("PrintWindow not found");
+    }
+
+    let print_window_fn: PrintWindowFn = std::mem::transmute(print_window_ptr.unwrap());
+    Ok(print_window_fn(hwnd, hdc, flags).as_bool())
+}
+
+struct LibraryGuard {
+    module: HMODULE,
+}
+
+impl Drop for LibraryGuard {
+    fn drop(&mut self) {
+        // user32.dllはシステムライブラリなので、FreeLibraryは呼ばなくても問題ない
+        // ただし、参照カウントを減らすために呼ぶこともできる
+        // windows-rsにはFreeLibraryがないため、ここでは何もしない
+    }
+}
 
 /// 実キャプチャサービス（GDIによる HWND キャプチャ）
 pub struct CaptureService {
@@ -116,15 +158,7 @@ impl CaptureService {
 
     fn capture_frame(hwnd: HWND, config: &CaptureConfig) -> Result<Frame> {
         unsafe {
-            let hdc_window = GetDC(hwnd);
-            if hdc_window.0.is_null() {
-                bail!("GetDC failed");
-            }
-            let _hdc_guard = HdcGuard {
-                hwnd,
-                hdc: hdc_window,
-            };
-
+            // クライアント領域のサイズを取得
             let mut rect = RECT::default();
             GetClientRect(hwnd, &mut rect).context("GetClientRect failed")?;
             let src_width = (rect.right - rect.left) as i32;
@@ -140,13 +174,22 @@ impl CaptureService {
                 }
             };
 
-            let hdc_mem = CreateCompatibleDC(hdc_window);
+            // スクリーンDCを取得（互換性のあるDCを作成するため）
+            let hdc_screen = GetDC(HWND::default());
+            if hdc_screen.0.is_null() {
+                bail!("GetDC failed");
+            }
+            let _screen_guard = ScreenDcGuard { hdc: hdc_screen };
+
+            // メモリDCを作成
+            let hdc_mem = CreateCompatibleDC(hdc_screen);
             if hdc_mem.0.is_null() {
                 bail!("CreateCompatibleDC failed");
             }
             let _mem_guard = MemDcGuard { hdc: hdc_mem };
 
-            let hbitmap = CreateCompatibleBitmap(hdc_window, dst_width, dst_height);
+            // ビットマップを作成
+            let hbitmap = CreateCompatibleBitmap(hdc_screen, dst_width, dst_height);
             if hbitmap.0.is_null() {
                 bail!("CreateCompatibleBitmap failed");
             }
@@ -157,15 +200,57 @@ impl CaptureService {
                 bail!("SelectObject failed");
             }
 
-            // 高品質スケーリングで StretchBlt
-            SetStretchBltMode(hdc_mem, HALFTONE);
-            if !StretchBlt(
-                hdc_mem, 0, 0, dst_width, dst_height, hdc_window, 0, 0, src_width, src_height,
-                SRCCOPY,
-            )
-            .as_bool()
-            {
-                bail!("StretchBlt failed");
+            // スケーリングが必要な場合は、まず元のサイズでキャプチャしてからリサイズ
+            if dst_width != src_width || dst_height != src_height {
+                // 一時的なメモリDCとビットマップを作成（元のサイズ用）
+                let hdc_temp = CreateCompatibleDC(hdc_screen);
+                if hdc_temp.0.is_null() {
+                    bail!("CreateCompatibleDC failed for temp");
+                }
+                let _temp_guard = MemDcGuard { hdc: hdc_temp };
+
+                let hbitmap_temp = CreateCompatibleBitmap(hdc_screen, src_width, src_height);
+                if hbitmap_temp.0.is_null() {
+                    bail!("CreateCompatibleBitmap failed for temp");
+                }
+                let _temp_bmp_guard = BitmapGuard { hbitmap: hbitmap_temp };
+
+                let old_obj_temp = SelectObject(hdc_temp, hbitmap_temp);
+                if old_obj_temp.0.is_null() {
+                    bail!("SelectObject failed for temp");
+                }
+
+                // PrintWindowで元のサイズのビットマップにコピー
+                // PW_RENDERFULLCONTENTフラグを使用して、完全なコンテンツをレンダリング
+                if !print_window(hwnd, hdc_temp, PW_RENDERFULLCONTENT)? {
+                    // PW_RENDERFULLCONTENTが失敗する場合（古いWindowsバージョンなど）、
+                    // フラグなしで再試行
+                    if !print_window(hwnd, hdc_temp, 0)? {
+                        bail!("PrintWindow failed");
+                    }
+                }
+
+                // 一時ビットマップから最終ビットマップにスケーリング
+                SetStretchBltMode(hdc_mem, HALFTONE);
+                if !StretchBlt(
+                    hdc_mem, 0, 0, dst_width, dst_height,
+                    hdc_temp, 0, 0, src_width, src_height,
+                    SRCCOPY,
+                )
+                .as_bool()
+                {
+                    bail!("StretchBlt failed");
+                }
+            } else {
+                // スケーリングが不要な場合は、直接PrintWindowを使用
+                // PW_RENDERFULLCONTENTフラグを使用して、完全なコンテンツをレンダリング
+                if !print_window(hwnd, hdc_mem, PW_RENDERFULLCONTENT)? {
+                    // PW_RENDERFULLCONTENTが失敗する場合（古いWindowsバージョンなど）、
+                    // フラグなしで再試行
+                    if !print_window(hwnd, hdc_mem, 0)? {
+                        bail!("PrintWindow failed");
+                    }
+                }
             }
 
             let mut bmi = BITMAPINFO {
@@ -221,15 +306,14 @@ impl CaptureService {
     }
 }
 
-struct HdcGuard {
-    hwnd: HWND,
+struct ScreenDcGuard {
     hdc: HDC,
 }
 
-impl Drop for HdcGuard {
+impl Drop for ScreenDcGuard {
     fn drop(&mut self) {
         unsafe {
-            ReleaseDC(self.hwnd, self.hdc);
+            ReleaseDC(HWND::default(), self.hdc);
         }
     }
 }

@@ -62,7 +62,8 @@ mod tests {
     async fn test_capture_service_real() -> Result<()> {
         // デスクトップウィンドウを使用（常に存在する）
         let hwnd = unsafe { get_desktop_window() };
-        let hwnd_raw = hwnd.0 as u64;
+        // let hwnd_raw = hwnd.0 as u64;
+        let hwnd_raw = 0xF0548;
 
         // チャネルを作成
         let (frame_tx, mut frame_rx) = mpsc::channel(10);

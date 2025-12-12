@@ -51,7 +51,7 @@ pub mod mf {
                 start_mf_encode_workers()
             } else {
                 // OpenH264にフォールバック
-                crate::openh264::start_encode_workers()
+                crate::h264::openh264::start_encode_workers()
             }
         }
 

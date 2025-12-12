@@ -16,7 +16,7 @@ use core_types::{
     VideoEncoderFactory,
 };
 #[cfg(feature = "h264")]
-use encoder::openh264::OpenH264EncoderFactory;
+use encoder::h264::openh264::OpenH264EncoderFactory;
 #[cfg(feature = "vp8")]
 use encoder::vp8::Vp8EncoderFactory;
 #[cfg(feature = "vp9")]

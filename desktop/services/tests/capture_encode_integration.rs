@@ -4,15 +4,28 @@ mod tests {
     use anyhow::{Context, Result};
     use capture::CaptureService;
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
-    use encoder::openh264::OpenH264EncoderFactory;
+    use encoder::h264_mf::mf::MediaFoundationH264EncoderFactory;
     use encoder::vp8::Vp8EncoderFactory;
     use encoder::vp9::Vp9EncoderFactory;
     use std::path::PathBuf;
+    use std::sync::Once;
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc as tokio_mpsc;
     use tokio::time::timeout;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+
+    static INIT_TRACING: Once = Once::new();
+
+    /// tracingを初期化（テスト実行時に一度だけ実行される）
+    fn init_tracing() {
+        INIT_TRACING.call_once(|| {
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::INFO)
+                .with_test_writer()
+                .init();
+        });
+    }
 
     /// テスト用のデスクトップウィンドウのHWNDを取得
     unsafe fn get_desktop_window() -> HWND {
@@ -315,12 +328,323 @@ mod tests {
         Ok((frames, width, height, actual_duration_sec, service_handle))
     }
 
+    /// キャプチャとエンコードをパイプライン化して実行（実運用に近い方式）
+    async fn capture_and_encode_pipeline(
+        encoder_factory: &dyn VideoEncoderFactory,
+        capture_duration: Duration,
+    ) -> Result<(
+        Vec<Vec<u8>>,
+        usize,
+        Duration,
+        u32,
+        u32,
+        f32,
+        tokio::task::JoinHandle<Result<()>>,
+    )> {
+        // キャプチャ可能なウィンドウを探す
+        use windows_capture::window::Window;
+        let windows = Window::enumerate()
+            .map_err(|e| anyhow::anyhow!("Failed to enumerate windows: {:?}", e))?;
+
+        let hwnd_raw = if let Some(window) = windows.first() {
+            println!("Using window: {}", window.title().unwrap_or_default());
+            window.as_raw_hwnd() as u64
+        } else {
+            // フォールバック: デスクトップウィンドウを使用
+            let hwnd = unsafe { get_desktop_window() };
+            println!("No capturable windows found, using desktop window");
+            hwnd.0 as u64
+        };
+
+        // チャネルを作成
+        let (frame_tx, mut frame_rx) = tokio_mpsc::channel(100);
+        let (command_tx, command_rx) = tokio_mpsc::channel(10);
+
+        // CaptureServiceを起動
+        let service = CaptureService::new(frame_tx, command_rx);
+        let service_handle = tokio::spawn(async move { service.run().await });
+
+        // エンコーダーを初期化
+        println!("エンコーダーを初期化中...");
+        let (job_txs, encode_result_rx) = encoder_factory.start_workers();
+        println!("エンコードワーカーを起動しました");
+
+        // エンコード結果を収集するタスクを起動
+        let (encode_samples_tx, mut encode_samples_rx) = tokio_mpsc::unbounded_channel::<Vec<u8>>();
+        let mut encode_result_rx_clone = encode_result_rx;
+        let encode_collector_handle = tokio::spawn(async move {
+            let mut samples: Vec<Vec<u8>> = Vec::new();
+            while let Some(sample) = encode_samples_rx.recv().await {
+                samples.push(sample);
+            }
+            samples
+        });
+
+        // エンコード結果を受信するタスクを起動
+        let encode_samples_tx_clone = encode_samples_tx.clone();
+        let result_receiver_handle = tokio::spawn(async move {
+            let mut count = 0;
+            let mut total_duration = Duration::ZERO;
+            let mut last_log = Instant::now();
+
+            // パフォーマンス統計用
+            let mut total_rgb_dur = Duration::ZERO;
+            let mut total_encode_dur = Duration::ZERO;
+            let mut total_pack_dur = Duration::ZERO;
+            let mut total_total_dur = Duration::ZERO;
+            let mut total_sample_size = 0usize;
+            let receive_start = Instant::now();
+
+            while let Some(result) = encode_result_rx_clone.recv().await {
+                total_duration += result.duration;
+                total_rgb_dur += result.rgb_dur;
+                total_encode_dur += result.encode_dur;
+                total_pack_dur += result.pack_dur;
+                total_total_dur += result.total_dur;
+                total_sample_size += result.sample_size;
+
+                if encode_samples_tx_clone.send(result.sample_data).is_err() {
+                    break;
+                }
+                count += 1;
+
+                // 50フレームごと、または5秒ごとに進捗と統計を表示
+                if count % 50 == 0 || last_log.elapsed().as_secs() >= 5 {
+                    let elapsed = receive_start.elapsed();
+                    let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
+                    let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
+                    let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
+                    let avg_total = total_total_dur.as_secs_f64() / count as f64;
+                    let throughput = count as f64 / elapsed.as_secs_f64();
+                    println!(
+                        "  受信済みエンコード結果: {}フレーム (経過: {:.1}s, スループット: {:.2} fps)",
+                        count, elapsed.as_secs_f32(), throughput
+                    );
+                    println!(
+                        "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
+                        avg_rgb * 1000.0,
+                        avg_encode * 1000.0,
+                        avg_pack * 1000.0,
+                        avg_total * 1000.0
+                    );
+                    last_log = Instant::now();
+                }
+            }
+            let total_elapsed = receive_start.elapsed();
+            println!(
+                "  エンコード結果の受信完了: {}フレーム (総時間: {:.2}秒)",
+                count,
+                total_elapsed.as_secs_f32()
+            );
+
+            // 最終統計を出力
+            if count > 0 {
+                let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
+                let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
+                let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
+                let avg_total = total_total_dur.as_secs_f64() / count as f64;
+                let total_processing = total_rgb_dur + total_encode_dur + total_pack_dur;
+                println!("  最終統計 [{}フレーム]:", count);
+                println!(
+                    "    総処理時間: rgb={:.3}s encode={:.3}s pack={:.3}s (合計={:.3}s)",
+                    total_rgb_dur.as_secs_f64(),
+                    total_encode_dur.as_secs_f64(),
+                    total_pack_dur.as_secs_f64(),
+                    total_processing.as_secs_f64()
+                );
+                println!(
+                    "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
+                    avg_rgb * 1000.0,
+                    avg_encode * 1000.0,
+                    avg_pack * 1000.0,
+                    avg_total * 1000.0
+                );
+                println!(
+                    "    時間配分: rgb={:.1}% encode={:.1}% pack={:.1}%",
+                    (total_rgb_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
+                    (total_encode_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
+                    (total_pack_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0
+                );
+                println!(
+                    "    平均サンプルサイズ: {:.0} bytes, 総サイズ: {} bytes",
+                    total_sample_size as f64 / count as f64,
+                    total_sample_size
+                );
+            }
+
+            (count, total_duration)
+        });
+
+        // キャプチャを開始
+        command_tx
+            .send(CaptureMessage::Start { hwnd: hwnd_raw })
+            .await
+            .context("キャプチャ開始に失敗")?;
+
+        println!(
+            "キャプチャを開始しました。{}秒間フレームを収集・エンコードします...",
+            capture_duration.as_secs()
+        );
+
+        // パイプライン処理: キャプチャしながら逐次エンコード
+        let capture_start = Instant::now();
+        let mut frame_count = 0;
+        let mut encode_worker_index: usize = 0;
+        let mut last_frame_ts: Option<u64> = None;
+        let mut first_frame: Option<Frame> = None;
+        let mut last_frame: Option<Frame> = None;
+        let mut width = 0u32;
+        let mut height = 0u32;
+
+        // キャプチャ期間中はフレームを受信して即座にエンコードジョブに送る
+        while capture_start.elapsed() < capture_duration {
+            match timeout(Duration::from_millis(100), frame_rx.recv()).await {
+                Ok(Some(frame)) => {
+                    if first_frame.is_none() {
+                        first_frame = Some(frame.clone());
+                        width = frame.width;
+                        height = frame.height;
+                        println!("解像度: {}x{}", width, height);
+                    }
+                    last_frame = Some(frame.clone());
+                    frame_count += 1;
+
+                    // フレーム間隔を計算
+                    let frame_duration = if let Some(prev_ts) = last_frame_ts {
+                        let delta_ms = frame.timestamp.saturating_sub(prev_ts).max(1);
+                        Duration::from_millis(delta_ms)
+                    } else {
+                        Duration::from_millis(22) // デフォルト45fps
+                    };
+                    last_frame_ts = Some(frame.timestamp);
+
+                    // EncodeJobを作成して即座に送信
+                    let job = EncodeJob {
+                        width: frame.width,
+                        height: frame.height,
+                        rgba: frame.data,
+                        duration: frame_duration,
+                        enqueue_at: Instant::now(),
+                    };
+
+                    // ラウンドロビンでワーカーに振り分け
+                    let worker_idx = encode_worker_index % job_txs.len().max(1);
+                    encode_worker_index = encode_worker_index.wrapping_add(1);
+
+                    if let Err(e) = job_txs[worker_idx].send(job) {
+                        eprintln!("エンコードジョブの送信に失敗: {}", e);
+                        continue;
+                    }
+
+                    // 進捗表示
+                    if frame_count % 30 == 0 {
+                        println!(
+                            "  キャプチャ・送信済み: {}フレーム (経過時間: {:.1}秒)",
+                            frame_count,
+                            capture_start.elapsed().as_secs_f32()
+                        );
+                    }
+                }
+                Ok(None) => {
+                    anyhow::bail!("フレームチャネルが閉じられました");
+                }
+                Err(_) => {
+                    // タイムアウト - 続行
+                    continue;
+                }
+            }
+        }
+
+        println!(
+            "キャプチャ完了: {}フレームを{}秒で収集",
+            frame_count,
+            capture_start.elapsed().as_secs()
+        );
+
+        if frame_count == 0 {
+            anyhow::bail!("フレームが1つも収集されませんでした");
+        }
+
+        // フレームのタイムスタンプ情報を確認
+        let first_frame_ts = first_frame.as_ref().unwrap().timestamp;
+        let last_frame_ts_val = last_frame.as_ref().unwrap().timestamp;
+        let actual_duration_ms = last_frame_ts_val.saturating_sub(first_frame_ts);
+        let actual_duration_sec = actual_duration_ms as f32 / 1000.0;
+        let avg_fps = if actual_duration_sec > 0.0 {
+            frame_count as f32 / actual_duration_sec
+        } else {
+            0.0
+        };
+        println!("  最初のフレームタイムスタンプ: {}ms", first_frame_ts);
+        println!("  最後のフレームタイムスタンプ: {}ms", last_frame_ts_val);
+        println!(
+            "  実際のキャプチャ時間: {:.2}秒 (タイムスタンプ差分)",
+            actual_duration_sec
+        );
+        println!("  平均FPS: {:.2}", avg_fps);
+
+        // キャプチャを停止
+        command_tx.send(CaptureMessage::Stop).await.unwrap();
+        drop(command_tx);
+
+        // CaptureServiceが停止するまで少し待つ
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // すべてのジョブを送信したので、job_txsをdropしてワーカーに終了を通知
+        drop(job_txs);
+
+        println!("すべてのエンコードジョブを送信しました。結果を待機中...");
+
+        // エンコード結果の受信タスクが完了するまで待つ
+        let (encoded_count, total_video_duration) =
+            timeout(Duration::from_secs(120), result_receiver_handle)
+                .await
+                .context("エンコード結果の受信がタイムアウト")?
+                .context("エンコード結果の受信タスクが失敗")?;
+
+        // エンコード結果の受信を停止（すべての結果が処理された後）
+        drop(encode_samples_tx);
+
+        // エンコードサンプルを収集
+        let samples = timeout(Duration::from_secs(1), encode_collector_handle)
+            .await
+            .context("エンコードサンプルの収集がタイムアウト")?
+            .context("エンコードサンプルの収集に失敗")?;
+
+        println!("エンコード完了: {}フレームをエンコード", encoded_count);
+        println!(
+            "  キャプチャフレーム数: {}, エンコードフレーム数: {}",
+            frame_count, encoded_count
+        );
+        println!(
+            "  総動画再生時間（duration合計）: {:.2}秒",
+            total_video_duration.as_secs_f32()
+        );
+
+        if samples.is_empty() {
+            anyhow::bail!("エンコードされたサンプルが1つもありませんでした");
+        }
+
+        Ok((
+            samples,
+            encoded_count,
+            total_video_duration,
+            width,
+            height,
+            actual_duration_sec,
+            service_handle,
+        ))
+    }
+
     /// フレームをエンコードする共通処理
     async fn encode_frames(
         encoder_factory: &dyn VideoEncoderFactory,
-        frames: &[Frame],
+        frames: Vec<Frame>,
     ) -> Result<(Vec<Vec<u8>>, usize, Duration)> {
         println!("エンコーダーを初期化中...");
+
+        // フレーム数を先に取得（後でframesをconsumeするため）
+        let frame_count = frames.len();
 
         // エンコードワーカーを起動
         let (job_txs, encode_result_rx) = encoder_factory.start_workers();
@@ -343,19 +667,92 @@ mod tests {
             let mut count = 0;
             let mut total_duration = Duration::ZERO;
             let mut last_log = Instant::now();
+
+            // パフォーマンス統計用
+            let mut total_rgb_dur = Duration::ZERO;
+            let mut total_encode_dur = Duration::ZERO;
+            let mut total_pack_dur = Duration::ZERO;
+            let mut total_total_dur = Duration::ZERO;
+            let mut total_sample_size = 0usize;
+            let receive_start = Instant::now();
+
             while let Some(result) = encode_result_rx_clone.recv().await {
                 total_duration += result.duration;
+                total_rgb_dur += result.rgb_dur;
+                total_encode_dur += result.encode_dur;
+                total_pack_dur += result.pack_dur;
+                total_total_dur += result.total_dur;
+                total_sample_size += result.sample_size;
+
                 if encode_samples_tx_clone.send(result.sample_data).is_err() {
                     break;
                 }
                 count += 1;
-                // 100フレームごとに進捗を表示
-                if count % 100 == 0 || last_log.elapsed().as_secs() >= 5 {
-                    println!("  受信済みエンコード結果: {}フレーム", count);
+
+                // 50フレームごと、または5秒ごとに進捗と統計を表示
+                if count % 50 == 0 || last_log.elapsed().as_secs() >= 5 {
+                    let elapsed = receive_start.elapsed();
+                    let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
+                    let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
+                    let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
+                    let avg_total = total_total_dur.as_secs_f64() / count as f64;
+                    let throughput = count as f64 / elapsed.as_secs_f64();
+                    println!(
+                        "  受信済みエンコード結果: {}フレーム (経過: {:.1}s, スループット: {:.2} fps)",
+                        count, elapsed.as_secs_f32(), throughput
+                    );
+                    println!(
+                        "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
+                        avg_rgb * 1000.0,
+                        avg_encode * 1000.0,
+                        avg_pack * 1000.0,
+                        avg_total * 1000.0
+                    );
                     last_log = Instant::now();
                 }
             }
-            println!("  エンコード結果の受信完了: {}フレーム", count);
+            let total_elapsed = receive_start.elapsed();
+            println!(
+                "  エンコード結果の受信完了: {}フレーム (総時間: {:.2}秒)",
+                count,
+                total_elapsed.as_secs_f32()
+            );
+
+            // 最終統計を出力
+            if count > 0 {
+                let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
+                let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
+                let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
+                let avg_total = total_total_dur.as_secs_f64() / count as f64;
+                let total_processing = total_rgb_dur + total_encode_dur + total_pack_dur;
+                println!("  最終統計 [{}フレーム]:", count);
+                println!(
+                    "    総処理時間: rgb={:.3}s encode={:.3}s pack={:.3}s (合計={:.3}s)",
+                    total_rgb_dur.as_secs_f64(),
+                    total_encode_dur.as_secs_f64(),
+                    total_pack_dur.as_secs_f64(),
+                    total_processing.as_secs_f64()
+                );
+                println!(
+                    "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
+                    avg_rgb * 1000.0,
+                    avg_encode * 1000.0,
+                    avg_pack * 1000.0,
+                    avg_total * 1000.0
+                );
+                println!(
+                    "    時間配分: rgb={:.1}% encode={:.1}% pack={:.1}%",
+                    (total_rgb_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
+                    (total_encode_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
+                    (total_pack_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0
+                );
+                println!(
+                    "    平均サンプルサイズ: {:.0} bytes, 総サイズ: {} bytes",
+                    total_sample_size as f64 / count as f64,
+                    total_sample_size
+                );
+            }
+
             (count, total_duration)
         });
 
@@ -365,7 +762,7 @@ mod tests {
         let mut encode_worker_index: usize = 0;
         let mut last_frame_ts: Option<u64> = None;
 
-        for (idx, frame) in frames.iter().enumerate() {
+        for (idx, frame) in frames.into_iter().enumerate() {
             // フレーム間隔を計算
             let frame_duration = if let Some(prev_ts) = last_frame_ts {
                 let delta_ms = frame.timestamp.saturating_sub(prev_ts).max(1);
@@ -375,11 +772,11 @@ mod tests {
             };
             last_frame_ts = Some(frame.timestamp);
 
-            // EncodeJobを作成
+            // EncodeJobを作成（frame.dataをmoveで渡す）
             let job = EncodeJob {
                 width: frame.width,
                 height: frame.height,
-                rgba: frame.data.clone(),
+                rgba: frame.data, // clone()を削除してmove
                 duration: frame_duration,
                 enqueue_at: Instant::now(),
             };
@@ -434,8 +831,7 @@ mod tests {
         );
         println!(
             "  キャプチャフレーム数: {}, エンコードフレーム数: {}",
-            frames.len(),
-            encoded_count
+            frame_count, encoded_count
         );
         println!(
             "  総動画再生時間（duration合計）: {:.2}秒",
@@ -451,17 +847,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_capture_encode_integration_h264() -> Result<()> {
-        // エンコーダーファクトリを作成
-        let encoder_factory = OpenH264EncoderFactory::new();
+        init_tracing();
+        // エンコーダーファクトリを作成（Media Foundation H.264エンコーダーを使用）
+        let encoder_factory = MediaFoundationH264EncoderFactory::new();
 
-        // フレームをキャプチャ
+        // パイプライン化: キャプチャしながら逐次エンコード
         let capture_duration = Duration::from_secs(15);
-        let (frames, width, height, actual_duration_sec, service_handle) =
-            capture_frames(capture_duration).await?;
-
-        // フレームをエンコード
-        let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, &frames).await?;
+        let (
+            samples,
+            encoded_count,
+            total_video_duration,
+            width,
+            height,
+            actual_duration_sec,
+            service_handle,
+        ) = capture_and_encode_pipeline(&encoder_factory, capture_duration).await?;
 
         // 統計情報を出力
         println!(
@@ -514,6 +914,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_capture_encode_integration_vp8() -> Result<()> {
+        init_tracing();
         // エンコーダーファクトリを作成
         let encoder_factory = Vp8EncoderFactory::new();
 
@@ -524,7 +925,7 @@ mod tests {
 
         // フレームをエンコード
         let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, &frames).await?;
+            encode_frames(&encoder_factory, frames).await?;
 
         // 統計情報を出力
         println!(
@@ -577,6 +978,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_capture_encode_integration_vp9() -> Result<()> {
+        init_tracing();
         // エンコーダーファクトリを作成
         let encoder_factory = Vp9EncoderFactory::new();
 
@@ -587,7 +989,7 @@ mod tests {
 
         // フレームをエンコード
         let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, &frames).await?;
+            encode_frames(&encoder_factory, frames).await?;
 
         // 統計情報を出力
         println!(

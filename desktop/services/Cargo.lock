@@ -1008,9 +1008,11 @@ dependencies = [
  "anyhow",
  "core-types",
  "openh264",
+ "rayon",
  "tokio",
  "tracing",
  "vpx-rs",
+ "windows",
 ]
 
 [[package]]
@@ -1636,6 +1638,7 @@ dependencies = [
  "encoder",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "windows",
  "windows-capture",
 ]

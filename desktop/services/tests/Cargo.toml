@@ -10,6 +10,7 @@ path = "capture_encode_integration.rs"
 [dependencies]
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 core-types = { path = "../core" }
 capture = { path = "../capture" }

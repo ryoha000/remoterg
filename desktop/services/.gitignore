@@ -1,3 +1,4 @@
 /target/**
 capture/tests/artifacts/**
+tests/artifacts/**
 *.local

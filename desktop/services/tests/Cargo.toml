@@ -1,0 +1,24 @@
+[package]
+name = "integration-tests"
+version.workspace = true
+edition.workspace = true
+
+[[test]]
+name = "capture_encode_integration"
+path = "capture_encode_integration.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+core-types = { path = "../core" }
+capture = { path = "../capture" }
+encoder = { path = "../encoder", features = ["h264", "vp8", "vp9"] }
+windows-capture = "2.0.0-alpha.7"
+
+[dev-dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+

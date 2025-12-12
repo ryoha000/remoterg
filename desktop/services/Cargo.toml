@@ -9,6 +9,7 @@ members = [
   "webrtc",
   "input",
   "hostd",
+  "tests",
 ]
 
 resolver = "2"

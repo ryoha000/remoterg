@@ -11,45 +11,114 @@ use vpx_rs::{
 use core_types::{EncodeJob, EncodeResult};
 
 /// RGBA形式の画像データをI420形式に変換する
-pub fn rgba_to_i420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let w = width as usize;
-    let h = height as usize;
-    let y_plane = w * h;
+///
+/// # Arguments
+/// * `rgba` - RGBA画像データ（元のサイズ）
+/// * `source_width` - 元のRGBAデータの幅
+/// * `source_height` - 元のRGBAデータの高さ
+///
+/// 奇数ピクセルの場合、左端または上端の1ピクセルが削除されます。
+/// エンコード用のサイズは2の倍数に自動的に丸められます。
+pub fn rgba_to_i420(
+    rgba: &[u8],
+    source_width: u32,
+    source_height: u32,
+) -> anyhow::Result<(Vec<u8>, u32, u32)> {
+    let source_w = source_width as usize;
+    let source_h = source_height as usize;
+
+    // I420形式では幅と高さが2の倍数である必要があるため、2の倍数に丸める
+    // 奇数ピクセルの場合、左端または上端の1ピクセルを削除
+    let encode_w = (source_w / 2) * 2;
+    let encode_h = (source_h / 2) * 2;
+
+    let expected_size = source_w * source_h * 4;
+
+    // RGBAデータのサイズを検証
+    if rgba.len() < expected_size {
+        return Err(anyhow::anyhow!(
+            "RGBAデータのサイズが不足しています: 期待値 {} bytes, 実際 {} bytes (解像度: {}x{})",
+            expected_size,
+            rgba.len(),
+            source_width,
+            source_height
+        ));
+    }
+
+    // 左端または上端のオフセットを計算（奇数ピクセルの場合、左端または上端の1ピクセルを削除）
+    // 幅が奇数の場合、左端の1ピクセルを削除
+    let offset_x = if source_w % 2 != 0 { 1 } else { 0 };
+    // 高さが奇数の場合、上端の1ピクセルを削除
+    let offset_y = if source_h % 2 != 0 { 1 } else { 0 };
+
+    let y_plane = encode_w * encode_h;
     let uv_plane = y_plane / 4;
 
     let mut y = vec![0u8; y_plane];
     let mut u = vec![0u8; uv_plane];
     let mut v = vec![0u8; uv_plane];
 
-    for j in 0..h {
-        for i in 0..w {
-            let idx = (j * w + i) * 4;
-            let r = rgba[idx] as f32;
-            let g = rgba[idx + 1] as f32;
-            let b = rgba[idx + 2] as f32;
+    // Y平面の変換（左端または上端のオフセットを考慮）
+    for j in 0..encode_h {
+        for i in 0..encode_w {
+            let source_row = j + offset_y;
+            let source_col = i + offset_x;
+            let source_idx = (source_row * source_w + source_col) * 4;
+            if source_idx + 3 >= rgba.len() {
+                return Err(anyhow::anyhow!(
+                    "RGBAインデックス範囲外: idx={}, len={} (j={}, i={}, encode_w={}, encode_h={}, source_w={}, source_h={}, offset_x={}, offset_y={})",
+                    source_idx, rgba.len(), j, i, encode_w, encode_h, source_w, source_h, offset_x, offset_y
+                ));
+            }
+            let r = rgba[source_idx] as f32;
+            let g = rgba[source_idx + 1] as f32;
+            let b = rgba[source_idx + 2] as f32;
 
             let y_val = (0.257 * r + 0.504 * g + 0.098 * b + 16.0).round();
-            y[j * w + i] = y_val.clamp(0.0, 255.0) as u8;
+            y[j * encode_w + i] = y_val.clamp(0.0, 255.0) as u8;
         }
     }
 
-    for j in (0..h).step_by(2) {
-        for i in (0..w).step_by(2) {
+    // UV平面の変換（左端または上端のオフセットを考慮）
+    for j in (0..encode_h).step_by(2) {
+        for i in (0..encode_w).step_by(2) {
             let mut u_acc = 0f32;
             let mut v_acc = 0f32;
+            let mut sample_count = 0;
             for sj in 0..2 {
+                let row = j + sj;
+                if row >= encode_h {
+                    continue;
+                }
                 for si in 0..2 {
-                    let idx = ((j + sj) * w + (i + si)) * 4;
-                    let r = rgba[idx] as f32;
-                    let g = rgba[idx + 1] as f32;
-                    let b = rgba[idx + 2] as f32;
+                    let col = i + si;
+                    if col >= encode_w {
+                        continue;
+                    }
+                    let source_row = row + offset_y;
+                    let source_col = col + offset_x;
+                    let source_idx = (source_row * source_w + source_col) * 4;
+                    if source_idx + 3 >= rgba.len() {
+                        return Err(anyhow::anyhow!(
+                            "RGBAインデックス範囲外: idx={}, len={} (j={}, i={}, sj={}, si={}, encode_w={}, encode_h={}, source_w={}, source_h={}, offset_x={}, offset_y={})",
+                            source_idx, rgba.len(), j, i, sj, si, encode_w, encode_h, source_w, source_h, offset_x, offset_y
+                        ));
+                    }
+                    let r = rgba[source_idx] as f32;
+                    let g = rgba[source_idx + 1] as f32;
+                    let b = rgba[source_idx + 2] as f32;
                     u_acc += -0.148 * r - 0.291 * g + 0.439 * b + 128.0;
                     v_acc += 0.439 * r - 0.368 * g - 0.071 * b + 128.0;
+                    sample_count += 1;
                 }
             }
-            let uv_idx = (j / 2) * (w / 2) + (i / 2);
-            u[uv_idx] = (u_acc / 4.0).clamp(0.0, 255.0) as u8;
-            v[uv_idx] = (v_acc / 4.0).clamp(0.0, 255.0) as u8;
+            let uv_idx = (j / 2) * (encode_w / 2) + (i / 2);
+            if uv_idx < uv_plane {
+                if sample_count > 0 {
+                    u[uv_idx] = (u_acc / sample_count as f32).clamp(0.0, 255.0) as u8;
+                    v[uv_idx] = (v_acc / sample_count as f32).clamp(0.0, 255.0) as u8;
+                }
+            }
         }
     }
 
@@ -57,7 +126,7 @@ pub fn rgba_to_i420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     buffer.extend_from_slice(&y);
     buffer.extend_from_slice(&u);
     buffer.extend_from_slice(&v);
-    buffer
+    Ok((buffer, encode_w as u32, encode_h as u32))
 }
 
 /// VPXエンコーダを作成する
@@ -104,16 +173,40 @@ pub fn start_vpx_encode_worker(
         let mut encoder: Option<Encoder<u8>> = None;
 
         while let Ok(job) = job_rx.recv() {
+            let rgb_start = Instant::now();
+            // RGBAデータから必要な部分だけを切り出してI420に変換
+            let (i420, actual_encode_width, actual_encode_height) =
+                match rgba_to_i420(&job.rgba, job.width, job.height) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        warn!(
+                            "{} encoder: failed to convert RGBA to I420: {}",
+                            codec_name, e
+                        );
+                        eprintln!(
+                            "{} encoder: failed to convert RGBA to I420: {}",
+                            codec_name, e
+                        );
+                        eprintln!(
+                            "  RGBA size: {} bytes, expected: {} bytes",
+                            job.rgba.len(),
+                            job.width as usize * job.height as usize * 4
+                        );
+                        continue;
+                    }
+                };
+            let rgb_dur = rgb_start.elapsed();
+
             // 最初のフレームまたは解像度変更時にエンコーダーを作成/再作成
-            if encoder.is_none() || job.width != width || job.height != height {
+            if encoder.is_none() || actual_encode_width != width || actual_encode_height != height {
                 if encoder.is_some() {
                     info!(
                         "{} encoder: resizing encoder {}x{} -> {}x{}",
-                        codec_name, width, height, job.width, job.height
+                        codec_name, width, height, actual_encode_width, actual_encode_height
                     );
                 }
-                width = job.width;
-                height = job.height;
+                width = actual_encode_width;
+                height = actual_encode_height;
                 match create_vpx_encoder(codec_id, width, height) {
                     Ok(enc) => {
                         encoder = Some(enc);
@@ -128,14 +221,10 @@ pub fn start_vpx_encode_worker(
 
             let encoder = encoder.as_mut().expect("encoder should be initialized");
 
-            let rgb_start = Instant::now();
-            let i420 = rgba_to_i420(&job.rgba, job.width, job.height);
-            let rgb_dur = rgb_start.elapsed();
-
             let image = match YUVImageData::from_raw_data(
                 ImageFormat::I420,
-                job.width as usize,
-                job.height as usize,
+                actual_encode_width as usize,
+                actual_encode_height as usize,
                 &i420,
             ) {
                 Ok(img) => img,
@@ -182,8 +271,8 @@ pub fn start_vpx_encode_worker(
                             sample_data,
                             is_keyframe: frame.flags.is_key,
                             duration: job.duration,
-                            width: job.width,
-                            height: job.height,
+                            width: actual_encode_width,
+                            height: actual_encode_height,
                             rgb_dur,
                             encode_dur,
                             pack_dur: Duration::from_millis(0),
@@ -192,6 +281,10 @@ pub fn start_vpx_encode_worker(
                         })
                         .is_err()
                     {
+                        eprintln!(
+                            "{} encoder: failed to send result, receiver closed",
+                            codec_name
+                        );
                         return;
                     }
                 }
@@ -208,30 +301,13 @@ pub fn start_vpx_encode_worker(
 pub fn start_vpx_encode_workers(
     codec_id: CodecId,
     codec_name: &'static str,
-    worker_count: usize,
+    _worker_count: usize,
 ) -> (
     Vec<std::sync::mpsc::Sender<EncodeJob>>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
-    let worker_count = worker_count.max(1);
-    let mut job_txs = Vec::with_capacity(worker_count);
-    let (merged_tx, merged_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
-
-    for _ in 0..worker_count {
-        let (job_tx, mut res_rx) = start_vpx_encode_worker(codec_id, codec_name);
-        job_txs.push(job_tx);
-
-        let merged_tx_clone = merged_tx.clone();
-        tokio::spawn(async move {
-            while let Some(result) = res_rx.recv().await {
-                if merged_tx_clone.send(result).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-
-    drop(merged_tx);
-    (job_txs, merged_rx)
+    // encoderの整合性を保つため、常に1つのワーカーのみを起動
+    // Pフレームが適切に参照フレームを参照できるようにする
+    let (job_tx, res_rx) = start_vpx_encode_worker(codec_id, codec_name);
+    (vec![job_tx], res_rx)
 }
-

@@ -133,18 +133,25 @@ pub mod openh264 {
             let mut width = 0;
             let mut height = 0;
             let mut encoder: Option<openh264::encoder::Encoder> = None;
+            let mut encode_failures = 0u32;
+            let mut empty_samples = 0u32;
+            let mut successful_encodes = 0u32;
 
             while let Ok(job) = job_rx.recv() {
+                // OpenH264は幅と高さが2の倍数である必要があるため、2の倍数に調整
+                let encode_width = (job.width / 2) * 2;
+                let encode_height = (job.height / 2) * 2;
+
                 // 最初のフレームまたは解像度変更時にエンコーダーを作成/再作成
-                if encoder.is_none() || job.width != width || job.height != height {
+                if encoder.is_none() || encode_width != width || encode_height != height {
                     if encoder.is_some() {
                         info!(
-                            "encoder worker: resizing encoder {}x{} -> {}x{}",
-                            width, height, job.width, job.height
+                            "encoder worker: resizing encoder {}x{} -> {}x{} (original: {}x{})",
+                            width, height, encode_width, encode_height, job.width, job.height
                         );
                     }
-                    width = job.width;
-                    height = job.height;
+                    width = encode_width;
+                    height = encode_height;
                     match create_encoder(width, height) {
                         Ok(enc) => encoder = Some(enc),
                         Err(e) => {
@@ -157,19 +164,25 @@ pub mod openh264 {
                 let encoder = encoder.as_mut().expect("encoder should be initialized");
 
                 let rgb_start = Instant::now();
-                let rgb_size = (job.width * job.height * 3) as usize;
+                // 調整後の解像度に合わせてRGBデータを抽出
+                let rgb_size = (encode_width * encode_height * 3) as usize;
                 let mut rgb_data = Vec::with_capacity(rgb_size);
-                for i in 0..(job.width * job.height) as usize {
-                    let rgba_idx = i * 4;
-                    rgb_data.push(job.rgba[rgba_idx]); // R
-                    rgb_data.push(job.rgba[rgba_idx + 1]); // G
-                    rgb_data.push(job.rgba[rgba_idx + 2]); // B
+                
+                // RGBAからRGBへの変換（調整後の解像度分のみ）
+                for y in 0..encode_height {
+                    let src_row_start = (y * job.width * 4) as usize;
+                    let src_row_end = src_row_start + (encode_width * 4) as usize;
+                    if src_row_end <= job.rgba.len() {
+                        for rgba_chunk in job.rgba[src_row_start..src_row_end].chunks_exact(4) {
+                            rgb_data.extend_from_slice(&rgba_chunk[0..3]); // R, G, Bのみ
+                        }
+                    }
                 }
                 let rgb_dur = rgb_start.elapsed();
 
                 let yuv = openh264::formats::YUVBuffer::from_rgb_source(RgbSliceU8::new(
                     &rgb_data,
-                    (job.width as usize, job.height as usize),
+                    (encode_width as usize, encode_height as usize),
                 ));
 
                 let encode_start = Instant::now();
@@ -184,17 +197,23 @@ pub mod openh264 {
                         let total_dur = job.enqueue_at.elapsed();
 
                         if sample_size == 0 {
-                            warn!("encoder worker: empty sample, skipping");
+                            empty_samples += 1;
+                            warn!(
+                                "encoder worker: empty sample, skipping (total empty: {})",
+                                empty_samples
+                            );
                             continue;
                         }
+
+                        successful_encodes += 1;
 
                         if res_tx
                             .send(EncodeResult {
                                 sample_data,
                                 is_keyframe: has_sps_pps,
                                 duration: job.duration,
-                                width: job.width,
-                                height: job.height,
+                                width: encode_width,
+                                height: encode_height,
                                 rgb_dur,
                                 encode_dur,
                                 pack_dur,
@@ -207,12 +226,19 @@ pub mod openh264 {
                         }
                     }
                     Err(e) => {
-                        warn!("encoder worker: encode failed: {}", e);
+                        encode_failures += 1;
+                        warn!(
+                            "encoder worker: encode failed: {} (total failures: {})",
+                            e, encode_failures
+                        );
                     }
                 }
             }
 
-            debug!("encoder worker: exiting");
+            info!(
+                "encoder worker: exiting (successful: {}, failures: {}, empty samples: {})",
+                successful_encodes, encode_failures, empty_samples
+            );
         });
 
         (job_tx, res_rx)
@@ -220,32 +246,15 @@ pub mod openh264 {
 
     /// エンコードワーカーを複数起動し、結果を1つのチャネルに集約する
     fn start_encode_workers(
-        worker_count: usize,
+        _worker_count: usize,
     ) -> (
         Vec<std::sync::mpsc::Sender<EncodeJob>>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
-        let worker_count = worker_count.max(1);
-        let mut job_txs = Vec::with_capacity(worker_count);
-        let (merged_tx, merged_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
-
-        for _ in 0..worker_count {
-            let (job_tx, mut res_rx) = start_encode_worker();
-            job_txs.push(job_tx);
-
-            let merged_tx_clone = merged_tx.clone();
-            tokio::spawn(async move {
-                while let Some(result) = res_rx.recv().await {
-                    if merged_tx_clone.send(result).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        drop(merged_tx);
-
-        (job_txs, merged_rx)
+        // encoderの整合性を保つため、常に1つのワーカーのみを起動
+        // Pフレームが適切に参照フレームを参照できるようにする
+        let (job_tx, res_rx) = start_encode_worker();
+        (vec![job_tx], res_rx)
     }
 
     fn create_encoder(width: u32, height: u32) -> anyhow::Result<openh264::encoder::Encoder> {
@@ -253,7 +262,7 @@ pub mod openh264 {
         let encoder_config = EncoderConfig::new()
             .bitrate(BitRate::from_bps(bitrate))
             .max_frame_rate(FrameRate::from_hz(60.0))
-            .skip_frames(false);
+            .skip_frames(true);
         openh264::encoder::Encoder::with_api_config(OpenH264API::from_source(), encoder_config)
             .context("Failed to create OpenH264 encoder")
     }

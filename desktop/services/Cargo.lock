@@ -1627,6 +1627,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "capture",
+ "core-types",
+ "encoder",
+ "tokio",
+ "tracing",
+ "windows",
+ "windows-capture",
+]
+
+[[package]]
 name = "interceptor"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

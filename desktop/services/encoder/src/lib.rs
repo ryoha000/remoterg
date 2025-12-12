@@ -24,12 +24,11 @@ pub mod openh264 {
     impl VideoEncoderFactory for OpenH264EncoderFactory {
         fn start_workers(
             &self,
-            worker_count: usize,
         ) -> (
             Vec<std::sync::mpsc::Sender<EncodeJob>>,
             tokio_mpsc::UnboundedReceiver<EncodeResult>,
         ) {
-            start_encode_workers(worker_count)
+            start_encode_workers()
         }
 
         fn codec(&self) -> VideoCodec {
@@ -167,7 +166,7 @@ pub mod openh264 {
                 // 調整後の解像度に合わせてRGBデータを抽出
                 let rgb_size = (encode_width * encode_height * 3) as usize;
                 let mut rgb_data = Vec::with_capacity(rgb_size);
-                
+
                 // RGBAからRGBへの変換（調整後の解像度分のみ）
                 for y in 0..encode_height {
                     let src_row_start = (y * job.width * 4) as usize;
@@ -245,9 +244,7 @@ pub mod openh264 {
     }
 
     /// エンコードワーカーを複数起動し、結果を1つのチャネルに集約する
-    fn start_encode_workers(
-        _worker_count: usize,
-    ) -> (
+    fn start_encode_workers() -> (
         Vec<std::sync::mpsc::Sender<EncodeJob>>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {

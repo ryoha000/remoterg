@@ -16,12 +16,11 @@ impl Vp9EncoderFactory {
 impl VideoEncoderFactory for Vp9EncoderFactory {
     fn start_workers(
         &self,
-        worker_count: usize,
     ) -> (
         Vec<std::sync::mpsc::Sender<EncodeJob>>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
-        start_vpx_encode_workers(CodecId::VP9, "vp9", worker_count)
+        start_vpx_encode_workers(CodecId::VP9, "vp9")
     }
 
     fn codec(&self) -> VideoCodec {

@@ -319,13 +319,12 @@ mod tests {
     async fn encode_frames(
         encoder_factory: &dyn VideoEncoderFactory,
         frames: &[Frame],
-        worker_count: usize,
     ) -> Result<(Vec<Vec<u8>>, usize, Duration)> {
         println!("エンコーダーを初期化中...");
 
         // エンコードワーカーを起動
-        let (job_txs, encode_result_rx) = encoder_factory.start_workers(worker_count);
-        println!("エンコードワーカーを{}個起動しました", worker_count);
+        let (job_txs, encode_result_rx) = encoder_factory.start_workers();
+        println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
         let (encode_samples_tx, mut encode_samples_rx) = tokio_mpsc::unbounded_channel::<Vec<u8>>();
@@ -461,9 +460,8 @@ mod tests {
             capture_frames(capture_duration).await?;
 
         // フレームをエンコード
-        let worker_count = 4;
         let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, &frames, worker_count).await?;
+            encode_frames(&encoder_factory, &frames).await?;
 
         // 統計情報を出力
         println!(
@@ -525,9 +523,8 @@ mod tests {
             capture_frames(capture_duration).await?;
 
         // フレームをエンコード
-        let worker_count = 4;
         let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, &frames, worker_count).await?;
+            encode_frames(&encoder_factory, &frames).await?;
 
         // 統計情報を出力
         println!(
@@ -589,9 +586,8 @@ mod tests {
             capture_frames(capture_duration).await?;
 
         // フレームをエンコード
-        let worker_count = 4;
         let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, &frames, worker_count).await?;
+            encode_frames(&encoder_factory, &frames).await?;
 
         // 統計情報を出力
         println!(

@@ -301,7 +301,6 @@ pub fn start_vpx_encode_worker(
 pub fn start_vpx_encode_workers(
     codec_id: CodecId,
     codec_name: &'static str,
-    _worker_count: usize,
 ) -> (
     Vec<std::sync::mpsc::Sender<EncodeJob>>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,

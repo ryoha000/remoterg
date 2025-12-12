@@ -513,12 +513,7 @@ impl WebRtcService {
                             });
 
                             // エンコードワーカーを起動
-                            // CPU負荷分散のため論理コア数ベースでワーカーを生成
-                            // let worker_count = std::thread::available_parallelism()
-                            //     .map(|n| n.get().max(1))
-                            //     .unwrap_or(2);
-                            let worker_count = 2;
-                            let (job_txs, res_rx) = encoder_factory.start_workers(worker_count);
+                            let (job_txs, res_rx) = encoder_factory.start_workers();
                             encode_job_txs = Some(job_txs);
                             encode_result_rx = Some(res_rx);
 

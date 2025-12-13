@@ -225,6 +225,11 @@ impl WebRtcService {
         let mut frame_count: u64 = 0;
         let mut last_frame_ts: Option<u64> = None;
         let mut last_frame_log = Instant::now();
+        let mut frames_received: u64 = 0;
+        let mut frames_dropped_not_ready: u64 = 0;
+        let mut frames_dropped_no_track: u64 = 0;
+        let mut frames_queued: u64 = 0;
+        let mut last_perf_log = Instant::now();
 
         loop {
             tokio::select! {
@@ -232,6 +237,7 @@ impl WebRtcService {
                 frame = self.frame_rx.recv() => {
                     match frame {
                         Some(frame) => {
+                            frames_received += 1;
                             let pipeline_start = Instant::now();
                             let interarrival_ms = last_frame_ts
                                 .map(|prev| frame.timestamp.saturating_sub(prev))
@@ -244,7 +250,10 @@ impl WebRtcService {
 
                             // ICE/DTLS 接続完了まで映像送出を保留
                             if !connection_ready.load(Ordering::Relaxed) {
-                                debug!("Connection not ready yet, dropping frame");
+                                frames_dropped_not_ready += 1;
+                                if frames_dropped_not_ready % 30 == 0 {
+                                    debug!("Connection not ready yet, dropped {} frames", frames_dropped_not_ready);
+                                }
                                 continue;
                             }
 
@@ -283,17 +292,58 @@ impl WebRtcService {
                                 let worker_idx = encode_worker_index % job_txs.len().max(1);
                                 encode_worker_index = encode_worker_index.wrapping_add(1);
 
-                                if let Err(e) = job_txs[worker_idx].send(EncodeJob {
+                                let job_send_start = Instant::now();
+                                let send_result = job_txs[worker_idx].send(EncodeJob {
                                     width: frame.width,
                                     height: frame.height,
                                     rgba: frame.data,
                                     duration: frame_duration,
                                     enqueue_at: pipeline_start,
-                                }) {
-                                    warn!("Failed to queue encode job: {}", e);
+                                });
+                                let job_send_dur = job_send_start.elapsed();
+
+                                match send_result {
+                                    Ok(_) => {
+                                        frames_queued += 1;
+                                        if job_send_dur.as_millis() > 10 {
+                                            warn!(
+                                                "Encode job send took {}ms (worker_idx={}, queue may be full)",
+                                                job_send_dur.as_millis(),
+                                                worker_idx
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to queue encode job: {} (worker_idx={})", e, worker_idx);
+                                    }
+                                }
+
+                                // パフォーマンス統計を定期的に出力
+                                if last_perf_log.elapsed().as_secs_f32() >= 5.0 {
+                                    let elapsed_sec = last_perf_log.elapsed().as_secs_f32();
+                                    let receive_fps = frames_received as f32 / elapsed_sec;
+                                    let queue_fps = frames_queued as f32 / elapsed_sec;
+                                    info!(
+                                        "Frame processing stats (last {}s): received={} ({:.1} fps), queued={} ({:.1} fps), dropped_not_ready={}, dropped_no_track={}",
+                                        elapsed_sec,
+                                        frames_received,
+                                        receive_fps,
+                                        frames_queued,
+                                        queue_fps,
+                                        frames_dropped_not_ready,
+                                        frames_dropped_no_track
+                                    );
+                                    frames_received = 0;
+                                    frames_queued = 0;
+                                    frames_dropped_not_ready = 0;
+                                    frames_dropped_no_track = 0;
+                                    last_perf_log = Instant::now();
                                 }
                             } else {
-                                debug!("Video track not ready or encoder worker not available, dropping frame");
+                                frames_dropped_no_track += 1;
+                                if frames_dropped_no_track % 30 == 0 {
+                                    debug!("Video track not ready or encoder worker not available, dropped {} frames", frames_dropped_no_track);
+                                }
                             }
                         }
                         None => {

@@ -387,45 +387,23 @@ mod tests {
             let mut total_duration = Duration::ZERO;
             let mut last_log = Instant::now();
 
-            // パフォーマンス統計用
-            let mut total_rgb_dur = Duration::ZERO;
-            let mut total_encode_dur = Duration::ZERO;
-            let mut total_pack_dur = Duration::ZERO;
-            let mut total_total_dur = Duration::ZERO;
-            let mut total_sample_size = 0usize;
             let receive_start = Instant::now();
 
             while let Some(result) = encode_result_rx_clone.recv().await {
                 total_duration += result.duration;
-                total_rgb_dur += result.rgb_dur;
-                total_encode_dur += result.encode_dur;
-                total_pack_dur += result.pack_dur;
-                total_total_dur += result.total_dur;
-                total_sample_size += result.sample_size;
 
                 if encode_samples_tx_clone.send(result.sample_data).is_err() {
                     break;
                 }
                 count += 1;
 
-                // 50フレームごと、または5秒ごとに進捗と統計を表示
+                // 50フレームごと、または5秒ごとに進捗を表示
                 if count % 50 == 0 || last_log.elapsed().as_secs() >= 5 {
                     let elapsed = receive_start.elapsed();
-                    let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
-                    let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
-                    let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
-                    let avg_total = total_total_dur.as_secs_f64() / count as f64;
                     let throughput = count as f64 / elapsed.as_secs_f64();
                     println!(
                         "  受信済みエンコード結果: {}フレーム (経過: {:.1}s, スループット: {:.2} fps)",
                         count, elapsed.as_secs_f32(), throughput
-                    );
-                    println!(
-                        "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
-                        avg_rgb * 1000.0,
-                        avg_encode * 1000.0,
-                        avg_pack * 1000.0,
-                        avg_total * 1000.0
                     );
                     last_log = Instant::now();
                 }
@@ -436,41 +414,6 @@ mod tests {
                 count,
                 total_elapsed.as_secs_f32()
             );
-
-            // 最終統計を出力
-            if count > 0 {
-                let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
-                let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
-                let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
-                let avg_total = total_total_dur.as_secs_f64() / count as f64;
-                let total_processing = total_rgb_dur + total_encode_dur + total_pack_dur;
-                println!("  最終統計 [{}フレーム]:", count);
-                println!(
-                    "    総処理時間: rgb={:.3}s encode={:.3}s pack={:.3}s (合計={:.3}s)",
-                    total_rgb_dur.as_secs_f64(),
-                    total_encode_dur.as_secs_f64(),
-                    total_pack_dur.as_secs_f64(),
-                    total_processing.as_secs_f64()
-                );
-                println!(
-                    "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
-                    avg_rgb * 1000.0,
-                    avg_encode * 1000.0,
-                    avg_pack * 1000.0,
-                    avg_total * 1000.0
-                );
-                println!(
-                    "    時間配分: rgb={:.1}% encode={:.1}% pack={:.1}%",
-                    (total_rgb_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
-                    (total_encode_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
-                    (total_pack_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0
-                );
-                println!(
-                    "    平均サンプルサイズ: {:.0} bytes, 総サイズ: {} bytes",
-                    total_sample_size as f64 / count as f64,
-                    total_sample_size
-                );
-            }
 
             (count, total_duration)
         });
@@ -668,45 +611,23 @@ mod tests {
             let mut total_duration = Duration::ZERO;
             let mut last_log = Instant::now();
 
-            // パフォーマンス統計用
-            let mut total_rgb_dur = Duration::ZERO;
-            let mut total_encode_dur = Duration::ZERO;
-            let mut total_pack_dur = Duration::ZERO;
-            let mut total_total_dur = Duration::ZERO;
-            let mut total_sample_size = 0usize;
             let receive_start = Instant::now();
 
             while let Some(result) = encode_result_rx_clone.recv().await {
                 total_duration += result.duration;
-                total_rgb_dur += result.rgb_dur;
-                total_encode_dur += result.encode_dur;
-                total_pack_dur += result.pack_dur;
-                total_total_dur += result.total_dur;
-                total_sample_size += result.sample_size;
 
                 if encode_samples_tx_clone.send(result.sample_data).is_err() {
                     break;
                 }
                 count += 1;
 
-                // 50フレームごと、または5秒ごとに進捗と統計を表示
+                // 50フレームごと、または5秒ごとに進捗を表示
                 if count % 50 == 0 || last_log.elapsed().as_secs() >= 5 {
                     let elapsed = receive_start.elapsed();
-                    let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
-                    let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
-                    let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
-                    let avg_total = total_total_dur.as_secs_f64() / count as f64;
                     let throughput = count as f64 / elapsed.as_secs_f64();
                     println!(
                         "  受信済みエンコード結果: {}フレーム (経過: {:.1}s, スループット: {:.2} fps)",
                         count, elapsed.as_secs_f32(), throughput
-                    );
-                    println!(
-                        "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
-                        avg_rgb * 1000.0,
-                        avg_encode * 1000.0,
-                        avg_pack * 1000.0,
-                        avg_total * 1000.0
                     );
                     last_log = Instant::now();
                 }
@@ -717,41 +638,6 @@ mod tests {
                 count,
                 total_elapsed.as_secs_f32()
             );
-
-            // 最終統計を出力
-            if count > 0 {
-                let avg_rgb = total_rgb_dur.as_secs_f64() / count as f64;
-                let avg_encode = total_encode_dur.as_secs_f64() / count as f64;
-                let avg_pack = total_pack_dur.as_secs_f64() / count as f64;
-                let avg_total = total_total_dur.as_secs_f64() / count as f64;
-                let total_processing = total_rgb_dur + total_encode_dur + total_pack_dur;
-                println!("  最終統計 [{}フレーム]:", count);
-                println!(
-                    "    総処理時間: rgb={:.3}s encode={:.3}s pack={:.3}s (合計={:.3}s)",
-                    total_rgb_dur.as_secs_f64(),
-                    total_encode_dur.as_secs_f64(),
-                    total_pack_dur.as_secs_f64(),
-                    total_processing.as_secs_f64()
-                );
-                println!(
-                    "    平均処理時間: rgb={:.2}ms encode={:.2}ms pack={:.2}ms total={:.2}ms",
-                    avg_rgb * 1000.0,
-                    avg_encode * 1000.0,
-                    avg_pack * 1000.0,
-                    avg_total * 1000.0
-                );
-                println!(
-                    "    時間配分: rgb={:.1}% encode={:.1}% pack={:.1}%",
-                    (total_rgb_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
-                    (total_encode_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
-                    (total_pack_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0
-                );
-                println!(
-                    "    平均サンプルサイズ: {:.0} bytes, 総サイズ: {} bytes",
-                    total_sample_size as f64 / count as f64,
-                    total_sample_size
-                );
-            }
 
             (count, total_duration)
         });

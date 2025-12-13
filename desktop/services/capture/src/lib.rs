@@ -4,9 +4,8 @@ use core_types::{
     CaptureMessage, Frame,
 };
 use std::sync::mpsc;
-use std::time::Instant;
 use tokio::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, span, Level};
 use windows_capture::capture::{
     CaptureControl, Context as CaptureContext, GraphicsCaptureApiHandler,
 };
@@ -41,7 +40,6 @@ impl CaptureBackend for CaptureService {
 struct CaptureHandler {
     frame_tx: mpsc::Sender<Frame>,
     config: CaptureConfig,
-    last_frame_log: Instant,
 }
 
 impl GraphicsCaptureApiHandler for CaptureHandler {
@@ -53,7 +51,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         Ok(Self {
             frame_tx: ctx.flags.frame_tx.clone(),
             config: ctx.flags.config.clone(),
-            last_frame_log: Instant::now(),
         })
     }
 
@@ -63,7 +60,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         _capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
         debug!("on_frame_arrived called");
-        let frame_start = Instant::now();
 
         // FrameBufferを取得してRGBAデータを読み取る
         let frame_buffer = frame.buffer()?;
@@ -80,6 +76,17 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             core_types::CaptureSize::UseSourceSize => (src_width, src_height),
             core_types::CaptureSize::Custom { width, height } => (*width, *height),
         };
+
+        // フレーム処理全体を span で計測
+        let frame_span = span!(
+            Level::DEBUG,
+            "frame_processing",
+            width = dst_width,
+            height = dst_height,
+            src_width = src_width,
+            src_height = src_height
+        );
+        let _frame_guard = frame_span.enter();
 
         // リサイズが必要な場合
         let final_data = if dst_width != src_width || dst_height != src_height {
@@ -99,25 +106,17 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 .as_millis() as u64,
         };
 
-        // フレームを送信（同期送信）
-        let send_start = Instant::now();
+        // フレーム送信を span で計測
+        let send_span = span!(Level::DEBUG, "send_frame");
+        let _send_guard = send_span.enter();
 
         // std::sync::mpscを使って同期送信
         if let Err(e) = self.frame_tx.send(core_frame) {
             error!("Failed to send frame: {}", e);
         }
 
-        let send_dur = send_start.elapsed();
-        let total_dur = frame_start.elapsed();
-
-        if self.last_frame_log.elapsed().as_secs_f32() >= 5.0 {
-            info!(
-                "capture running (windows-capture): send={}ms total={}ms",
-                send_dur.as_millis(),
-                total_dur.as_millis(),
-            );
-            self.last_frame_log = Instant::now();
-        }
+        drop(_send_guard);
+        drop(_frame_guard);
 
         Ok(())
     }

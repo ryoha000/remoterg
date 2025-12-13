@@ -92,11 +92,6 @@ pub struct EncodeResult {
     pub duration: Duration,
     pub width: u32,
     pub height: u32,
-    pub rgb_dur: Duration,
-    pub encode_dur: Duration,
-    pub pack_dur: Duration,
-    pub total_dur: Duration,
-    pub sample_size: usize,
 }
 
 /// エンコーダーファクトリ（複数ワーカーを生成）

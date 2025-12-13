@@ -9,4 +9,3 @@ pub mod rgba_to_yuv;
 
 #[cfg(all(feature = "h264", windows))]
 pub mod mmf;
-

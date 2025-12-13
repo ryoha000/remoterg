@@ -724,11 +724,6 @@ pub mod mf {
                                 duration: job.duration,
                                 width: encode_width,
                                 height: encode_height,
-                                rgb_dur,
-                                encode_dur,
-                                pack_dur,
-                                total_dur,
-                                sample_size,
                             })
                             .is_err()
                         {
@@ -754,4 +749,3 @@ pub mod mf {
         (vec![job_tx], res_rx)
     }
 }
-

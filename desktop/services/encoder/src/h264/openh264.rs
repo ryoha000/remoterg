@@ -4,9 +4,8 @@ use openh264::encoder::{BitRate, EncoderConfig, FrameRate};
 use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
 use tokio::sync::mpsc as tokio_mpsc;
-use tracing::{info, warn};
+use tracing::{info, span, warn, Level};
 
 use super::{annexb, rgba_to_yuv};
 
@@ -53,13 +52,6 @@ fn start_encode_worker() -> (
         let mut empty_samples = 0u32;
         let mut successful_encodes = 0u32;
 
-        // パフォーマンス統計用
-        let mut total_rgba_to_yuv_dur = Duration::ZERO;
-        let mut total_encode_dur = Duration::ZERO;
-        let mut total_pack_dur = Duration::ZERO;
-        let mut total_queue_wait_dur = Duration::ZERO;
-        let mut last_stats_log = Instant::now();
-
         const MAX_QUEUE_DRAIN: usize = 10; // 一度にドレインする最大フレーム数
 
         loop {
@@ -90,15 +82,24 @@ fn start_encode_worker() -> (
                 }
             }
 
-            let process_start = Instant::now();
-            let queue_wait_dur = process_start.duration_since(job.enqueue_at);
-
             // OpenH264は幅と高さが2の倍数である必要があるため、2の倍数に調整
             let encode_width = (job.width / 2) * 2;
             let encode_height = (job.height / 2) * 2;
 
-            // 前処理: RGBA→YUV変換
-            let rgba_to_yuv_start = Instant::now();
+            // エンコードフレーム処理全体を span で計測
+            let encode_frame_span = span!(
+                Level::DEBUG,
+                "encode_frame",
+                width = encode_width,
+                height = encode_height,
+                src_width = job.width,
+                src_height = job.height
+            );
+            let _encode_frame_guard = encode_frame_span.enter();
+
+            // 前処理: RGBA→YUV変換を span で計測
+            let rgba_to_yuv_span = span!(Level::DEBUG, "rgba_to_yuv");
+            let _rgba_to_yuv_guard = rgba_to_yuv_span.enter();
             let rgba_src = &job.rgba;
             let src_width = job.width as usize;
             let dst_width = encode_width as usize;
@@ -106,7 +107,7 @@ fn start_encode_worker() -> (
 
             let yuv_data = rgba_to_yuv::rgba_to_yuv420(rgba_src, dst_width, dst_height, src_width);
             let yuv = YUVBuffer::from_vec(yuv_data, dst_width, dst_height);
-            let rgba_to_yuv_dur = rgba_to_yuv_start.elapsed();
+            drop(_rgba_to_yuv_guard);
 
             // 最初のフレームまたは解像度変更時にエンコーダーを作成/再作成
             if encoder.is_none() || encode_width != width || encode_height != height {
@@ -129,17 +130,21 @@ fn start_encode_worker() -> (
 
             let encoder = encoder.as_mut().expect("encoder should be initialized");
 
-            // エンコード
-            let encode_start = Instant::now();
+            // エンコードを span で計測
+            let encode_span = span!(Level::DEBUG, "encode");
+            let _encode_guard = encode_span.enter();
             match encoder.encode(&yuv) {
                 Ok(bitstream) => {
-                    let encode_dur = encode_start.elapsed();
-                    let pack_start = Instant::now();
+                    drop(_encode_guard);
+
+                    // パック処理を span で計測
+                    let pack_span = span!(Level::DEBUG, "pack");
+                    let _pack_guard = pack_span.enter();
                     let (sample_data, has_sps_pps) = annexb::annexb_from_bitstream(&bitstream);
-                    let pack_dur = pack_start.elapsed();
+                    drop(_pack_guard);
 
                     let sample_size = sample_data.len();
-                    let total_dur = process_start.elapsed();
+                    drop(_encode_frame_guard);
 
                     if sample_size == 0 {
                         empty_samples += 1;
@@ -152,31 +157,6 @@ fn start_encode_worker() -> (
 
                     successful_encodes += 1;
 
-                    // 統計を累積
-                    total_rgba_to_yuv_dur += rgba_to_yuv_dur;
-                    total_encode_dur += encode_dur;
-                    total_pack_dur += pack_dur;
-                    total_queue_wait_dur += queue_wait_dur;
-
-                    // 50フレームごと、または5秒ごとに統計を出力
-                    if successful_encodes % 50 == 0 || last_stats_log.elapsed().as_secs() >= 5 {
-                        let avg_rgba_to_yuv =
-                            total_rgba_to_yuv_dur.as_secs_f64() / successful_encodes as f64;
-                        let avg_encode = total_encode_dur.as_secs_f64() / successful_encodes as f64;
-                        let avg_pack = total_pack_dur.as_secs_f64() / successful_encodes as f64;
-                        let avg_queue =
-                            total_queue_wait_dur.as_secs_f64() / successful_encodes as f64;
-                        info!(
-                            "encoder worker stats [{} frames]: avg_rgba_to_yuv={:.3}ms avg_encode={:.3}ms avg_pack={:.3}ms avg_queue={:.3}ms",
-                            successful_encodes,
-                            avg_rgba_to_yuv * 1000.0,
-                            avg_encode * 1000.0,
-                            avg_pack * 1000.0,
-                            avg_queue * 1000.0
-                        );
-                        last_stats_log = Instant::now();
-                    }
-
                     if res_tx
                         .send(EncodeResult {
                             sample_data,
@@ -184,11 +164,6 @@ fn start_encode_worker() -> (
                             duration: job.duration,
                             width: encode_width,
                             height: encode_height,
-                            rgb_dur: rgba_to_yuv_dur,
-                            encode_dur,
-                            pack_dur,
-                            total_dur,
-                            sample_size,
                         })
                         .is_err()
                     {
@@ -202,49 +177,6 @@ fn start_encode_worker() -> (
                         e, encode_failures
                     );
                 }
-            }
-        }
-
-        // 最終統計を出力
-        if successful_encodes > 0 {
-            let avg_rgba_to_yuv = total_rgba_to_yuv_dur.as_secs_f64() / successful_encodes as f64;
-            let avg_encode = total_encode_dur.as_secs_f64() / successful_encodes as f64;
-            let avg_pack = total_pack_dur.as_secs_f64() / successful_encodes as f64;
-            let avg_queue = total_queue_wait_dur.as_secs_f64() / successful_encodes as f64;
-            let total_processing = total_rgba_to_yuv_dur + total_encode_dur + total_pack_dur;
-            info!(
-                "encoder worker: final stats [{} frames]: total_rgba_to_yuv={:.3}s total_encode={:.3}s total_pack={:.3}s total_queue={:.3}s",
-                successful_encodes,
-                total_rgba_to_yuv_dur.as_secs_f64(),
-                total_encode_dur.as_secs_f64(),
-                total_pack_dur.as_secs_f64(),
-                total_queue_wait_dur.as_secs_f64()
-            );
-            info!(
-                "encoder worker: avg per frame: rgba_to_yuv={:.3}ms encode={:.3}ms pack={:.3}ms queue={:.3}ms total={:.3}ms",
-                avg_rgba_to_yuv * 1000.0,
-                avg_encode * 1000.0,
-                avg_pack * 1000.0,
-                avg_queue * 1000.0,
-                (avg_rgba_to_yuv + avg_encode + avg_pack) * 1000.0
-            );
-            if total_processing.as_secs_f64() > 0.0 {
-                let rgba_to_yuv_pct =
-                    (total_rgba_to_yuv_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0;
-                info!(
-                    "encoder worker: processing time distribution: rgba_to_yuv={:.1}% encode={:.1}% pack={:.1}%",
-                    rgba_to_yuv_pct,
-                    (total_encode_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
-                    (total_pack_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0
-                );
-            }
-            let total_wall_time = total_queue_wait_dur + total_processing;
-            if total_wall_time.as_secs_f64() > 0.0 {
-                info!(
-                    "encoder worker: wall time distribution: queue_wait={:.1}% processing={:.1}%",
-                    (total_queue_wait_dur.as_secs_f64() / total_wall_time.as_secs_f64()) * 100.0,
-                    (total_processing.as_secs_f64() / total_wall_time.as_secs_f64()) * 100.0
-                );
             }
         }
 

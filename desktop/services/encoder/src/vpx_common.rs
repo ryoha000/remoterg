@@ -1,5 +1,4 @@
 use std::num::NonZeroU32;
-use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{debug, info, warn};
@@ -173,7 +172,6 @@ pub fn start_vpx_encode_worker(
         let mut encoder: Option<Encoder<u8>> = None;
 
         while let Ok(job) = job_rx.recv() {
-            let rgb_start = Instant::now();
             // RGBAデータから必要な部分だけを切り出してI420に変換
             let (i420, actual_encode_width, actual_encode_height) =
                 match rgba_to_i420(&job.rgba, job.width, job.height) {
@@ -195,7 +193,6 @@ pub fn start_vpx_encode_worker(
                         continue;
                     }
                 };
-            let rgb_dur = rgb_start.elapsed();
 
             // 最初のフレームまたは解像度変更時にエンコーダーを作成/再作成
             if encoder.is_none() || actual_encode_width != width || actual_encode_height != height {
@@ -234,7 +231,6 @@ pub fn start_vpx_encode_worker(
                 }
             };
 
-            let encode_start = Instant::now();
             let mut frame_flags = EncoderFrameFlags::empty();
             if force_kf_remaining > 0 {
                 frame_flags |= EncoderFrameFlags::FORCE_KF;
@@ -254,7 +250,6 @@ pub fn start_vpx_encode_worker(
                     continue;
                 }
             };
-            let encode_dur = encode_start.elapsed();
             pts = pts.saturating_add(job.duration.as_millis() as i64);
 
             for packet in packets {
@@ -263,8 +258,6 @@ pub fn start_vpx_encode_worker(
                     if sample_data.is_empty() {
                         continue;
                     }
-                    let sample_size = sample_data.len();
-                    let total_dur = job.enqueue_at.elapsed();
 
                     if res_tx
                         .send(EncodeResult {
@@ -273,11 +266,6 @@ pub fn start_vpx_encode_worker(
                             duration: job.duration,
                             width: actual_encode_width,
                             height: actual_encode_height,
-                            rgb_dur,
-                            encode_dur,
-                            pack_dur: Duration::from_millis(0),
-                            total_dur,
-                            sample_size,
                         })
                         .is_err()
                     {

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, span, warn, Level};
 use webrtc_rs::api::interceptor_registry::register_default_interceptors;
 use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_VP8, MIME_TYPE_VP9};
 use webrtc_rs::api::setting_engine::SettingEngine;
@@ -257,6 +257,15 @@ impl WebRtcService {
                                 continue;
                             }
 
+                            // フレーム処理全体を span で計測
+                            let process_frame_span = span!(
+                                Level::DEBUG,
+                                "process_frame",
+                                width = frame.width,
+                                height = frame.height
+                            );
+                            let _process_frame_guard = process_frame_span.enter();
+
                             // Video trackが存在する場合、エンコードワーカーへジョブを送信
                             if let (Some(track_state), Some(job_txs)) =
                                 (video_track_state.as_mut(), encode_job_txs.as_ref())
@@ -292,6 +301,13 @@ impl WebRtcService {
                                 let worker_idx = encode_worker_index % job_txs.len().max(1);
                                 encode_worker_index = encode_worker_index.wrapping_add(1);
 
+                                // エンコードジョブ送信を span で計測
+                                let queue_encode_job_span = span!(
+                                    Level::DEBUG,
+                                    "queue_encode_job",
+                                    worker_idx = worker_idx
+                                );
+                                let _queue_encode_job_guard = queue_encode_job_span.enter();
                                 let job_send_start = Instant::now();
                                 let send_result = job_txs[worker_idx].send(EncodeJob {
                                     width: frame.width,
@@ -301,6 +317,7 @@ impl WebRtcService {
                                     enqueue_at: pipeline_start,
                                 });
                                 let job_send_dur = job_send_start.elapsed();
+                                drop(_queue_encode_job_guard);
 
                                 match send_result {
                                     Ok(_) => {
@@ -317,33 +334,35 @@ impl WebRtcService {
                                         warn!("Failed to queue encode job: {} (worker_idx={})", e, worker_idx);
                                     }
                                 }
-
-                                // パフォーマンス統計を定期的に出力
-                                if last_perf_log.elapsed().as_secs_f32() >= 5.0 {
-                                    let elapsed_sec = last_perf_log.elapsed().as_secs_f32();
-                                    let receive_fps = frames_received as f32 / elapsed_sec;
-                                    let queue_fps = frames_queued as f32 / elapsed_sec;
-                                    info!(
-                                        "Frame processing stats (last {}s): received={} ({:.1} fps), queued={} ({:.1} fps), dropped_not_ready={}, dropped_no_track={}",
-                                        elapsed_sec,
-                                        frames_received,
-                                        receive_fps,
-                                        frames_queued,
-                                        queue_fps,
-                                        frames_dropped_not_ready,
-                                        frames_dropped_no_track
-                                    );
-                                    frames_received = 0;
-                                    frames_queued = 0;
-                                    frames_dropped_not_ready = 0;
-                                    frames_dropped_no_track = 0;
-                                    last_perf_log = Instant::now();
-                                }
                             } else {
                                 frames_dropped_no_track += 1;
                                 if frames_dropped_no_track % 30 == 0 {
                                     debug!("Video track not ready or encoder worker not available, dropped {} frames", frames_dropped_no_track);
                                 }
+                            }
+
+                            drop(_process_frame_guard);
+
+                            // パフォーマンス統計を定期的に出力
+                            if last_perf_log.elapsed().as_secs_f32() >= 5.0 {
+                                let elapsed_sec = last_perf_log.elapsed().as_secs_f32();
+                                let receive_fps = frames_received as f32 / elapsed_sec;
+                                let queue_fps = frames_queued as f32 / elapsed_sec;
+                                info!(
+                                    "Frame processing stats (last {}s): received={} ({:.1} fps), queued={} ({:.1} fps), dropped_not_ready={}, dropped_no_track={}",
+                                    elapsed_sec,
+                                    frames_received,
+                                    receive_fps,
+                                    frames_queued,
+                                    queue_fps,
+                                    frames_dropped_not_ready,
+                                    frames_dropped_no_track
+                                );
+                                frames_received = 0;
+                                frames_queued = 0;
+                                frames_dropped_not_ready = 0;
+                                frames_dropped_no_track = 0;
+                                last_perf_log = Instant::now();
                             }
                         }
                         None => {
@@ -369,16 +388,26 @@ impl WebRtcService {
                             use webrtc_media::Sample;
                             use bytes::Bytes;
 
+                            let sample_size = result.sample_data.len();
                             let sample = Sample {
                                 data: Bytes::from(result.sample_data),
                                 duration: result.duration,
                                 ..Default::default()
                             };
 
-                            let write_start = Instant::now();
+                            // サンプル書き込みを span で計測
+                            let write_sample_span = span!(
+                                Level::DEBUG,
+                                "write_sample",
+                                width = result.width,
+                                height = result.height,
+                                sample_size = sample_size,
+                                is_keyframe = result.is_keyframe
+                            );
+                            let _write_sample_guard = write_sample_span.enter();
                             match track_state.track.write_sample(&sample).await {
                                 Ok(_) => {
-                                    let write_dur = write_start.elapsed();
+                                    drop(_write_sample_guard);
                                     frame_count += 1;
                                     let elapsed = last_frame_log.elapsed();
                                     if elapsed.as_secs_f32() >= 5.0 {
@@ -386,18 +415,9 @@ impl WebRtcService {
                                         frame_count = 0;
                                         last_frame_log = Instant::now();
                                     }
-
-                                    debug!(
-                                        "pipeline timings: rgb={}ms encode={}ms pack={}ms write={}ms total={}ms size={}B",
-                                        result.rgb_dur.as_millis(),
-                                        result.encode_dur.as_millis(),
-                                        result.pack_dur.as_millis(),
-                                        write_dur.as_millis(),
-                                        result.total_dur.as_millis(),
-                                        result.sample_size,
-                                    );
                                 }
                                 Err(e) => {
+                                    drop(_write_sample_guard);
                                     error!("Failed to write sample to track: {}", e);
                                 }
                             }

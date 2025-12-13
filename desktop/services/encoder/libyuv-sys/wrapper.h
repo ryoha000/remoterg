@@ -13,3 +13,13 @@ int ABGRToI420(const uint8_t* src_abgr,
                int dst_stride_v,
                int width,
                int height);
+
+// ABGRToNV12: ABGR (RGBA in memory order) -> NV12 (Y plane + interleaved UV plane)
+int ABGRToNV12(const uint8_t* src_abgr,
+               int src_stride_abgr,
+               uint8_t* dst_y,
+               int dst_stride_y,
+               uint8_t* dst_uv,
+               int dst_stride_uv,
+               int width,
+               int height);

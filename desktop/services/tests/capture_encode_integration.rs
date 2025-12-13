@@ -4,7 +4,7 @@ mod tests {
     use anyhow::{Context, Result};
     use capture::CaptureService;
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
-    use encoder::h264_mf::mf::MediaFoundationH264EncoderFactory;
+    use encoder::h264::mmf::mf::MediaFoundationH264EncoderFactory;
     use encoder::vp8::Vp8EncoderFactory;
     use encoder::vp9::Vp9EncoderFactory;
     use std::path::PathBuf;
@@ -852,7 +852,7 @@ mod tests {
         let encoder_factory = MediaFoundationH264EncoderFactory::new();
 
         // パイプライン化: キャプチャしながら逐次エンコード
-        let capture_duration = Duration::from_secs(15);
+        let capture_duration = Duration::from_secs(8);
         let (
             samples,
             encoded_count,

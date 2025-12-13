@@ -1,7 +1,7 @@
 use anyhow::Context;
 use core_types::{EncodeJob, EncodeResult, VideoCodec, VideoEncoderFactory};
 use openh264::encoder::{BitRate, EncoderConfig, FrameRate};
-use openh264::formats::{RgbSliceU8, YUVBuffer};
+use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{info, warn};
 
-use super::annexb;
+use super::{annexb, rgba_to_yuv};
 
 /// 前処理済みフレーム
 struct PreprocessedFrame {
@@ -22,9 +22,8 @@ struct PreprocessedFrame {
     enqueue_at: Instant,
     preprocess_start: Instant, // 前処理ワーカーが受け取った時点
     preprocess_end: Instant,   // 前処理完了時点
-    rgba_to_rgb_dur: Duration, // RGBA→RGB変換時間
-    rgb_to_yuv_dur: Duration,  // RGB→YUV変換時間
-    rgb_dur: Duration,         // 合計時間（後方互換性のため）
+    rgba_to_yuv_dur: Duration, // RGBA→YUV変換時間
+    rgb_dur: Duration,         // 合計時間（後方互換性のため、rgba_to_yuv_durと同じ値）
 }
 
 /// OpenH264 ファクトリ
@@ -51,49 +50,26 @@ impl VideoEncoderFactory for OpenH264EncoderFactory {
     }
 }
 
-/// RGBA→RGB→YUV変換を実行する前処理関数
+/// RGBA→YUV変換を実行する前処理関数
 fn preprocess_frame(
     job: EncodeJob,
     encode_width: u32,
     encode_height: u32,
-) -> (YUVBuffer, Duration, Duration) {
-    // RGBA→RGB変換
-    let rgba_to_rgb_start = Instant::now();
-    // 調整後の解像度に合わせてRGBデータを抽出
-    let rgb_size = (encode_width * encode_height * 3) as usize;
-    let mut rgb_data = vec![0u8; rgb_size];
+) -> (YUVBuffer, Duration) {
+    let rgba_to_yuv_start = Instant::now();
 
-    // RGBAからRGBへの変換（調整後の解像度分のみ）
+    // RGBA→YUV420変換
     let rgba_src = &job.rgba;
     let src_width = job.width as usize;
     let dst_width = encode_width as usize;
+    let dst_height = encode_height as usize;
 
-    // 行単位で処理（前処理ワーカーが並列実行されるため、ここでは単純ループ）
-    for y in 0..encode_height as usize {
-        let rgb_row = &mut rgb_data[y * dst_width * 3..(y + 1) * dst_width * 3];
-        let src_row_start = y * src_width * 4;
-        let src_row_end = src_row_start + dst_width * 4;
-        if src_row_end <= rgba_src.len() {
-            let rgba_row = &rgba_src[src_row_start..src_row_end];
-            for (i, rgba_chunk) in rgba_row.chunks_exact(4).enumerate() {
-                let rgb_idx = i * 3;
-                rgb_row[rgb_idx] = rgba_chunk[0]; // R
-                rgb_row[rgb_idx + 1] = rgba_chunk[1]; // G
-                rgb_row[rgb_idx + 2] = rgba_chunk[2]; // B
-            }
-        }
-    }
-    let rgba_to_rgb_dur = rgba_to_rgb_start.elapsed();
+    let yuv_data = rgba_to_yuv::rgba_to_yuv420(rgba_src, dst_width, dst_height, src_width);
 
-    // RGB→YUV変換
-    let rgb_to_yuv_start = Instant::now();
-    let yuv = YUVBuffer::from_rgb_source(RgbSliceU8::new(
-        &rgb_data,
-        (encode_width as usize, encode_height as usize),
-    ));
-    let rgb_to_yuv_dur = rgb_to_yuv_start.elapsed();
+    let yuv = YUVBuffer::from_vec(yuv_data, dst_width, dst_height);
+    let rgba_to_yuv_dur = rgba_to_yuv_start.elapsed();
 
-    (yuv, rgba_to_rgb_dur, rgb_to_yuv_dur)
+    (yuv, rgba_to_yuv_dur)
 }
 
 /// 前処理ワーカー（RGBA→RGB→YUV変換を並列実行）
@@ -113,12 +89,11 @@ fn preprocess_worker(
 
         let duration = job.duration;
         let enqueue_at = job.enqueue_at;
-        let (yuv, rgba_to_rgb_dur, rgb_to_yuv_dur) =
-            preprocess_frame(job, encode_width, encode_height);
+        let (yuv, rgba_to_yuv_dur) = preprocess_frame(job, encode_width, encode_height);
         let preprocess_end = Instant::now();
 
-        // 後方互換性のため、合計時間も保持
-        let rgb_dur = rgba_to_rgb_dur + rgb_to_yuv_dur;
+        // 後方互換性のため、合計時間も保持（rgba_to_yuv_durと同じ値）
+        let rgb_dur = rgba_to_yuv_dur;
 
         let preprocessed = PreprocessedFrame {
             seq,
@@ -129,8 +104,7 @@ fn preprocess_worker(
             enqueue_at,
             preprocess_start,
             preprocess_end,
-            rgba_to_rgb_dur,
-            rgb_to_yuv_dur,
+            rgba_to_yuv_dur,
             rgb_dur,
         };
 
@@ -239,8 +213,7 @@ fn start_encode_worker() -> (
         let mut successful_encodes = 0u32;
 
         // パフォーマンス統計用
-        let mut total_rgba_to_rgb_dur = Duration::ZERO; // RGBA→RGB変換時間
-        let mut total_rgb_to_yuv_dur = Duration::ZERO; // RGB→YUV変換時間
+        let mut total_rgba_to_yuv_dur = Duration::ZERO; // RGBA→YUV変換時間
         let mut total_rgb_dur = Duration::ZERO; // 合計時間（後方互換性のため）
         let mut total_encode_dur = Duration::ZERO;
         let mut total_pack_dur = Duration::ZERO;
@@ -344,8 +317,7 @@ fn start_encode_worker() -> (
                         successful_encodes += 1;
 
                         // 統計を累積
-                        total_rgba_to_rgb_dur += preprocessed.rgba_to_rgb_dur;
-                        total_rgb_to_yuv_dur += preprocessed.rgb_to_yuv_dur;
+                        total_rgba_to_yuv_dur += preprocessed.rgba_to_yuv_dur;
                         total_rgb_dur += preprocessed.rgb_dur;
                         total_encode_dur += encode_dur;
                         total_pack_dur += pack_dur;
@@ -355,10 +327,8 @@ fn start_encode_worker() -> (
 
                         // 50フレームごと、または5秒ごとに統計を出力
                         if successful_encodes % 50 == 0 || last_stats_log.elapsed().as_secs() >= 5 {
-                            let avg_rgba_to_rgb =
-                                total_rgba_to_rgb_dur.as_secs_f64() / successful_encodes as f64;
-                            let avg_rgb_to_yuv =
-                                total_rgb_to_yuv_dur.as_secs_f64() / successful_encodes as f64;
+                            let avg_rgba_to_yuv =
+                                total_rgba_to_yuv_dur.as_secs_f64() / successful_encodes as f64;
                             let avg_rgb = total_rgb_dur.as_secs_f64() / successful_encodes as f64;
                             let avg_encode =
                                 total_encode_dur.as_secs_f64() / successful_encodes as f64;
@@ -371,10 +341,9 @@ fn start_encode_worker() -> (
                             let avg_result_queue = total_result_queue_wait_dur.as_secs_f64()
                                 / successful_encodes as f64;
                             info!(
-                                "encoder worker stats [{} frames]: avg_rgba_to_rgb={:.3}ms avg_rgb_to_yuv={:.3}ms avg_rgb={:.3}ms avg_encode={:.3}ms avg_pack={:.3}ms avg_queue={:.3}ms (preprocess_queue={:.3}ms result_queue={:.3}ms)",
+                                "encoder worker stats [{} frames]: avg_rgba_to_yuv={:.3}ms avg_rgb={:.3}ms avg_encode={:.3}ms avg_pack={:.3}ms avg_queue={:.3}ms (preprocess_queue={:.3}ms result_queue={:.3}ms)",
                                 successful_encodes,
-                                avg_rgba_to_rgb * 1000.0,
-                                avg_rgb_to_yuv * 1000.0,
+                                avg_rgba_to_yuv * 1000.0,
                                 avg_rgb * 1000.0,
                                 avg_encode * 1000.0,
                                 avg_pack * 1000.0,
@@ -421,8 +390,7 @@ fn start_encode_worker() -> (
 
         // 最終統計を出力
         if successful_encodes > 0 {
-            let avg_rgba_to_rgb = total_rgba_to_rgb_dur.as_secs_f64() / successful_encodes as f64;
-            let avg_rgb_to_yuv = total_rgb_to_yuv_dur.as_secs_f64() / successful_encodes as f64;
+            let avg_rgba_to_yuv = total_rgba_to_yuv_dur.as_secs_f64() / successful_encodes as f64;
             let avg_rgb = total_rgb_dur.as_secs_f64() / successful_encodes as f64;
             let avg_encode = total_encode_dur.as_secs_f64() / successful_encodes as f64;
             let avg_pack = total_pack_dur.as_secs_f64() / successful_encodes as f64;
@@ -433,10 +401,9 @@ fn start_encode_worker() -> (
                 total_result_queue_wait_dur.as_secs_f64() / successful_encodes as f64;
             let total_processing = total_rgb_dur + total_encode_dur + total_pack_dur;
             info!(
-                "encoder worker: final stats [{} frames]: total_rgba_to_rgb={:.3}s total_rgb_to_yuv={:.3}s total_rgb={:.3}s total_encode={:.3}s total_pack={:.3}s total_queue={:.3}s (preprocess_queue={:.3}s result_queue={:.3}s)",
+                "encoder worker: final stats [{} frames]: total_rgba_to_yuv={:.3}s total_rgb={:.3}s total_encode={:.3}s total_pack={:.3}s total_queue={:.3}s (preprocess_queue={:.3}s result_queue={:.3}s)",
                 successful_encodes,
-                total_rgba_to_rgb_dur.as_secs_f64(),
-                total_rgb_to_yuv_dur.as_secs_f64(),
+                total_rgba_to_yuv_dur.as_secs_f64(),
                 total_rgb_dur.as_secs_f64(),
                 total_encode_dur.as_secs_f64(),
                 total_pack_dur.as_secs_f64(),
@@ -445,9 +412,8 @@ fn start_encode_worker() -> (
                 total_result_queue_wait_dur.as_secs_f64()
             );
             info!(
-                "encoder worker: avg per frame: rgba_to_rgb={:.3}ms rgb_to_yuv={:.3}ms rgb={:.3}ms encode={:.3}ms pack={:.3}ms queue={:.3}ms (preprocess_queue={:.3}ms result_queue={:.3}ms) total={:.3}ms",
-                avg_rgba_to_rgb * 1000.0,
-                avg_rgb_to_yuv * 1000.0,
+                "encoder worker: avg per frame: rgba_to_yuv={:.3}ms rgb={:.3}ms encode={:.3}ms pack={:.3}ms queue={:.3}ms (preprocess_queue={:.3}ms result_queue={:.3}ms) total={:.3}ms",
+                avg_rgba_to_yuv * 1000.0,
                 avg_rgb * 1000.0,
                 avg_encode * 1000.0,
                 avg_pack * 1000.0,
@@ -457,16 +423,13 @@ fn start_encode_worker() -> (
                 (avg_rgb + avg_encode + avg_pack) * 1000.0
             );
             if total_processing.as_secs_f64() > 0.0 {
-                let rgba_to_rgb_pct =
-                    (total_rgba_to_rgb_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0;
-                let rgb_to_yuv_pct =
-                    (total_rgb_to_yuv_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0;
+                let rgba_to_yuv_pct =
+                    (total_rgba_to_yuv_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0;
                 let rgb_pct =
                     (total_rgb_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0;
                 info!(
-                    "encoder worker: processing time distribution: rgba_to_rgb={:.1}% rgb_to_yuv={:.1}% rgb={:.1}% encode={:.1}% pack={:.1}%",
-                    rgba_to_rgb_pct,
-                    rgb_to_yuv_pct,
+                    "encoder worker: processing time distribution: rgba_to_yuv={:.1}% rgb={:.1}% encode={:.1}% pack={:.1}%",
+                    rgba_to_yuv_pct,
                     rgb_pct,
                     (total_encode_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0,
                     (total_pack_dur.as_secs_f64() / total_processing.as_secs_f64()) * 100.0

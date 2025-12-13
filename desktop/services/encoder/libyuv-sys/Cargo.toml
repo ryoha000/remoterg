@@ -1,0 +1,15 @@
+[package]
+name = "libyuv-sys"
+version.workspace = true
+edition.workspace = true
+links = "yuv"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.69"
+cc = "1.0"
+cmake = "0.1"
+
+

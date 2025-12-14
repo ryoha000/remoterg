@@ -1,17 +1,31 @@
 #[cfg(all(windows, feature = "h264"))]
 #[cfg(test)]
 mod tests {
-    use crate::h264::mmf::mf::{
-        check_mf_available, find_h264_encoder, init_media_foundation,
-        MediaFoundationH264EncoderFactory,
-    };
+    use crate::h264::mmf::mf::{check_mf_available, find_h264_encoder, init_media_foundation};
+    use crate::h264::mmf::MediaFoundationH264EncoderFactory;
     use core_types::{EncodeJob, VideoCodec, VideoEncoderFactory};
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::Once,
+        time::{Duration, Instant},
+    };
     use tokio::time::timeout;
+
+    static INIT_TRACING: Once = Once::new();
+
+    /// tracingを初期化（テスト実行時に一度だけ実行される）
+    fn init_tracing() {
+        INIT_TRACING.call_once(|| {
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .init();
+        });
+    }
 
     /// Media Foundationの初期化が成功することを確認
     #[test]
     fn test_init_media_foundation() {
+        init_tracing();
         let result = init_media_foundation();
         assert!(result, "Media Foundation should initialize successfully");
     }
@@ -19,6 +33,7 @@ mod tests {
     /// H.264エンコーダーMFTが検索できることを確認
     #[test]
     fn test_find_h264_encoder() {
+        init_tracing();
         // Media Foundationを初期化
         assert!(
             init_media_foundation(),
@@ -39,6 +54,7 @@ mod tests {
     /// Media Foundationが利用可能かチェックできることを確認
     #[test]
     fn test_check_mf_available() {
+        init_tracing();
         let available = check_mf_available();
         assert!(
             available,
@@ -49,6 +65,7 @@ mod tests {
     /// Media Foundation H.264エンコーダーファクトリが作成できることを確認
     #[test]
     fn test_factory_creation() {
+        init_tracing();
         let factory = MediaFoundationH264EncoderFactory::new();
         assert!(
             factory.use_media_foundation(),
@@ -60,6 +77,7 @@ mod tests {
     /// エンコードワーカーが起動できることを確認
     #[test]
     fn test_worker_startup() {
+        init_tracing();
         let factory = MediaFoundationH264EncoderFactory::new();
         assert!(
             factory.use_media_foundation(),
@@ -73,6 +91,7 @@ mod tests {
     /// 単一フレームのエンコードテスト
     #[tokio::test]
     async fn test_single_frame_encode() {
+        init_tracing();
         let factory = MediaFoundationH264EncoderFactory::new();
         assert!(
             factory.use_media_foundation(),
@@ -82,9 +101,10 @@ mod tests {
         let (senders, mut receiver) = factory.start_workers();
         let sender = &senders[0];
 
-        // テスト用のRGBA画像データを作成（64x64の赤い画像）
-        let width = 64u32;
-        let height = 64u32;
+        // テスト用のRGBA画像データを作成（320x240の赤い画像）
+        // 注: Media Foundation H.264エンコーダーは小さな解像度をサポートしていないため、320x240を使用
+        let width = 1920u32;
+        let height = 1080u32;
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for _ in 0..(width * height) {
             rgba.push(255); // R
@@ -139,6 +159,7 @@ mod tests {
     /// 複数フレームの連続エンコードテスト
     #[tokio::test]
     async fn test_multiple_frames_encode() {
+        init_tracing();
         let factory = MediaFoundationH264EncoderFactory::new();
         assert!(
             factory.use_media_foundation(),
@@ -148,8 +169,8 @@ mod tests {
         let (senders, mut receiver) = factory.start_workers();
         let sender = &senders[0];
 
-        let width = 128u32;
-        let height = 128u32;
+        let width = 1920u32;
+        let height = 1080u32;
         let frame_count = 5;
 
         // 複数のフレームを送信
@@ -206,6 +227,7 @@ mod tests {
     /// 異なるサイズのフレームエンコードテスト
     #[tokio::test]
     async fn test_different_sizes_encode() {
+        init_tracing();
         let factory = MediaFoundationH264EncoderFactory::new();
         assert!(
             factory.use_media_foundation(),
@@ -215,7 +237,8 @@ mod tests {
         let (senders, mut receiver) = factory.start_workers();
         let sender = &senders[0];
 
-        let sizes = vec![(32, 32), (64, 64), (128, 128), (256, 256)];
+        // Media Foundation H.264エンコーダーがサポートする解像度を使用
+        let sizes = vec![(320, 240), (640, 480), (1280, 720)];
 
         for (width, height) in sizes {
             let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -256,6 +279,7 @@ mod tests {
     /// エンコード結果がH.264形式であることを確認（NALユニットの検証）
     #[tokio::test]
     async fn test_h264_format_validation() {
+        init_tracing();
         let factory = MediaFoundationH264EncoderFactory::new();
         assert!(
             factory.use_media_foundation(),
@@ -265,8 +289,8 @@ mod tests {
         let (senders, mut receiver) = factory.start_workers();
         let sender = &senders[0];
 
-        let width = 64u32;
-        let height = 64u32;
+        let width = 320u32;
+        let height = 240u32;
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for _ in 0..(width * height) {
             rgba.push(128); // R
@@ -318,6 +342,7 @@ mod tests {
     /// キーフレーム（SPS/PPSを含む）の生成を確認
     #[tokio::test]
     async fn test_keyframe_generation() {
+        init_tracing();
         let factory = MediaFoundationH264EncoderFactory::new();
         assert!(
             factory.use_media_foundation(),
@@ -327,8 +352,8 @@ mod tests {
         let (senders, mut receiver) = factory.start_workers();
         let sender = &senders[0];
 
-        let width = 64u32;
-        let height = 64u32;
+        let width = 320u32;
+        let height = 240u32;
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for _ in 0..(width * height) {
             rgba.push(255); // R

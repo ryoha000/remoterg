@@ -323,9 +323,9 @@ mod tests {
                 if i + 5 <= result.sample_data.len() {
                     // NALタイプを確認（下位5ビット）
                     let nal_type = result.sample_data[i + 4] & 0x1F;
-                    // 有効なNALタイプ: 1-5 (非IDR/IDRピクチャ), 6 (SEI), 7 (SPS), 8 (PPS)
+                    // 有効なNALタイプ: 1-5 (非IDR/IDRピクチャ), 6 (SEI), 7 (SPS), 8 (PPS), 9 (AUD)
                     assert!(
-                        nal_type >= 1 && nal_type <= 8,
+                        nal_type >= 1 && nal_type <= 9,
                         "Invalid NAL unit type: {}",
                         nal_type
                     );

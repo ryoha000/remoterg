@@ -85,7 +85,12 @@ async fn main() -> Result<()> {
     }
     #[cfg(feature = "h264")]
     {
-        encoder_factories.insert(VideoCodec::H264, Arc::new(OpenH264EncoderFactory::new()));
+        use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+
+        encoder_factories.insert(
+            VideoCodec::H264,
+            Arc::new(MediaFoundationH264EncoderFactory::new()),
+        );
     }
 
     // サービス作成

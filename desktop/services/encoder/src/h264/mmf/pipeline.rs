@@ -91,7 +91,6 @@ pub fn start_mf_encode_workers() -> (
         let mut encode_failures = 0u32;
         let mut empty_samples = 0u32;
         let mut successful_encodes = 0u32;
-        let mut dropped_frames = 0u32;
         let mut frame_timestamp = 0i64;
 
         // パフォーマンス統計用
@@ -103,8 +102,6 @@ pub fn start_mf_encode_workers() -> (
 
         // 入力/出力の対応付け用キュー
         let mut input_meta_queue: VecDeque<InputFrameMeta> = VecDeque::new();
-
-        const MAX_QUEUE_DRAIN: usize = 10;
 
         // イベントループを開始する前に、エンコーダーが初期化されている必要がある
         // 最初のフレームが来るまで待機
@@ -196,50 +193,24 @@ pub fn start_mf_encode_workers() -> (
                     #[allow(non_upper_case_globals)]
                     METransformNeedInput => {
                         // 参考実装に従い、NeedInput イベントが来たときにフレームを取得
+                        // 参考実装では blocking_recv() を使用しているが、テストの有限入力に対応するため
+                        // try_recv() を使用してブロックを避ける
                         let job = if let Some(job) = pending_job.take() {
                             job
                         } else {
-                            // キューから最新のフレームを取得（ドロップ処理）
-                            let mut job = match job_rx.recv() {
+                            // キューからFIFOで1件取得（ドロップしない）
+                            match job_rx.try_recv() {
                                 Ok(job) => job,
-                                Err(_) => {
+                                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                    // 入力が無い場合はそのままループ継続（HaveOutputイベントを処理できるようにする）
+                                    continue;
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                                     // チャンネルが閉じられた
                                     debug!("MF encoder worker: job channel closed");
                                     break;
                                 }
-                            };
-
-                            // キューに溜まっている古いフレームをスキップ
-                            let mut skipped_count = 0;
-                            loop {
-                                match job_rx.try_recv() {
-                                    Ok(newer_job) => {
-                                        if skipped_count < MAX_QUEUE_DRAIN {
-                                            skipped_count += 1;
-                                            job = newer_job;
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                        // チャンネルが閉じられた
-                                        break;
-                                    }
-                                }
                             }
-
-                            if skipped_count > 0 {
-                                dropped_frames += skipped_count as u32;
-                                if dropped_frames % 50 == 0 {
-                                    warn!(
-                                        "MF encoder worker: dropped {} frames due to queue backlog",
-                                        dropped_frames
-                                    );
-                                }
-                            }
-
-                            job
                         };
 
                         let recv_at = Instant::now();
@@ -293,6 +264,11 @@ pub fn start_mf_encode_workers() -> (
 
                             frame_timestamp = 0;
                             input_meta_queue.clear();
+
+                            // エンコーダー再初期化後は、次のNeedInputイベントが来るまで待つ必要がある
+                            // このフレームをpending_jobに保存して、次のNeedInputイベントで処理する
+                            pending_job = Some(job);
+                            continue;
                         }
 
                         // RGBA → BGRA 変換
@@ -562,8 +538,8 @@ pub fn start_mf_encode_workers() -> (
         }
 
         info!(
-            "MF encoder worker: exiting (successful: {}, failures: {}, empty samples: {}, dropped frames: {})",
-            successful_encodes, encode_failures, empty_samples, dropped_frames
+            "MF encoder worker: exiting (successful: {}, failures: {}, empty samples: {})",
+            successful_encodes, encode_failures, empty_samples
         );
     });
 

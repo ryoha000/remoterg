@@ -4,7 +4,7 @@ mod tests {
     use anyhow::{Context, Result};
     use capture::CaptureService;
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
-    use encoder::h264::mmf::mf::MediaFoundationH264EncoderFactory;
+    use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
     use encoder::vp8::Vp8EncoderFactory;
     use encoder::vp9::Vp9EncoderFactory;
     use std::path::PathBuf;

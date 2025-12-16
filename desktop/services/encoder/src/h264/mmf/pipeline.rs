@@ -1,6 +1,7 @@
-use core_types::{EncodeJob, EncodeResult};
+use core_types::{EncodeJobQueue, EncodeResult};
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{debug, info, warn};
@@ -60,18 +61,6 @@ fn annexb_from_mf_data(data: &[u8]) -> (Vec<u8>, bool) {
     (result, has_sps_pps)
 }
 
-/// RGBA を BGRA に変換（簡易実装）
-fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
-    let mut bgra = Vec::with_capacity(rgba.len());
-    for chunk in rgba.chunks_exact(4) {
-        bgra.push(chunk[2]); // B
-        bgra.push(chunk[1]); // G
-        bgra.push(chunk[0]); // R
-        bgra.push(chunk[3]); // A
-    }
-    bgra
-}
-
 /// 入力フレームのメタ情報（出力と対応付けるため）
 struct InputFrameMeta {
     duration: Duration,
@@ -81,10 +70,11 @@ struct InputFrameMeta {
 
 /// Media Foundationエンコードワーカーを起動
 pub fn start_mf_encode_workers() -> (
-    std::sync::mpsc::Sender<EncodeJob>,
+    Arc<EncodeJobQueue>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
-    let (job_tx, job_rx) = std::sync::mpsc::channel::<EncodeJob>();
+    let job_queue = EncodeJobQueue::new();
+    let job_queue_clone = Arc::clone(&job_queue);
     let (res_tx, res_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
     std::thread::spawn(move || {
@@ -105,13 +95,7 @@ pub fn start_mf_encode_workers() -> (
 
         // イベントループを開始する前に、エンコーダーが初期化されている必要がある
         // 最初のフレームが来るまで待機
-        let first_job = match job_rx.recv() {
-            Ok(job) => job,
-            Err(_) => {
-                info!("MF encoder worker: no jobs received, exiting");
-                return;
-            }
-        };
+        let first_job = job_queue_clone.take();
 
         // 最初のフレームで初期化
         let encode_width = (first_job.width / 2) * 2;
@@ -192,25 +176,13 @@ pub fn start_mf_encode_workers() -> (
                 match event_type {
                     #[allow(non_upper_case_globals)]
                     METransformNeedInput => {
-                        // 参考実装に従い、NeedInput イベントが来たときにフレームを取得
-                        // 参考実装では blocking_recv() を使用しているが、テストの有限入力に対応するため
-                        // try_recv() を使用してブロックを避ける
+                        // NeedInput イベントが来たときに最新のフレームを取得
+                        // try_take()でノンブロッキング取得（最新の1つだけ）
                         let job = if let Some(job) = pending_job.take() {
                             job
                         } else {
-                            // キューからFIFOで1件取得（ドロップしない）
-                            match job_rx.try_recv() {
-                                Ok(job) => job,
-                                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                                    // 入力が無い場合はそのままループ継続（HaveOutputイベントを処理できるようにする）
-                                    continue;
-                                }
-                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                    // チャンネルが閉じられた
-                                    debug!("MF encoder worker: job channel closed");
-                                    break;
-                                }
-                            }
+                            // 最新のフレームを取得（利用可能な場合のみ）
+                            job_queue_clone.take()
                         };
 
                         let recv_at = Instant::now();
@@ -271,24 +243,17 @@ pub fn start_mf_encode_workers() -> (
                             continue;
                         }
 
-                        // RGBA → BGRA 変換
-                        let bgra_data = rgba_to_bgra(&job.rgba);
-
-                        // 前処理（BGRA → NV12 テクスチャ）
+                        // 前処理（RGBA → NV12 テクスチャ）
                         let preprocess_start = Instant::now();
-                        let nv12_texture = match preprocessor.process(
-                            &bgra_data,
-                            width,
-                            height,
-                            frame_timestamp,
-                        ) {
-                            Ok(texture) => texture,
-                            Err(e) => {
-                                warn!("MF encoder worker: preprocess failed: {}", e);
-                                encode_failures += 1;
-                                continue;
-                            }
-                        };
+                        let nv12_texture =
+                            match preprocessor.process(&job.rgba, width, height, frame_timestamp) {
+                                Ok(texture) => texture,
+                                Err(e) => {
+                                    warn!("MF encoder worker: preprocess failed: {}", e);
+                                    encode_failures += 1;
+                                    continue;
+                                }
+                            };
                         let preprocess_dur = preprocess_start.elapsed();
 
                         // メタ情報をキューに保存
@@ -543,5 +508,5 @@ pub fn start_mf_encode_workers() -> (
         );
     });
 
-    (job_tx, res_rx)
+    (job_queue, res_rx)
 }

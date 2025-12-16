@@ -1,9 +1,9 @@
 use anyhow::Context;
-use core_types::{EncodeJob, EncodeResult, VideoCodec, VideoEncoderFactory};
+use core_types::{EncodeJobQueue, EncodeResult, VideoCodec, VideoEncoderFactory};
 use openh264::encoder::{BitRate, EncoderConfig, FrameRate, RateControlMode};
 use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
-use std::sync::mpsc;
+use std::sync::Arc;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{info, span, warn, Level};
 
@@ -22,7 +22,7 @@ impl VideoEncoderFactory for OpenH264EncoderFactory {
     fn setup(
         &self,
     ) -> (
-        mpsc::Sender<EncodeJob>,
+        Arc<EncodeJobQueue>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
         start_encode_workers()
@@ -35,10 +35,11 @@ impl VideoEncoderFactory for OpenH264EncoderFactory {
 
 /// OpenH264エンコードワーカーを生成（前処理→エンコードを直列実行）
 fn start_encode_worker() -> (
-    mpsc::Sender<EncodeJob>,
+    Arc<EncodeJobQueue>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
-    let (job_tx, job_rx) = mpsc::channel::<EncodeJob>();
+    let job_queue = EncodeJobQueue::new();
+    let job_queue_clone = Arc::clone(&job_queue);
     let (res_tx, res_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
     info!("Starting OpenH264 encoder with serial preprocessing");
@@ -52,35 +53,9 @@ fn start_encode_worker() -> (
         let mut empty_samples = 0u32;
         let mut successful_encodes = 0u32;
 
-        const MAX_QUEUE_DRAIN: usize = 10; // 一度にドレインする最大フレーム数
-
         loop {
-            // ジョブを受信（キューに溜まっている古いフレームをスキップ）
-            let mut job = match job_rx.recv() {
-                Ok(job) => job,
-                Err(_) => break, // チャネルが閉じられた
-            };
-
-            // キューに溜まっている古いフレームをスキップして、最新のフレームを取得
-            let mut skipped_count = 0;
-            loop {
-                match job_rx.try_recv() {
-                    Ok(newer_job) => {
-                        if skipped_count < MAX_QUEUE_DRAIN {
-                            skipped_count += 1;
-                            job = newer_job;
-                        } else {
-                            break;
-                        }
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        return;
-                    }
-                }
-            }
+            // ジョブを取得（ブロッキング、最新のフレームのみ）
+            let job = job_queue_clone.take();
 
             // OpenH264は幅と高さが2の倍数である必要があるため、2の倍数に調整
             let encode_width = (job.width / 2) * 2;
@@ -186,12 +161,12 @@ fn start_encode_worker() -> (
         );
     });
 
-    (job_tx, res_rx)
+    (job_queue, res_rx)
 }
 
 /// エンコードワーカーを起動する
 pub fn start_encode_workers() -> (
-    mpsc::Sender<EncodeJob>,
+    Arc<EncodeJobQueue>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
     // encoderの整合性を保つため、常に1つのワーカーのみを起動

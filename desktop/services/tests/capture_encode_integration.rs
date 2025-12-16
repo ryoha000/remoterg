@@ -64,9 +64,8 @@ mod tests {
 
         // 生データをそのまま書き込み
         for sample in samples {
-            file.write_all(sample).with_context(|| {
-                format!("ファイルへの書き込みに失敗: {}", filepath.display())
-            })?;
+            file.write_all(sample)
+                .with_context(|| format!("ファイルへの書き込みに失敗: {}", filepath.display()))?;
         }
 
         file.sync_all()
@@ -278,7 +277,7 @@ mod tests {
 
         // エンコーダーを初期化
         println!("エンコーダーを初期化中...");
-        let (job_tx, encode_result_rx) = encoder_factory.setup();
+        let (job_queue, encode_result_rx) = encoder_factory.setup();
         println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
@@ -381,10 +380,7 @@ mod tests {
                         enqueue_at: Instant::now(),
                     };
 
-                    if let Err(e) = job_tx.send(job) {
-                        eprintln!("エンコードジョブの送信に失敗: {}", e);
-                        continue;
-                    }
+                    job_queue.set(job);
 
                     // 進捗表示
                     if frame_count % 30 == 0 {
@@ -440,9 +436,6 @@ mod tests {
         // CaptureServiceが停止するまで少し待つ
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // すべてのジョブを送信したので、job_txをdropしてワーカーに終了を通知
-        drop(job_tx);
-
         println!("すべてのエンコードジョブを送信しました。結果を待機中...");
 
         // エンコード結果の受信タスクが完了するまで待つ
@@ -497,7 +490,7 @@ mod tests {
         let frame_count = frames.len();
 
         // エンコードワーカーを起動
-        let (job_tx, encode_result_rx) = encoder_factory.setup();
+        let (job_queue, encode_result_rx) = encoder_factory.setup();
         println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
@@ -573,10 +566,7 @@ mod tests {
                 enqueue_at: Instant::now(),
             };
 
-            if let Err(e) = job_tx.send(job) {
-                eprintln!("エンコードジョブの送信に失敗: {}", e);
-                continue;
-            }
+            job_queue.set(job);
 
             // 進捗表示
             if (idx + 1) % 100 == 0 {
@@ -590,9 +580,6 @@ mod tests {
 
         // すべてのジョブを送信したことを示すため、少し待つ
         println!("すべてのエンコードジョブを送信しました。結果を待機中...");
-
-        // すべてのジョブを送信したので、job_txをdropしてワーカーに終了を通知
-        drop(job_tx);
 
         println!("エンコード結果の受信を開始します...");
 
@@ -699,5 +686,4 @@ mod tests {
 
         Ok(())
     }
-
 }

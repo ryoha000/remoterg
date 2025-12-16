@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use tracing::debug;
 use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
-    IMFMediaEventGenerator, IMFMediaType, IMFTransform, MFCreateMediaType, MFMediaType_Video,
-    MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
-    MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount,
+    CODECAPI_AVLowLatencyMode, ICodecAPI, IMFMediaEventGenerator, IMFMediaType, IMFTransform,
+    MFCreateMediaType, MFMediaType_Video, MFVideoFormat_H264, MFVideoFormat_NV12,
+    MFVideoInterlace_Progressive, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY, MF_E_INVALIDMEDIATYPE,
-    MF_E_NO_MORE_TYPES,
+    MF_E_NO_MORE_TYPES, MF_LOW_LATENCY,
 };
 
 use crate::h264::mmf::d3d::D3D11Resources;
@@ -430,36 +431,35 @@ impl H264Encoder {
         }
     }
 
-    /// 低遅延属性を設定（ベストエフォート、失敗しても無視）
+    /// 低遅延属性を設定
     fn setup_low_latency_attributes(&self) -> Result<()> {
         unsafe {
             // Attributes を取得
-            let attributes = match self.transform.GetAttributes() {
-                Ok(attrs) => attrs,
-                Err(_) => {
-                    debug!("Encoder does not support attributes, skipping low latency setup");
-                    return Ok(());
-                }
-            };
-
-            // MF_LOW_LATENCY を設定（失敗しても無視）
-            let _ =
-                attributes.SetUINT32(&windows::Win32::Media::MediaFoundation::MF_LOW_LATENCY, 1);
-
-            // TODO: ICodecAPI の SetValue は windows-rs の API が異なる可能性があるため、
-            // 一旦コメントアウト。必要に応じて後で実装。
-            // 参考実装では SetValue を使用しているが、windows-rs の API を確認する必要がある。
-            /*
-            if let Ok(codec_api) = self.transform.cast::<windows::Win32::Media::MediaFoundation::ICodecAPI>() {
-                use windows::Win32::Media::MediaFoundation::{
-                    CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount,
-                    CODECAPI_AVLowLatencyMode,
-                };
-
-                // 失敗しても無視
-                let _ = codec_api.SetValue(...);
-            }
-            */
+            let attributes = self.transform.GetAttributes()?;
+            attributes
+                .SetUINT32(&MF_LOW_LATENCY, 1)
+                .map_err(|e| anyhow::anyhow!("Failed to set MF_LOW_LATENCY attribute: {}", e))?;
+            attributes
+                .SetUINT32(&CODECAPI_AVLowLatencyMode, 1)
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to set CODECAPI_AVLowLatencyMode attribute: {}", e)
+                })?;
+            attributes
+                .SetUINT32(&CODECAPI_AVEncCommonLowLatency, 1)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to set CODECAPI_AVEncCommonLowLatency attribute: {}",
+                        e
+                    )
+                })?;
+            attributes
+                .SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to set CODECAPI_AVEncMPVDefaultBPictureCount attribute: {}",
+                        e
+                    )
+                })?;
 
             Ok(())
         }

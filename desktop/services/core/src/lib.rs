@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver};
 
@@ -90,14 +91,54 @@ pub struct EncodeResult {
     pub height: u32,
 }
 
+/// エンコードジョブキュー（Dumb Workerパターン用）
+/// 最新のフレームのみを保持し、古いフレームは自動的にドロップされる
+#[derive(Debug)]
+pub struct EncodeJobQueue {
+    job: Mutex<Option<EncodeJob>>,
+    condvar: Condvar,
+}
+
+impl EncodeJobQueue {
+    /// 新しいキューを作成
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            job: Mutex::new(None),
+            condvar: Condvar::new(),
+        })
+    }
+
+    /// 最新のジョブをセット（古いものを置き換え）
+    /// 常に成功する（キューが満杯になることがない）
+    pub fn set(&self, job: EncodeJob) {
+        let mut guard = self.job.lock().unwrap();
+        *guard = Some(job);
+        self.condvar.notify_one();
+    }
+
+    /// ブロッキングでジョブを取得
+    /// ジョブが利用可能になるまで待機する
+    pub fn take(&self) -> EncodeJob {
+        let mut guard = self.job.lock().unwrap();
+        loop {
+            if let Some(job) = guard.take() {
+                return job;
+            }
+            guard = self.condvar.wait(guard).unwrap();
+        }
+    }
+
+    /// ノンブロッキングでジョブを取得
+    /// ジョブが利用可能な場合は`Some(EncodeJob)`を返し、そうでない場合は`None`を返す
+    pub fn try_take(&self) -> Option<EncodeJob> {
+        let mut guard = self.job.lock().unwrap();
+        guard.take()
+    }
+}
+
 /// エンコーダーファクトリ
 pub trait VideoEncoderFactory: Send + Sync {
-    fn setup(
-        &self,
-    ) -> (
-        std::sync::mpsc::Sender<EncodeJob>,
-        UnboundedReceiver<EncodeResult>,
-    );
+    fn setup(&self) -> (Arc<EncodeJobQueue>, UnboundedReceiver<EncodeResult>);
 
     /// 利用するビデオコーデック
     fn codec(&self) -> VideoCodec;

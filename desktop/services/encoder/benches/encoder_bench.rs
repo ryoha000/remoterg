@@ -1,6 +1,5 @@
-use core_types::{EncodeJob, VideoEncoderFactory};
-use criterion::async_executor::AsyncExecutor;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use core_types::{EncodeJob, EncodeResult, VideoEncoderFactory};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -141,56 +140,54 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
     width: u32,
     height: u32,
     pattern: FramePattern,
-    frame_count: usize,
-    is_send_batch: bool,
 ) {
     let pattern_str = pattern_name(pattern);
-    let benchmark_id = BenchmarkId::from_parameter(format!(
-        "{}x{}_{}_{}frames",
-        width, height, pattern_str, frame_count
-    ));
+    let benchmark_id = BenchmarkId::from_parameter(format!("{}x{}_{}", width, height, pattern_str));
 
     // 事前にフレームデータを生成
     let rgba_data = generate_rgba_data(width, height, pattern);
 
-    let mut group = c.benchmark_group(format!("encode_{}_multiple", encoder_name));
-    group.sample_size(10);
-    group.bench_with_input(benchmark_id, &rgba_data, move |b, rgba| {
-        // iter_batchedを使用: エンコーダーを一度だけ初期化し、その後フレームを連続してエンコード
-        b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                let (job_tx, mut res_rx) = factory.setup();
+    let (job_queue, res_rx) = factory.setup();
+    let res_rx = std::sync::Arc::new(tokio::sync::Mutex::new(res_rx));
+    let input = (&rgba_data, job_queue, res_rx);
 
-                // 測定対象: フレームエンコードのみ（初期化済みのエンコーダーを使用）
-                if is_send_batch {
-                    for i in 0..frame_count {
+    // 1回の計測（イテレーション）で処理するフレーム数（バッチサイズ）
+    // 動画エンコードは1フレームだと短すぎる場合があるため、ある程度まとめるのが一般的です
+    let batch_size: u64 = 30;
+
+    let mut group = c.benchmark_group(format!("encode_{}_multiple", encoder_name));
+    // ★ここが重要: 単位を「要素数（Elements）」に設定
+    group.throughput(Throughput::Elements(batch_size));
+    group.bench_with_input(
+        benchmark_id,
+        &input,
+        move |b,
+              input: &(
+            &Vec<u8>,
+            std::sync::Arc<core_types::EncodeJobQueue>,
+            std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>>>,
+        )| {
+            // iter_batchedを使用: エンコーダーを一度だけ初期化し、その後フレームを連続してエンコード
+            let job_queue = input.1.clone();
+            let res_rx = input.2.clone();
+            b.to_async(tokio::runtime::Runtime::new().unwrap())
+                .iter(|| async {
+                    // 測定対象: フレームエンコードのみ（初期化済みのエンコーダーを使用）
+                    let mut rx = res_rx.lock().await;
+                    for _i in 0..batch_size {
                         let job = EncodeJob {
                             width: black_box(width),
                             height: black_box(height),
-                            rgba: black_box(rgba.clone()),
+                            rgba: black_box(input.0.clone()),
                             duration: black_box(Duration::from_millis(33)),
                             enqueue_at: black_box(Instant::now()),
                         };
-                        job_tx.send(job).unwrap();
+                        job_queue.set(job);
+                        rx.recv().await.unwrap();
                     }
-                    for i in 0..frame_count {
-                        res_rx.recv().await.unwrap();
-                    }
-                } else {
-                    for i in 0..frame_count {
-                        let job = EncodeJob {
-                            width: black_box(width),
-                            height: black_box(height),
-                            rgba: black_box(rgba.clone()),
-                            duration: black_box(Duration::from_millis(33)),
-                            enqueue_at: black_box(Instant::now()),
-                        };
-                        job_tx.send(job).unwrap();
-                        res_rx.recv().await.unwrap();
-                    }
-                }
-            });
-    });
+                });
+        },
+    );
     group.finish();
 }
 
@@ -199,25 +196,8 @@ fn bench_openh264(c: &mut Criterion) {
     let factory = OpenH264EncoderFactory::new();
 
     // 複数フレームの連続エンコード（1080pのみ、代表的なパターン）
-    bench_encoder_multiple_frames(
-        c,
-        "openh264",
-        &factory,
-        1920,
-        1080,
-        FramePattern::Gradient,
-        100,
-        false,
-    );
-    // bench_encoder_multiple_frames(
-    //     c,
-    //     "openh264",
-    //     &factory,
-    //     1920,
-    //     1080,
-    //     FramePattern::Realistic,
-    //     10,
-    // );
+    bench_encoder_multiple_frames(c, "openh264", &factory, 1920, 1080, FramePattern::Gradient);
+    bench_encoder_multiple_frames(c, "openh264", &factory, 1920, 1080, FramePattern::Realistic);
 }
 
 #[cfg(all(feature = "h264", windows))]
@@ -231,22 +211,12 @@ fn bench_mmf(c: &mut Criterion) {
     }
 
     // 複数フレームの連続エンコード（1080pのみ、代表的なパターン）
-    bench_encoder_multiple_frames(
-        c,
-        "mmf",
-        &factory,
-        1920,
-        1080,
-        FramePattern::Gradient,
-        100,
-        true,
-    );
-    // bench_encoder_multiple_frames(c, "mmf", &factory, 1920, 1080, FramePattern::Realistic, 10);
+    bench_encoder_multiple_frames(c, "mmf", &factory, 1920, 1080, FramePattern::Gradient);
+    bench_encoder_multiple_frames(c, "mmf", &factory, 1920, 1080, FramePattern::Realistic);
 }
 
 #[cfg(all(feature = "h264", windows))]
-// criterion_group!(benches, bench_openh264, bench_mmf);
-criterion_group!(benches, bench_mmf);
+criterion_group!(benches, bench_openh264, bench_mmf);
 
 #[cfg(all(feature = "h264", not(windows)))]
 criterion_group!(benches, bench_openh264);

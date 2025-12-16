@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use core_types::{EncodeJob, EncodeResult, VideoCodec, VideoEncoderFactory};
+use core_types::{EncodeJob, EncodeJobQueue, EncodeResult, VideoCodec, VideoEncoderFactory};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -216,7 +216,7 @@ impl WebRtcService {
 
         let mut peer_connection: Option<Arc<RTCPeerConnection>> = None;
         let mut video_track_state: Option<VideoTrackState> = None;
-        let mut encode_job_tx: Option<std::sync::mpsc::Sender<EncodeJob>> = None;
+        let mut encode_job_queue: Option<Arc<EncodeJobQueue>> = None;
         let mut encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>> = None;
 
         let mut frame_count: u64 = 0;
@@ -264,8 +264,8 @@ impl WebRtcService {
                             let _process_frame_guard = process_frame_span.enter();
 
                             // Video trackが存在する場合、エンコードワーカーへジョブを送信
-                            if let (Some(track_state), Some(job_tx)) =
-                                (video_track_state.as_mut(), encode_job_tx.as_ref())
+                            if let (Some(track_state), Some(job_queue)) =
+                                (video_track_state.as_mut(), encode_job_queue.as_ref())
                             {
                                 // capture側のタイムスタンプ差分からフレーム間隔を推定（デフォルト22ms≒45fps）
                                 let frame_duration = if let Some(prev) = last_frame_ts {
@@ -301,7 +301,7 @@ impl WebRtcService {
                                 );
                                 let _queue_encode_job_guard = queue_encode_job_span.enter();
                                 let job_send_start = Instant::now();
-                                let send_result = job_tx.send(EncodeJob {
+                                job_queue.set(EncodeJob {
                                     width: frame.width,
                                     height: frame.height,
                                     rgba: frame.data,
@@ -311,19 +311,12 @@ impl WebRtcService {
                                 let job_send_dur = job_send_start.elapsed();
                                 drop(_queue_encode_job_guard);
 
-                                match send_result {
-                                    Ok(_) => {
-                                        frames_queued += 1;
-                                        if job_send_dur.as_millis() > 10 {
-                                        warn!(
-                                            "Encode job send took {}ms (queue may be full)",
-                                            job_send_dur.as_millis()
-                                        );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to queue encode job: {}", e);
-                                    }
+                                frames_queued += 1;
+                                if job_send_dur.as_millis() > 10 {
+                                    warn!(
+                                        "Encode job set took {}ms",
+                                        job_send_dur.as_millis()
+                                    );
                                 }
                             } else {
                                 frames_dropped_no_track += 1;
@@ -574,8 +567,8 @@ impl WebRtcService {
                             });
 
                             // エンコードワーカーを起動
-                            let (job_tx, res_rx) = encoder_factory.setup();
-                            encode_job_tx = Some(job_tx);
+                            let (job_queue, res_rx) = encoder_factory.setup();
+                            encode_job_queue = Some(job_queue);
                             encode_result_rx = Some(res_rx);
 
                             // SPS/PPSの送出はLocalDescription設定後、最初のフレーム処理時に実行

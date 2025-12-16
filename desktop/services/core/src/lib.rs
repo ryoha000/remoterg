@@ -94,12 +94,12 @@ pub struct EncodeResult {
     pub height: u32,
 }
 
-/// エンコーダーファクトリ（複数ワーカーを生成）
+/// エンコーダーファクトリ
 pub trait VideoEncoderFactory: Send + Sync {
-    fn start_workers(
+    fn setup(
         &self,
     ) -> (
-        Vec<std::sync::mpsc::Sender<EncodeJob>>,
+        std::sync::mpsc::Sender<EncodeJob>,
         UnboundedReceiver<EncodeResult>,
     );
 

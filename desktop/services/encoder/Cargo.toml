@@ -29,3 +29,10 @@ windows = { version = "0.62.2", optional = true, features = [
     "Win32_Graphics_Dxgi_Common",
 ] }
 
+[dev-dependencies]
+criterion = { version = "0.8.1", features = ["html_reports", "async_tokio"] }
+
+[[bench]]
+name = "encoder_bench"
+harness = false
+

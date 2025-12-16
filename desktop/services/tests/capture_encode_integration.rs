@@ -366,7 +366,7 @@ mod tests {
 
         // エンコーダーを初期化
         println!("エンコーダーを初期化中...");
-        let (job_txs, encode_result_rx) = encoder_factory.start_workers();
+        let (job_tx, encode_result_rx) = encoder_factory.setup();
         println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
@@ -432,7 +432,6 @@ mod tests {
         // パイプライン処理: キャプチャしながら逐次エンコード
         let capture_start = Instant::now();
         let mut frame_count = 0;
-        let mut encode_worker_index: usize = 0;
         let mut last_frame_ts: Option<u64> = None;
         let mut first_frame: Option<Frame> = None;
         let mut last_frame: Option<Frame> = None;
@@ -470,11 +469,7 @@ mod tests {
                         enqueue_at: Instant::now(),
                     };
 
-                    // ラウンドロビンでワーカーに振り分け
-                    let worker_idx = encode_worker_index % job_txs.len().max(1);
-                    encode_worker_index = encode_worker_index.wrapping_add(1);
-
-                    if let Err(e) = job_txs[worker_idx].send(job) {
+                    if let Err(e) = job_tx.send(job) {
                         eprintln!("エンコードジョブの送信に失敗: {}", e);
                         continue;
                     }
@@ -533,8 +528,8 @@ mod tests {
         // CaptureServiceが停止するまで少し待つ
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // すべてのジョブを送信したので、job_txsをdropしてワーカーに終了を通知
-        drop(job_txs);
+        // すべてのジョブを送信したので、job_txをdropしてワーカーに終了を通知
+        drop(job_tx);
 
         println!("すべてのエンコードジョブを送信しました。結果を待機中...");
 
@@ -590,7 +585,7 @@ mod tests {
         let frame_count = frames.len();
 
         // エンコードワーカーを起動
-        let (job_txs, encode_result_rx) = encoder_factory.start_workers();
+        let (job_tx, encode_result_rx) = encoder_factory.setup();
         println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
@@ -645,7 +640,6 @@ mod tests {
         // フレームを順次エンコード
         println!("フレームをエンコード中...");
         let encode_start = Instant::now();
-        let mut encode_worker_index: usize = 0;
         let mut last_frame_ts: Option<u64> = None;
 
         for (idx, frame) in frames.into_iter().enumerate() {
@@ -667,11 +661,7 @@ mod tests {
                 enqueue_at: Instant::now(),
             };
 
-            // ラウンドロビンでワーカーに振り分け
-            let worker_idx = encode_worker_index % job_txs.len().max(1);
-            encode_worker_index = encode_worker_index.wrapping_add(1);
-
-            if let Err(e) = job_txs[worker_idx].send(job) {
+            if let Err(e) = job_tx.send(job) {
                 eprintln!("エンコードジョブの送信に失敗: {}", e);
                 continue;
             }
@@ -689,8 +679,8 @@ mod tests {
         // すべてのジョブを送信したことを示すため、少し待つ
         println!("すべてのエンコードジョブを送信しました。結果を待機中...");
 
-        // すべてのジョブを送信したので、job_txsをdropしてワーカーに終了を通知
-        drop(job_txs);
+        // すべてのジョブを送信したので、job_txをdropしてワーカーに終了を通知
+        drop(job_tx);
 
         println!("エンコード結果の受信を開始します...");
 

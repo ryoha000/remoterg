@@ -1,6 +1,6 @@
 use anyhow::Context;
 use core_types::{EncodeJob, EncodeResult, VideoCodec, VideoEncoderFactory};
-use openh264::encoder::{BitRate, EncoderConfig, FrameRate};
+use openh264::encoder::{BitRate, EncoderConfig, FrameRate, RateControlMode};
 use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
 use std::sync::mpsc;
@@ -19,10 +19,10 @@ impl OpenH264EncoderFactory {
 }
 
 impl VideoEncoderFactory for OpenH264EncoderFactory {
-    fn start_workers(
+    fn setup(
         &self,
     ) -> (
-        Vec<mpsc::Sender<EncodeJob>>,
+        mpsc::Sender<EncodeJob>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
         start_encode_workers()
@@ -189,15 +189,14 @@ fn start_encode_worker() -> (
     (job_tx, res_rx)
 }
 
-/// エンコードワーカーを複数起動し、結果を1つのチャネルに集約する
+/// エンコードワーカーを起動する
 pub fn start_encode_workers() -> (
-    Vec<mpsc::Sender<EncodeJob>>,
+    mpsc::Sender<EncodeJob>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
     // encoderの整合性を保つため、常に1つのワーカーのみを起動
     // Pフレームが適切に参照フレームを参照できるようにする
-    let (job_tx, res_rx) = start_encode_worker();
-    (vec![job_tx], res_rx)
+    start_encode_worker()
 }
 
 fn create_encoder(width: u32, height: u32) -> anyhow::Result<openh264::encoder::Encoder> {
@@ -212,6 +211,8 @@ fn create_encoder(width: u32, height: u32) -> anyhow::Result<openh264::encoder::
         // skip_framesをfalseにして、できるだけすべてのフレームをエンコード
         // 実運用では、フレームをスキップせずにエンコードする方が品質が良い
         .skip_frames(false)
+        // Bufferbasedモードはフレームスキップが不要で、バッファ状態に基づいて品質を調整する
+        .rate_control_mode(RateControlMode::Bufferbased)
         .num_threads(num_threads);
     openh264::encoder::Encoder::with_api_config(OpenH264API::from_source(), encoder_config)
         .context("Failed to create OpenH264 encoder")

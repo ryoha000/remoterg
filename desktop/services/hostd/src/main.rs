@@ -16,6 +16,8 @@ use core_types::{
     VideoEncoderFactory,
 };
 #[cfg(feature = "h264")]
+use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+#[cfg(feature = "h264")]
 use encoder::h264::openh264::OpenH264EncoderFactory;
 #[cfg(feature = "vp8")]
 use encoder::vp8::Vp8EncoderFactory;
@@ -85,11 +87,10 @@ async fn main() -> Result<()> {
     }
     #[cfg(feature = "h264")]
     {
-        use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
-
         encoder_factories.insert(
             VideoCodec::H264,
-            Arc::new(MediaFoundationH264EncoderFactory::new()),
+            Arc::new(OpenH264EncoderFactory::new()),
+            // Arc::new(MediaFoundationH264EncoderFactory::new()),
         );
     }
 

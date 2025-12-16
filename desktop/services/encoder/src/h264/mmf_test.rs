@@ -84,8 +84,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (senders, _receiver) = factory.start_workers();
-        assert_eq!(senders.len(), 1, "Should have one worker sender");
+        let (_sender, _receiver) = factory.setup();
     }
 
     /// 単一フレームのエンコードテスト
@@ -98,8 +97,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (senders, mut receiver) = factory.start_workers();
-        let sender = &senders[0];
+        let (sender, mut receiver) = factory.setup();
 
         // テスト用のRGBA画像データを作成（320x240の赤い画像）
         // 注: Media Foundation H.264エンコーダーは小さな解像度をサポートしていないため、320x240を使用
@@ -166,8 +164,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (senders, mut receiver) = factory.start_workers();
-        let sender = &senders[0];
+        let (sender, mut receiver) = factory.setup();
 
         let width = 1920u32;
         let height = 1080u32;
@@ -234,8 +231,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (senders, mut receiver) = factory.start_workers();
-        let sender = &senders[0];
+        let (sender, mut receiver) = factory.setup();
 
         // Media Foundation H.264エンコーダーがサポートする解像度を使用
         let sizes = vec![(320, 240), (640, 480), (1280, 720)];
@@ -286,8 +282,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (senders, mut receiver) = factory.start_workers();
-        let sender = &senders[0];
+        let (sender, mut receiver) = factory.setup();
 
         let width = 320u32;
         let height = 240u32;
@@ -349,8 +344,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (senders, mut receiver) = factory.start_workers();
-        let sender = &senders[0];
+        let (sender, mut receiver) = factory.setup();
 
         let width = 320u32;
         let height = 240u32;

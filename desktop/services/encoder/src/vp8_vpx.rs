@@ -14,10 +14,10 @@ impl Vp8EncoderFactory {
 }
 
 impl VideoEncoderFactory for Vp8EncoderFactory {
-    fn start_workers(
+    fn setup(
         &self,
     ) -> (
-        Vec<std::sync::mpsc::Sender<EncodeJob>>,
+        std::sync::mpsc::Sender<EncodeJob>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
         start_vpx_encode_workers(CodecId::VP8, "vp8")

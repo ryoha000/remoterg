@@ -285,16 +285,15 @@ pub fn start_vpx_encode_worker(
     (job_tx, res_rx)
 }
 
-/// VPXエンコードワーカーを複数起動し、結果を1つのチャネルに集約する
+/// VPXエンコードワーカーを起動する
 pub fn start_vpx_encode_workers(
     codec_id: CodecId,
     codec_name: &'static str,
 ) -> (
-    Vec<std::sync::mpsc::Sender<EncodeJob>>,
+    std::sync::mpsc::Sender<EncodeJob>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
     // encoderの整合性を保つため、常に1つのワーカーのみを起動
     // Pフレームが適切に参照フレームを参照できるようにする
-    let (job_tx, res_rx) = start_vpx_encode_worker(codec_id, codec_name);
-    (vec![job_tx], res_rx)
+    start_vpx_encode_worker(codec_id, codec_name)
 }

@@ -46,10 +46,10 @@ impl MediaFoundationH264EncoderFactory {
 
 #[cfg(windows)]
 impl VideoEncoderFactory for MediaFoundationH264EncoderFactory {
-    fn start_workers(
+    fn setup(
         &self,
     ) -> (
-        Vec<std::sync::mpsc::Sender<EncodeJob>>,
+        std::sync::mpsc::Sender<EncodeJob>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
         if self.use_mf {

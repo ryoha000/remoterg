@@ -218,8 +218,7 @@ impl WebRtcService {
 
         let mut peer_connection: Option<Arc<RTCPeerConnection>> = None;
         let mut video_track_state: Option<VideoTrackState> = None;
-        let mut encode_job_txs: Option<Vec<std::sync::mpsc::Sender<EncodeJob>>> = None;
-        let mut encode_worker_index: usize = 0;
+        let mut encode_job_tx: Option<std::sync::mpsc::Sender<EncodeJob>> = None;
         let mut encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>> = None;
 
         let mut frame_count: u64 = 0;
@@ -267,8 +266,8 @@ impl WebRtcService {
                             let _process_frame_guard = process_frame_span.enter();
 
                             // Video trackが存在する場合、エンコードワーカーへジョブを送信
-                            if let (Some(track_state), Some(job_txs)) =
-                                (video_track_state.as_mut(), encode_job_txs.as_ref())
+                            if let (Some(track_state), Some(job_tx)) =
+                                (video_track_state.as_mut(), encode_job_tx.as_ref())
                             {
                                 // capture側のタイムスタンプ差分からフレーム間隔を推定（デフォルト22ms≒45fps）
                                 let frame_duration = if let Some(prev) = last_frame_ts {
@@ -297,19 +296,14 @@ impl WebRtcService {
                                     track_state.height = frame.height;
                                 }
 
-                                // ラウンドロビンでワーカーに振り分け
-                                let worker_idx = encode_worker_index % job_txs.len().max(1);
-                                encode_worker_index = encode_worker_index.wrapping_add(1);
-
                                 // エンコードジョブ送信を span で計測
                                 let queue_encode_job_span = span!(
                                     Level::DEBUG,
-                                    "queue_encode_job",
-                                    worker_idx = worker_idx
+                                    "queue_encode_job"
                                 );
                                 let _queue_encode_job_guard = queue_encode_job_span.enter();
                                 let job_send_start = Instant::now();
-                                let send_result = job_txs[worker_idx].send(EncodeJob {
+                                let send_result = job_tx.send(EncodeJob {
                                     width: frame.width,
                                     height: frame.height,
                                     rgba: frame.data,
@@ -323,15 +317,14 @@ impl WebRtcService {
                                     Ok(_) => {
                                         frames_queued += 1;
                                         if job_send_dur.as_millis() > 10 {
-                                            warn!(
-                                                "Encode job send took {}ms (worker_idx={}, queue may be full)",
-                                                job_send_dur.as_millis(),
-                                                worker_idx
-                                            );
+                                        warn!(
+                                            "Encode job send took {}ms (queue may be full)",
+                                            job_send_dur.as_millis()
+                                        );
                                         }
                                     }
                                     Err(e) => {
-                                        warn!("Failed to queue encode job: {} (worker_idx={})", e, worker_idx);
+                                        warn!("Failed to queue encode job: {}", e);
                                     }
                                 }
                             } else {
@@ -583,8 +576,8 @@ impl WebRtcService {
                             });
 
                             // エンコードワーカーを起動
-                            let (job_txs, res_rx) = encoder_factory.start_workers();
-                            encode_job_txs = Some(job_txs);
+                            let (job_tx, res_rx) = encoder_factory.setup();
+                            encode_job_tx = Some(job_tx);
                             encode_result_rx = Some(res_rx);
 
                             // SPS/PPSの送出はLocalDescription設定後、最初のフレーム処理時に実行

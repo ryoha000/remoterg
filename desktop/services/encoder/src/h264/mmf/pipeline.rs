@@ -81,7 +81,7 @@ struct InputFrameMeta {
 
 /// Media Foundationエンコードワーカーを起動
 pub fn start_mf_encode_workers() -> (
-    Vec<std::sync::mpsc::Sender<EncodeJob>>,
+    std::sync::mpsc::Sender<EncodeJob>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
     let (job_tx, job_rx) = std::sync::mpsc::channel::<EncodeJob>();
@@ -543,5 +543,5 @@ pub fn start_mf_encode_workers() -> (
         );
     });
 
-    (vec![job_tx], res_rx)
+    (job_tx, res_rx)
 }

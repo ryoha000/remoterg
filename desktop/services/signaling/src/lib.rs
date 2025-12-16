@@ -435,7 +435,7 @@ mod tests {
     fn test_signaling_message_serialization() {
         let offer = SignalingMessage::Offer {
             sdp: "test sdp".to_string(),
-            codec: Some("vp8".to_string()),
+            codec: Some("h264".to_string()),
         };
 
         let json = serde_json::to_string(&offer).unwrap();
@@ -446,7 +446,7 @@ mod tests {
         match deserialized {
             SignalingMessage::Offer { sdp, codec } => {
                 assert_eq!(sdp, "test sdp");
-                assert_eq!(codec, Some("vp8".to_string()));
+                assert_eq!(codec, Some("h264".to_string()));
             }
             _ => panic!("Expected Offer"),
         }

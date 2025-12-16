@@ -169,15 +169,7 @@
         <div class="codec-selector">
             <span class="label-text">コーデック:</span>
             <label>
-                <input type="radio" name="codec" value="vp8" id="codec-vp8" checked>
-                <span>VP8</span>
-            </label>
-            <label>
-                <input type="radio" name="codec" value="vp9" id="codec-vp9">
-                <span>VP9</span>
-            </label>
-            <label>
-                <input type="radio" name="codec" value="h264" id="codec-h264">
+                <input type="radio" name="codec" value="h264" id="codec-h264" checked>
                 <span>H.264</span>
             </label>
             <label>
@@ -222,18 +214,14 @@
         let frameCbCount = 0;                       // requestVideoFrameCallbackの呼び出し回数
         let candidateLogged = false;                // 選択候補のログ出力を一度だけ行う
         const urlParams = new URLSearchParams(window.location.search);
-        const defaultCodec = (urlParams.get('codec') || 'vp8').toLowerCase();
+        const defaultCodec = (urlParams.get('codec') || 'h264').toLowerCase();
         
         // codec選択UIの初期化
         const codecRadios = document.querySelectorAll('input[name="codec"]');
         let selectedCodec = defaultCodec;
         
         // URLパラメータがある場合は対応するラジオボタンを選択
-        if (defaultCodec === 'vp8') {
-            document.getElementById('codec-vp8').checked = true;
-        } else if (defaultCodec === 'vp9') {
-            document.getElementById('codec-vp9').checked = true;
-        } else if (defaultCodec === 'h264') {
+        if (defaultCodec === 'h264') {
             document.getElementById('codec-h264').checked = true;
         } else {
             document.getElementById('codec-any').checked = true;
@@ -532,10 +520,6 @@
                     c.mimeType === 'video/H264' &&
                     (c.sdpFmtpLine ?? '').includes('packetization-mode=1')
                 );
-            } else if (selectedCodec === 'vp9') {
-                applyCodecPreference('VP9', c => c.mimeType === 'video/VP9');
-            } else if (selectedCodec === 'vp8') {
-                applyCodecPreference('VP8', c => c.mimeType === 'video/VP8');
             } else {
                 log(`codec preferenceを適用せず (codec=${selectedCodec})`);
             }

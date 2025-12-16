@@ -16,13 +16,7 @@ use core_types::{
     VideoEncoderFactory,
 };
 #[cfg(feature = "h264")]
-use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
-#[cfg(feature = "h264")]
 use encoder::h264::openh264::OpenH264EncoderFactory;
-#[cfg(feature = "vp8")]
-use encoder::vp8::Vp8EncoderFactory;
-#[cfg(feature = "vp9")]
-use encoder::vp9::Vp9EncoderFactory;
 use input::InputService;
 use signaling::SignalingService;
 use webrtc::WebRtcService;
@@ -73,18 +67,10 @@ async fn main() -> Result<()> {
     let (signaling_response_tx, signaling_response_rx) = mpsc::channel::<SignalingResponse>(100);
     let (data_channel_tx, data_channel_rx) = mpsc::channel::<DataChannelMessage>(100);
 
-    #[cfg(all(not(feature = "vp9"), not(feature = "vp8"), not(feature = "h264")))]
-    compile_error!("At least one of vp9, vp8, or h264 feature must be enabled for hostd");
+    #[cfg(not(feature = "h264"))]
+    compile_error!("h264 feature must be enabled for hostd");
 
     let mut encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>> = HashMap::new();
-    #[cfg(feature = "vp9")]
-    {
-        encoder_factories.insert(VideoCodec::Vp9, Arc::new(Vp9EncoderFactory::new()));
-    }
-    #[cfg(feature = "vp8")]
-    {
-        encoder_factories.insert(VideoCodec::Vp8, Arc::new(Vp8EncoderFactory::new()));
-    }
     #[cfg(feature = "h264")]
     {
         encoder_factories.insert(

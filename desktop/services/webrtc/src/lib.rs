@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, span, warn, Level};
 use webrtc_rs::api::interceptor_registry::register_default_interceptors;
-use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_VP8, MIME_TYPE_VP9};
+use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264};
 use webrtc_rs::api::setting_engine::SettingEngine;
 use webrtc_rs::api::APIBuilder;
 use webrtc_rs::data_channel::data_channel_message::DataChannelMessage as RTCDataChannelMessage;
@@ -142,8 +142,6 @@ fn format_ice_candidate(candidate: &RTCIceCandidate) -> String {
 fn codec_to_mime_type(codec: VideoCodec) -> String {
     match codec {
         VideoCodec::H264 => MIME_TYPE_H264.to_owned(),
-        VideoCodec::Vp8 => MIME_TYPE_VP8.to_string(),
-        VideoCodec::Vp9 => MIME_TYPE_VP9.to_string(),
     }
 }
 
@@ -182,7 +180,7 @@ impl WebRtcService {
             }
         }
 
-        for codec in [VideoCodec::Vp9, VideoCodec::Vp8, VideoCodec::H264] {
+        for codec in [VideoCodec::H264] {
             if let Some(factory) = self.encoder_factories.get(&codec) {
                 return Ok((factory.clone(), codec));
             }

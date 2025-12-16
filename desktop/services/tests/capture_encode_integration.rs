@@ -5,8 +5,6 @@ mod tests {
     use capture::CaptureService;
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
     use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
-    use encoder::vp8::Vp8EncoderFactory;
-    use encoder::vp9::Vp9EncoderFactory;
     use std::path::PathBuf;
     use std::sync::Once;
     use std::time::{Duration, Instant};
@@ -30,69 +28,6 @@ mod tests {
     /// テスト用のデスクトップウィンドウのHWNDを取得
     unsafe fn get_desktop_window() -> HWND {
         GetDesktopWindow()
-    }
-
-    /// IVFフォーマットでVP8/VP9ストリームを保存
-    fn save_ivf_stream(
-        samples: &[Vec<u8>],
-        width: u32,
-        height: u32,
-        codec_id: u32, // 0 = VP8, 1 = VP9
-    ) -> Result<Vec<u8>> {
-        use std::io::Write;
-        let mut buffer = Vec::new();
-
-        // IVFファイルヘッダー（32バイト）
-        buffer.write_all(b"DKIF")?; // シグネチャ
-        buffer.write_all(&0u16.to_le_bytes())?; // バージョン
-        buffer.write_all(&32u16.to_le_bytes())?; // ヘッダーサイズ
-                                                 // コーデックIDは4バイトのASCII文字列（"VP80" for VP8, "VP90" for VP9）
-        let codec_str = if codec_id == 0 { b"VP80" } else { b"VP90" };
-        buffer.write_all(codec_str)?; // コーデックID
-        buffer.write_all(&(width as u16).to_le_bytes())?; // 幅（2バイト）
-        buffer.write_all(&(height as u16).to_le_bytes())?; // 高さ（2バイト）
-        buffer.write_all(&60u32.to_le_bytes())?; // タイムベース（分母）
-        buffer.write_all(&1u32.to_le_bytes())?; // タイムベース（分子）
-        buffer.write_all(&(samples.len() as u64).to_le_bytes())?; // フレーム数
-        buffer.write_all(&0u32.to_le_bytes())?; // 予約領域
-
-        // 各フレームのヘッダーとデータ
-        let mut frame_index = 0;
-        let mut total_frame_size = 0;
-        let mut max_frame_size = 0;
-        for sample in samples {
-            let frame_size = sample.len() as u32;
-            total_frame_size += frame_size as u64;
-            max_frame_size = max_frame_size.max(frame_size);
-
-            // 異常に大きなフレームを検出
-            if frame_size > 10_000_000 {
-                eprintln!(
-                    "警告: フレーム {} のサイズが異常に大きいです: {} bytes",
-                    frame_index, frame_size
-                );
-                if sample.len() >= 4 {
-                    eprintln!(
-                        "  最初の4バイト: {:02x} {:02x} {:02x} {:02x}",
-                        sample[0], sample[1], sample[2], sample[3]
-                    );
-                }
-            }
-
-            buffer.write_all(&frame_size.to_le_bytes())?; // フレームサイズ
-            buffer.write_all(&0u64.to_le_bytes())?; // タイムスタンプ（未使用）
-            buffer.write_all(sample)?; // フレームデータ
-            frame_index += 1;
-        }
-
-        println!(
-            "  IVF統計: フレーム数={}, 最大フレームサイズ={} bytes, 総フレームサイズ={} bytes",
-            samples.len(),
-            max_frame_size,
-            total_frame_size
-        );
-
-        Ok(buffer)
     }
 
     /// エンコード結果をrawストリームとして保存
@@ -127,19 +62,11 @@ mod tests {
 
         use std::io::Write;
 
-        // IVFフォーマットの場合はIVFコンテナでラップ
-        if file_extension == "ivf" {
-            let codec_id = if codec_name == "VP8" { 0u32 } else { 1u32 };
-            let ivf_data = save_ivf_stream(samples, width, height, codec_id)?;
-            file.write_all(&ivf_data)
-                .with_context(|| format!("ファイルへの書き込みに失敗: {}", filepath.display()))?;
-        } else {
-            // その他のフォーマットは生データをそのまま書き込み
-            for sample in samples {
-                file.write_all(sample).with_context(|| {
-                    format!("ファイルへの書き込みに失敗: {}", filepath.display())
-                })?;
-            }
+        // 生データをそのまま書き込み
+        for sample in samples {
+            file.write_all(sample).with_context(|| {
+                format!("ファイルへの書き込みに失敗: {}", filepath.display())
+            })?;
         }
 
         file.sync_all()
@@ -172,23 +99,8 @@ mod tests {
             actual_fps
         };
 
-        // VP8/VP9の場合はWebMコンテナを使用、H.264の場合はMP4を使用
-        if file_extension == "ivf" {
-            // VP8/VP9の場合はWebMコンテナを使用
-            let webm_path = filepath
-                .display()
-                .to_string()
-                .replace(file_extension, "webm");
-            println!("  ffmpegでWebMに変換する際は、以下のコマンドを使用してください:");
-            println!(
-                "  ffmpeg -r {:.2} -i {} -c:v copy -r {:.2} -y {}",
-                output_fps,
-                filepath.display(),
-                output_fps,
-                webm_path
-            );
-        } else {
-            // H.264の場合はMP4コンテナを使用
+        // H.264の場合はMP4コンテナを使用
+        if file_extension == "h264" || file_extension == "264" {
             let mp4_path = filepath
                 .display()
                 .to_string()
@@ -788,131 +700,4 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_capture_encode_integration_vp8() -> Result<()> {
-        init_tracing();
-        // エンコーダーファクトリを作成
-        let encoder_factory = Vp8EncoderFactory::new();
-
-        // フレームをキャプチャ
-        let capture_duration = Duration::from_secs(15);
-        let (frames, width, height, actual_duration_sec, service_handle) =
-            capture_frames(capture_duration).await?;
-
-        // フレームをエンコード
-        let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, frames).await?;
-
-        // 統計情報を出力
-        println!(
-            "  実際のキャプチャ時間（タイムスタンプ差分）: {:.2}秒",
-            actual_duration_sec
-        );
-        println!(
-            "  プレーヤーが推測する再生時間（30fps想定）: {:.2}秒",
-            encoded_count as f32 / 30.0
-        );
-        println!(
-            "  プレーヤーが推測する再生時間（60fps想定）: {:.2}秒",
-            encoded_count as f32 / 60.0
-        );
-
-        // durationの合計と実際のキャプチャ時間を比較
-        if total_video_duration.as_secs_f32() < actual_duration_sec * 0.8 {
-            println!(
-                "  警告: duration合計 ({:.2}秒) が実際のキャプチャ時間 ({:.2}秒) より大幅に短いです。",
-                total_video_duration.as_secs_f32(),
-                actual_duration_sec
-            );
-            println!("  フレーム間隔の計算に問題がある可能性があります。");
-        }
-
-        // 実際のフレームレートを計算
-        let actual_fps = if actual_duration_sec > 0.0 {
-            encoded_count as f32 / actual_duration_sec
-        } else {
-            0.0
-        };
-
-        // VP8ストリームとして保存
-        save_encoded_stream(
-            &samples,
-            width,
-            height,
-            actual_fps,
-            actual_duration_sec,
-            encoded_count,
-            "VP8",
-            "ivf",
-        )?;
-
-        // サービスが正常に終了することを確認
-        let _ = timeout(Duration::from_secs(2), service_handle).await;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_capture_encode_integration_vp9() -> Result<()> {
-        init_tracing();
-        // エンコーダーファクトリを作成
-        let encoder_factory = Vp9EncoderFactory::new();
-
-        // フレームをキャプチャ
-        let capture_duration = Duration::from_secs(15);
-        let (frames, width, height, actual_duration_sec, service_handle) =
-            capture_frames(capture_duration).await?;
-
-        // フレームをエンコード
-        let (samples, encoded_count, total_video_duration) =
-            encode_frames(&encoder_factory, frames).await?;
-
-        // 統計情報を出力
-        println!(
-            "  実際のキャプチャ時間（タイムスタンプ差分）: {:.2}秒",
-            actual_duration_sec
-        );
-        println!(
-            "  プレーヤーが推測する再生時間（30fps想定）: {:.2}秒",
-            encoded_count as f32 / 30.0
-        );
-        println!(
-            "  プレーヤーが推測する再生時間（60fps想定）: {:.2}秒",
-            encoded_count as f32 / 60.0
-        );
-
-        // durationの合計と実際のキャプチャ時間を比較
-        if total_video_duration.as_secs_f32() < actual_duration_sec * 0.8 {
-            println!(
-                "  警告: duration合計 ({:.2}秒) が実際のキャプチャ時間 ({:.2}秒) より大幅に短いです。",
-                total_video_duration.as_secs_f32(),
-                actual_duration_sec
-            );
-            println!("  フレーム間隔の計算に問題がある可能性があります。");
-        }
-
-        // 実際のフレームレートを計算
-        let actual_fps = if actual_duration_sec > 0.0 {
-            encoded_count as f32 / actual_duration_sec
-        } else {
-            0.0
-        };
-
-        // VP9ストリームとして保存
-        save_encoded_stream(
-            &samples,
-            width,
-            height,
-            actual_fps,
-            actual_duration_sec,
-            encoded_count,
-            "VP9",
-            "ivf",
-        )?;
-
-        // サービスが正常に終了することを確認
-        let _ = timeout(Duration::from_secs(2), service_handle).await;
-
-        Ok(())
-    }
 }

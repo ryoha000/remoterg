@@ -24,8 +24,6 @@ core-types = { path = "../core" }
 clap = { version = "4.5", features = ["derive"] }
 
 [features]
-default = ["vp8", "vp9", "h264"]
+default = ["h264"]
 h264 = ["encoder/h264"]
-vp8 = ["encoder/vp8"]
-vp9 = ["encoder/vp9"]
 mock = ["capturemock"]

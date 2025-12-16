@@ -2,11 +2,17 @@ use anyhow::{Context, Result};
 use std::mem::ManuallyDrop;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{
+    ID3D11ComputeShader, ID3D11ShaderResourceView, ID3D11UnorderedAccessView,
+    D3D11_BIND_UNORDERED_ACCESS,
+};
+use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Media::MediaFoundation::{
     IMFDXGIBuffer, IMFTransform, MFCreateDXGISurfaceBuffer, MFCreateMediaType, MFCreateSample,
     MFMediaType_Video, MFVideoFormat_ARGB32, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
@@ -16,14 +22,18 @@ use windows::Win32::Media::MediaFoundation::{
 
 use crate::h264::mmf::d3d::D3D11Resources;
 
-/// Video Processor MFT による前処理（BGRA → NV12 + リサイズ）
+/// Video Processor MFT による前処理（RGBA → BGRA → NV12 + リサイズ）
 pub struct VideoProcessorPreprocessor {
     transform: IMFTransform,
     d3d_resources: D3D11Resources,
     width: u32,
     height: u32,
-    input_texture: Option<ID3D11Texture2D>,
+    rgba_texture: Option<ID3D11Texture2D>,
+    bgra_texture: Option<ID3D11Texture2D>,
     output_texture: Option<ID3D11Texture2D>,
+    rgba_srv: Option<ID3D11ShaderResourceView>,
+    bgra_uav: Option<ID3D11UnorderedAccessView>,
+    compute_shader: Option<ID3D11ComputeShader>,
 }
 
 impl VideoProcessorPreprocessor {
@@ -41,8 +51,12 @@ impl VideoProcessorPreprocessor {
                 d3d_resources,
                 width,
                 height,
-                input_texture: None,
+                rgba_texture: None,
+                bgra_texture: None,
                 output_texture: None,
+                rgba_srv: None,
+                bgra_uav: None,
+                compute_shader: None,
             };
 
             // メディアタイプを設定
@@ -179,26 +193,168 @@ impl VideoProcessorPreprocessor {
         if self.width != width || self.height != height {
             self.width = width;
             self.height = height;
-            self.input_texture = None;
+            self.rgba_texture = None;
+            self.bgra_texture = None;
             self.output_texture = None;
+            self.rgba_srv = None;
+            self.bgra_uav = None;
             self.setup_media_types(width, height)
                 .context("Failed to resize Video Processor")?;
         }
         Ok(())
     }
 
-    /// BGRA データを D3D11 テクスチャにアップロード
-    fn upload_bgra_to_texture(
+    /// Compute Shaderを作成
+    fn create_compute_shader(&mut self) -> Result<()> {
+        if self.compute_shader.is_some() {
+            return Ok(());
+        }
+
+        unsafe {
+            // HLSL Compute Shaderコード（RGBA→BGRA変換）
+            let shader_code = r#"
+                Texture2D<float4> rgba_texture : register(t0);
+                RWTexture2D<float4> bgra_texture : register(u0);
+
+                [numthreads(8, 8, 1)]
+                void CSMain(uint3 id : SV_DispatchThreadID)
+                {
+                    float4 rgba = rgba_texture[id.xy];
+                    // RGBA (R, G, B, A) -> BGRA (B, G, R, A)
+                    bgra_texture[id.xy] = float4(rgba.b, rgba.g, rgba.r, rgba.a);
+                }
+            "#;
+
+            use windows::core::PCSTR;
+            use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+            use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_OPTIMIZATION_LEVEL3;
+
+            let shader_code_bytes = shader_code.as_bytes();
+            let entry_point_bytes = b"CSMain\0";
+            let target_bytes = b"cs_5_0\0";
+            let entry_point = PCSTR(entry_point_bytes.as_ptr());
+            let target = PCSTR(target_bytes.as_ptr());
+
+            let mut compiled_shader: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
+            let mut error_blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
+
+            let result = D3DCompile(
+                shader_code_bytes.as_ptr() as _,
+                shader_code_bytes.len(),
+                None,
+                None,
+                None,
+                entry_point,
+                target,
+                D3DCOMPILE_OPTIMIZATION_LEVEL3 as u32,
+                0,
+                &mut compiled_shader,
+                Some(&mut error_blob),
+            );
+
+            if result.is_err() {
+                let error_msg = if let Some(blob) = error_blob.as_ref() {
+                    let ptr = blob.GetBufferPointer();
+                    let len = blob.GetBufferSize();
+                    std::str::from_utf8(std::slice::from_raw_parts(ptr as *const u8, len as usize))
+                        .unwrap_or("Unknown error")
+                } else {
+                    "Unknown error"
+                };
+                return Err(anyhow::anyhow!(
+                    "Failed to compile compute shader: {}",
+                    error_msg
+                ));
+            }
+
+            let compiled_shader = compiled_shader.ok_or_else(|| {
+                anyhow::anyhow!("Failed to compile compute shader: compiled_shader is None")
+            })?;
+
+            let buffer_ptr = compiled_shader.GetBufferPointer();
+            let buffer_size = compiled_shader.GetBufferSize();
+            let shader_bytes = std::slice::from_raw_parts(buffer_ptr as *const u8, buffer_size);
+
+            let mut compute_shader: Option<ID3D11ComputeShader> = None;
+            self.d3d_resources
+                .device
+                .CreateComputeShader(shader_bytes, None, Some(&mut compute_shader))
+                .ok()
+                .context("Failed to create compute shader")?;
+
+            self.compute_shader = compute_shader;
+            Ok(())
+        }
+    }
+
+    /// RGBA データを D3D11 テクスチャにアップロード
+    fn upload_rgba_to_texture(
         &mut self,
-        bgra_data: &[u8],
+        rgba_data: &[u8],
         width: u32,
         height: u32,
     ) -> Result<ID3D11Texture2D> {
         unsafe {
             // テクスチャが存在しないか、サイズが異なる場合は再作成
-            let needs_recreate = self.input_texture.is_none() || {
+            let needs_recreate = self.rgba_texture.is_none() || {
                 let mut desc = D3D11_TEXTURE2D_DESC::default();
-                self.input_texture.as_ref().unwrap().GetDesc(&mut desc);
+                self.rgba_texture.as_ref().unwrap().GetDesc(&mut desc);
+                desc.Width != width || desc.Height != height
+            };
+
+            if needs_recreate {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: width,
+                    Height: height,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_UNORDERED_ACCESS.0)
+                        as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                };
+
+                let mut texture: Option<ID3D11Texture2D> = None;
+                self.d3d_resources
+                    .device
+                    .CreateTexture2D(&desc, None, Some(&mut texture))
+                    .ok()
+                    .context("Failed to create RGBA texture")?;
+
+                self.rgba_texture = texture;
+            }
+
+            let texture = self.rgba_texture.as_ref().unwrap();
+
+            // CPU から GPU へデータをアップロード
+            let row_pitch = width * 4; // RGBA = 4 bytes per pixel
+            let depth_pitch = row_pitch * height;
+
+            self.d3d_resources.context.UpdateSubresource(
+                texture,
+                0,
+                None,
+                rgba_data.as_ptr() as _,
+                row_pitch as u32,
+                depth_pitch as u32,
+            );
+
+            Ok(texture.clone())
+        }
+    }
+
+    /// BGRA テクスチャを作成（GPU側でRGBA→BGRA変換を行う）
+    fn create_bgra_texture(&mut self, width: u32, height: u32) -> Result<ID3D11Texture2D> {
+        unsafe {
+            let needs_recreate = self.bgra_texture.is_none() || {
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                self.bgra_texture.as_ref().unwrap().GetDesc(&mut desc);
                 desc.Width != width || desc.Height != height
             };
 
@@ -214,7 +370,9 @@ impl VideoProcessorPreprocessor {
                         Quality: 0,
                     },
                     Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+                    BindFlags: (D3D11_BIND_SHADER_RESOURCE.0
+                        | D3D11_BIND_RENDER_TARGET.0
+                        | D3D11_BIND_UNORDERED_ACCESS.0) as u32,
                     CPUAccessFlags: 0,
                     MiscFlags: 0,
                 };
@@ -224,29 +382,93 @@ impl VideoProcessorPreprocessor {
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))
                     .ok()
-                    .context("Failed to create input texture")?;
+                    .context("Failed to create BGRA texture")?;
 
-                self.input_texture = texture;
+                self.bgra_texture = texture;
             }
 
-            let texture = self.input_texture.as_ref().unwrap();
+            Ok(self.bgra_texture.as_ref().unwrap().clone())
+        }
+    }
 
-            // CPU から GPU へデータをアップロード
-            // 注意: 実際の実装では Map/Unmap または UpdateSubresource を使用
-            // ここでは簡略化のため、UpdateSubresource を使用
-            let row_pitch = width * 4; // BGRA = 4 bytes per pixel
-            let depth_pitch = row_pitch * height;
+    /// GPU側でRGBA→BGRA変換を行う（Compute Shaderを使用）
+    fn convert_rgba_to_bgra(
+        &mut self,
+        rgba_texture: &ID3D11Texture2D,
+        bgra_texture: &ID3D11Texture2D,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        unsafe {
+            // Compute Shaderを作成（初回のみ）
+            self.create_compute_shader()?;
 
-            self.d3d_resources.context.UpdateSubresource(
-                texture,
+            // RGBAテクスチャのSRVを作成
+            if self.rgba_srv.is_none() {
+                let mut srv: Option<ID3D11ShaderResourceView> = None;
+                self.d3d_resources
+                    .device
+                    .CreateShaderResourceView(rgba_texture, None, Some(&mut srv))
+                    .ok()
+                    .context("Failed to create RGBA SRV")?;
+
+                self.rgba_srv = srv;
+            }
+
+            // BGRAテクスチャのUAVを作成
+            if self.bgra_uav.is_none() {
+                let mut uav: Option<ID3D11UnorderedAccessView> = None;
+                self.d3d_resources
+                    .device
+                    .CreateUnorderedAccessView(bgra_texture, None, Some(&mut uav))
+                    .ok()
+                    .context("Failed to create BGRA UAV")?;
+
+                self.bgra_uav = uav;
+            }
+
+            // Compute Shaderを設定
+            self.d3d_resources
+                .context
+                .CSSetShader(self.compute_shader.as_ref(), None);
+
+            // SRVとUAVを設定
+            let srv_slice: [Option<ID3D11ShaderResourceView>; 1] = [self.rgba_srv.clone()];
+            let uav_slice: [Option<ID3D11UnorderedAccessView>; 1] = [self.bgra_uav.clone()];
+            let uav_initial_counts: [u32; 1] = [0];
+            self.d3d_resources
+                .context
+                .CSSetShaderResources(0, Some(&srv_slice));
+            self.d3d_resources.context.CSSetUnorderedAccessViews(
                 0,
-                None,
-                bgra_data.as_ptr() as _,
-                row_pitch as u32,
-                depth_pitch as u32,
+                1,
+                Some(uav_slice.as_ptr()),
+                Some(uav_initial_counts.as_ptr()),
             );
 
-            Ok(texture.clone())
+            // Compute Shaderを実行
+            let thread_group_x = (width + 7) / 8;
+            let thread_group_y = (height + 7) / 8;
+            self.d3d_resources
+                .context
+                .Dispatch(thread_group_x, thread_group_y, 1);
+
+            // リソースをクリア
+            self.d3d_resources.context.CSSetShader(None, None);
+            let null_srv_slice: [Option<ID3D11ShaderResourceView>; 1] = [None];
+            let null_uav_slice: [Option<ID3D11UnorderedAccessView>; 1] = [None];
+            let null_uav_initial_counts: [u32; 1] = [0];
+            self.d3d_resources
+                .context
+                .CSSetShaderResources(0, Some(&null_srv_slice));
+            self.d3d_resources.context.CSSetUnorderedAccessViews(
+                0,
+                1,
+                Some(null_uav_slice.as_ptr()),
+                Some(null_uav_initial_counts.as_ptr()),
+            );
+
+            Ok(())
         }
     }
 
@@ -290,10 +512,10 @@ impl VideoProcessorPreprocessor {
         }
     }
 
-    /// BGRA データを処理して NV12 テクスチャを生成
+    /// RGBA データを処理して NV12 テクスチャを生成
     pub fn process(
         &mut self,
-        bgra_data: &[u8],
+        rgba_data: &[u8],
         width: u32,
         height: u32,
         timestamp: i64,
@@ -302,8 +524,16 @@ impl VideoProcessorPreprocessor {
             // 解像度が変更された場合は再設定
             self.resize(width, height)?;
 
-            // BGRA を D3D11 テクスチャにアップロード
-            let input_texture = self.upload_bgra_to_texture(bgra_data, width, height)?;
+            // RGBA を D3D11 テクスチャにアップロード
+            let rgba_texture = self.upload_rgba_to_texture(rgba_data, width, height)?;
+
+            // BGRA テクスチャを作成
+            let bgra_texture = self.create_bgra_texture(width, height)?;
+
+            // GPU側でRGBA→BGRA変換を行う
+            self.convert_rgba_to_bgra(&rgba_texture, &bgra_texture, width, height)?;
+
+            let input_texture = bgra_texture;
 
             // NV12 出力テクスチャを作成
             let output_texture = self.create_output_texture(width, height)?;

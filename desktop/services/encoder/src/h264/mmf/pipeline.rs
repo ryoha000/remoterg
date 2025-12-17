@@ -299,66 +299,6 @@ pub fn start_mf_encode_workers() -> (
                         let job_width = (job.width / 2) * 2;
                         let job_height = (job.height / 2) * 2;
 
-                        // 解像度が変更された場合は再初期化
-                        if job_width != width || job_height != height {
-                            info!(
-                                "MF encoder worker: resizing encoder {}x{} -> {}x{}",
-                                width, height, job_width, job_height
-                            );
-                            width = job_width;
-                            height = job_height;
-
-                            preprocessor = match VideoProcessorPreprocessor::create(
-                                d3d_resources.clone(),
-                                width,
-                                height,
-                            ) {
-                                Ok(preproc) => preproc,
-                                Err(e) => {
-                                    warn!(
-                                        "MF encoder worker: failed to recreate preprocessor: {}",
-                                        e
-                                    );
-                                    encode_failures += 1;
-                                    continue;
-                                }
-                            };
-
-                            encoder =
-                                match H264Encoder::create(d3d_resources.clone(), width, height) {
-                                    Ok(enc) => enc,
-                                    Err(e) => {
-                                        warn!(
-                                            "MF encoder worker: failed to recreate encoder: {}",
-                                            e
-                                        );
-                                        encode_failures += 1;
-                                        continue;
-                                    }
-                                };
-
-                            // codec configからSPS/PPSを再取得（解像度変更時）
-                            codec_config_sps_pps = encoder.get_codec_config();
-                            if codec_config_sps_pps.is_some() {
-                                debug!("MF encoder worker: re-extracted SPS/PPS from codec config after resize");
-                            }
-                            first_keyframe_sent = false; // 解像度変更後は再送が必要
-
-                            if let Err(e) = encoder.start_streaming() {
-                                warn!("MF encoder worker: failed to restart streaming: {}", e);
-                                encode_failures += 1;
-                                continue;
-                            }
-
-                            frame_timestamp = 0;
-                            input_meta_queue.clear();
-
-                            // エンコーダー再初期化後は、次のNeedInputイベントが来るまで待つ必要がある
-                            // このフレームをpending_jobに保存して、次のNeedInputイベントで処理する
-                            pending_job = Some(job);
-                            continue;
-                        }
-
                         // 前処理（RGBA → NV12 テクスチャ）
                         let preprocess_start = Instant::now();
                         let nv12_texture =

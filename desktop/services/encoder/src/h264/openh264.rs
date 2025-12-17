@@ -84,14 +84,8 @@ fn start_encode_worker() -> (
             let yuv = YUVBuffer::from_vec(yuv_data, dst_width, dst_height);
             drop(_rgba_to_yuv_guard);
 
-            // 最初のフレームまたは解像度変更時にエンコーダーを作成/再作成
-            if encoder.is_none() || encode_width != width || encode_height != height {
-                if encoder.is_some() {
-                    info!(
-                        "encoder worker: resizing encoder {}x{} -> {}x{}",
-                        width, height, encode_width, encode_height
-                    );
-                }
+            // 最初のフレームでエンコーダーを作成
+            if encoder.is_none() {
                 width = encode_width;
                 height = encode_height;
                 match create_encoder(width, height) {

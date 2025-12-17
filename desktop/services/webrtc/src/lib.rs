@@ -44,6 +44,7 @@ struct VideoTrackState {
     width: u32,
     height: u32,
     keyframe_sent: bool, // 初期キーフレーム送信済みか
+    encoder_factory: Arc<dyn VideoEncoderFactory>,
 }
 
 /// Answer SDPのm-line情報
@@ -266,9 +267,7 @@ impl WebRtcService {
                             let _process_frame_guard = process_frame_span.enter();
 
                             // Video trackが存在する場合、エンコードワーカーへジョブを送信
-                            if let (Some(track_state), Some(job_queue)) =
-                                (video_track_state.as_mut(), encode_job_queue.as_ref())
-                            {
+                            if let Some(track_state) = video_track_state.as_mut() {
                                 // capture側のタイムスタンプ差分からフレーム間隔を推定（デフォルト22ms≒45fps）
                                 let frame_duration = if let Some(prev) = last_frame_ts {
                                     let delta_ms = frame.timestamp.saturating_sub(prev).max(1);
@@ -278,55 +277,71 @@ impl WebRtcService {
                                 };
                                 last_frame_ts = Some(frame.timestamp);
 
-                                // 解像度変更はワーカー内で再生成するが、ログは出しておく
+                                // 解像度変更を検出した場合はencoderを再生成
                                 if track_state.width != frame.width || track_state.height != frame.height {
                                     if track_state.width == 0 && track_state.height == 0 {
                                         info!(
-                                            "Observed first frame {}x{} (encoder will initialize in worker)",
+                                            "Observed first frame {}x{} (encoder will initialize)",
                                             frame.width, frame.height
                                         );
                                     } else {
                                         info!(
-                                            "Observed frame resize {}x{} -> {}x{} (encoder will recreate in worker)",
+                                            "Observed frame resize {}x{} -> {}x{} (recreating encoder)",
                                             track_state.width, track_state.height, frame.width, frame.height
                                         );
+                                        // 既存のencoderワーカーを停止（ドロップ）
+                                        drop(encode_job_queue.take());
+                                        drop(encode_result_rx.take());
                                     }
-                                    // トラック状態は最新解像度を保持（SPS/PPS再送時に使用）
+                                    // トラック状態を更新
                                     track_state.width = frame.width;
                                     track_state.height = frame.height;
+                                    track_state.keyframe_sent = false; // 解像度変更後はキーフレームが必要
+
+                                    // 新しいencoderワーカーを起動
+                                    let (job_queue, res_rx) = track_state.encoder_factory.setup();
+                                    encode_job_queue = Some(job_queue);
+                                    encode_result_rx = Some(res_rx);
                                 }
 
                                 // エンコードジョブ送信を span で計測
-                                let queue_encode_job_span = span!(
-                                    Level::DEBUG,
-                                    "queue_encode_job"
-                                );
-                                let _queue_encode_job_guard = queue_encode_job_span.enter();
-                                let job_send_start = Instant::now();
-                                // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
-                                let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);
-                                job_queue.set(EncodeJob {
-                                    width: frame.width,
-                                    height: frame.height,
-                                    rgba: frame.data,
-                                    duration: frame_duration,
-                                    enqueue_at: pipeline_start,
-                                    request_keyframe,
-                                });
-                                let job_send_dur = job_send_start.elapsed();
-                                drop(_queue_encode_job_guard);
-
-                                frames_queued += 1;
-                                if job_send_dur.as_millis() > 10 {
-                                    warn!(
-                                        "Encode job set took {}ms",
-                                        job_send_dur.as_millis()
+                                if let Some(job_queue) = encode_job_queue.as_ref() {
+                                    let queue_encode_job_span = span!(
+                                        Level::DEBUG,
+                                        "queue_encode_job"
                                     );
+                                    let _queue_encode_job_guard = queue_encode_job_span.enter();
+                                    let job_send_start = Instant::now();
+                                    // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
+                                    let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);
+                                    job_queue.set(EncodeJob {
+                                        width: frame.width,
+                                        height: frame.height,
+                                        rgba: frame.data,
+                                        duration: frame_duration,
+                                        enqueue_at: pipeline_start,
+                                        request_keyframe,
+                                    });
+                                    let job_send_dur = job_send_start.elapsed();
+                                    drop(_queue_encode_job_guard);
+
+                                    frames_queued += 1;
+                                    if job_send_dur.as_millis() > 10 {
+                                        warn!(
+                                            "Encode job set took {}ms",
+                                            job_send_dur.as_millis()
+                                        );
+                                    }
+                                } else {
+                                    frames_dropped_no_track += 1;
+                                    if frames_dropped_no_track % 30 == 0 {
+                                        debug!("Encoder worker not available, dropped {} frames", frames_dropped_no_track);
+                                    }
                                 }
                             } else {
                                 frames_dropped_no_track += 1;
                                 if frames_dropped_no_track % 30 == 0 {
-                                    debug!("Video track not ready or encoder worker not available, dropped {} frames", frames_dropped_no_track);
+                                    debug!("Video track not ready, dropped {} frames", frames_dropped_no_track);
                                 }
                             }
 
@@ -583,6 +598,7 @@ impl WebRtcService {
                                 width: 0,
                                 height: 0,
                                 keyframe_sent: false,
+                                encoder_factory: encoder_factory.clone(),
                             });
 
                             // DataChannelハンドラを設定

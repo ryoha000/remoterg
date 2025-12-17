@@ -315,6 +315,14 @@ pub fn start_mf_encode_workers() -> (
 
                         let _ = input_sample.SetSampleDuration(sample_duration_hns);
 
+                        // キーフレーム要求がある場合は強制
+                        if job.request_keyframe {
+                            if let Err(e) = encoder.force_keyframe() {
+                                warn!("MF encoder worker: failed to force keyframe: {}", e);
+                                // エラーでも続行（キーフレーム強制はベストエフォート）
+                            }
+                        }
+
                         // ProcessInput を呼び出す
                         if let Err(e) = encoder.transform().ProcessInput(0, &input_sample, 0) {
                             warn!("MF encoder worker: ProcessInput failed: {}", e);

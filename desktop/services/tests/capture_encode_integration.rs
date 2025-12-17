@@ -378,6 +378,7 @@ mod tests {
                         rgba: frame.data,
                         duration: frame_duration,
                         enqueue_at: Instant::now(),
+                        request_keyframe: false,
                     };
 
                     job_queue.set(job);
@@ -564,6 +565,7 @@ mod tests {
                 rgba: frame.data, // clone()を削除してmove
                 duration: frame_duration,
                 enqueue_at: Instant::now(),
+                request_keyframe: false,
             };
 
             job_queue.set(job);

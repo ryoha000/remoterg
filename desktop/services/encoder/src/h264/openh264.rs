@@ -105,6 +105,11 @@ fn start_encode_worker() -> (
 
             let encoder = encoder.as_mut().expect("encoder should be initialized");
 
+            // キーフレーム要求がある場合は強制
+            if job.request_keyframe {
+                encoder.force_intra_frame();
+            }
+
             // エンコードを span で計測
             let encode_span = span!(Level::DEBUG, "encode");
             let _encode_guard = encode_span.enter();

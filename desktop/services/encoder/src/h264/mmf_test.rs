@@ -117,6 +117,7 @@ mod tests {
             rgba,
             duration: Duration::from_millis(33), // 約30fps
             enqueue_at: Instant::now(),
+            request_keyframe: false,
         };
 
         job_queue.set(job);
@@ -189,6 +190,7 @@ mod tests {
                 rgba,
                 duration: Duration::from_millis(33),
                 enqueue_at: Instant::now(),
+                request_keyframe: false,
             };
 
             job_queue.set(job);
@@ -250,6 +252,7 @@ mod tests {
                 rgba,
                 duration: Duration::from_millis(33),
                 enqueue_at: Instant::now(),
+                request_keyframe: false,
             };
 
             job_queue.set(job);
@@ -298,6 +301,7 @@ mod tests {
             rgba,
             duration: Duration::from_millis(33),
             enqueue_at: Instant::now(),
+            request_keyframe: false,
         };
 
         job_queue.set(job);
@@ -360,6 +364,7 @@ mod tests {
             rgba,
             duration: Duration::from_millis(33),
             enqueue_at: Instant::now(),
+            request_keyframe: false,
         };
 
         job_queue.set(job);

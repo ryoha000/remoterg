@@ -195,6 +195,7 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
                             rgba: black_box(input.0[i as usize].clone()),
                             duration: black_box(Duration::from_millis(33)),
                             enqueue_at: black_box(Instant::now()),
+                            request_keyframe: false,
                         };
                         job_queue.set(job);
                         rx.recv().await.unwrap();

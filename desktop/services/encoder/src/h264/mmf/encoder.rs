@@ -3,11 +3,11 @@ use tracing::debug;
 use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount,
-    CODECAPI_AVLowLatencyMode, ICodecAPI, IMFMediaEventGenerator, IMFMediaType, IMFTransform,
-    MFCreateMediaType, MFMediaType_Video, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFVideoInterlace_Progressive, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY, MF_E_INVALIDMEDIATYPE,
-    MF_E_NO_MORE_TYPES, MF_LOW_LATENCY,
+    CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVLowLatencyMode, ICodecAPI, IMFMediaEventGenerator,
+    IMFMediaType, IMFTransform, MFCreateMediaType, MFMediaType_Video, MFVideoFormat_H264,
+    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFT_MESSAGE_COMMAND_FLUSH,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY,
+    MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY,
 };
 
 use crate::h264::mmf::d3d::D3D11Resources;
@@ -461,6 +461,23 @@ impl H264Encoder {
                     )
                 })?;
 
+            Ok(())
+        }
+    }
+
+    /// 次のフレームをキーフレームとして強制
+    pub fn force_keyframe(&self) -> Result<()> {
+        unsafe {
+            let codec_api: ICodecAPI = self
+                .transform
+                .cast()
+                .ok()
+                .context("Failed to cast transform to ICodecAPI")?;
+            codec_api
+                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &true.into())
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to set CODECAPI_AVEncVideoForceKeyFrame: {}", e)
+                })?;
             Ok(())
         }
     }

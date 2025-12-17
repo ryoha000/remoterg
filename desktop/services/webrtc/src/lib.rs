@@ -227,6 +227,8 @@ impl WebRtcService {
         let mut frames_dropped_no_track: u64 = 0;
         let mut frames_queued: u64 = 0;
         let mut last_perf_log = Instant::now();
+        // キーフレーム要求フラグ（PLI/FIR受信時に設定）
+        let keyframe_requested = Arc::new(AtomicBool::new(false));
 
         loop {
             tokio::select! {
@@ -301,12 +303,15 @@ impl WebRtcService {
                                 );
                                 let _queue_encode_job_guard = queue_encode_job_span.enter();
                                 let job_send_start = Instant::now();
+                                // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
+                                let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);
                                 job_queue.set(EncodeJob {
                                     width: frame.width,
                                     height: frame.height,
                                     rgba: frame.data,
                                     duration: frame_duration,
                                     enqueue_at: pipeline_start,
+                                    request_keyframe,
                                 });
                                 let job_send_dur = job_send_start.elapsed();
                                 drop(_queue_encode_job_guard);
@@ -413,11 +418,10 @@ impl WebRtcService {
                 // PLI/FIR によるキーフレーム再送要求
                 keyframe_req = keyframe_rx.recv() => {
                     if keyframe_req.is_some() {
+                        info!("Keyframe requested via RTCP");
+                        keyframe_requested.store(true, Ordering::Relaxed);
                         if let Some(ref mut track_state) = video_track_state {
-                            info!("Keyframe requested via RTCP; awaiting next keyframe from encoder");
                             track_state.keyframe_sent = false;
-                        } else {
-                            debug!("Keyframe requested but video track is not ready yet");
                         }
                     }
                 }

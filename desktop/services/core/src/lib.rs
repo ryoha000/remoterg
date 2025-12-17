@@ -79,6 +79,7 @@ pub struct EncodeJob {
     pub rgba: Vec<u8>,
     pub duration: Duration,
     pub enqueue_at: Instant,
+    pub request_keyframe: bool,
 }
 
 /// エンコード結果

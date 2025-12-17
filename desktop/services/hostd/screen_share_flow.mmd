@@ -1,0 +1,107 @@
+flowchart TB
+    subgraph CaptureLoop[CaptureService ループ]
+        direction TB
+        CL1[windows-capture<br/>コールバック待機] --> CL2[on_frame_arrived<br/>フレーム到着]
+        CL2 --> CL3[FrameBuffer取得<br/>RGBAデータ読み取り]
+        CL3 --> CL4{リサイズ必要?}
+        CL4 -->|Yes| CL5[resize_image_impl<br/>リサイズ処理]
+        CL4 -->|No| CL6[RGBAデータそのまま]
+        CL5 --> CL7[Frame作成<br/>width height data timestamp]
+        CL6 --> CL7
+        CL7 --> CL8[std_frame_tx.send<br/>std::sync::mpsc]
+        CL8 --> CL9[ブリッジタスク<br/>tokio::spawn]
+        CL9 --> CL10[tokio_frame_tx.send<br/>tokio::sync::mpsc]
+        CL10 --> CL1
+    end
+    
+    subgraph WebRtcLoop[WebRtcService ループ]
+        direction TB
+        WL1[tokio::select!<br/>並行待機] --> WL2[frame_rx.recv<br/>Frame受信]
+        WL1 --> WL3[encode_result_rx.recv<br/>EncodeResult受信]
+        WL1 --> WL4[keyframe_rx.recv<br/>キーフレーム要求<br/>PLI/FIR受信]
+        
+        WL2 --> WL5{connection_ready?<br/>ICE/DTLS接続完了}
+        WL5 -->|No| WL6[フレーム破棄<br/>continue]
+        WL5 -->|Yes| WL7{video_track_state<br/>存在?}
+        WL7 -->|No| WL8[フレーム破棄<br/>continue]
+        WL7 -->|Yes| WL9[frame_duration計算<br/>timestamp差分]
+        WL9 --> WL10[EncodeJob作成<br/>width height rgba<br/>duration enqueue_at<br/>request_keyframe]
+        WL10 --> WL11[job_queue.set<br/>最新フレームのみ保持<br/>EncodeJobQueue]
+        WL11 --> WL1
+        
+        WL3 --> WL13[Sample作成<br/>data: Bytes<br/>duration]
+        WL13 --> WL14[track.write_sample<br/>RTP送信]
+        WL14 --> WL15[frame_count++]
+        WL15 --> WL1
+        
+        WL4 --> WL16[keyframe_requested<br/>フラグ設定]
+        WL16 --> WL1
+    end
+    
+    subgraph EncoderLoopH264MMF[H.264 MMF エンコーダワーカーループ]
+        direction TB
+        EL1[loop イベント待機] --> EL2[encoder.event_generator<br/>GetEvent]
+        EL2 --> EL3{イベント種別}
+        
+        EL3 -->|METransformNeedInput| EL4[pending_job確認<br/>または job_queue.take<br/>ブロッキング取得]
+        EL4 --> EL5{解像度変更?}
+        EL5 -->|Yes| EL6[エンコーダ再初期化<br/>preprocessor再作成<br/>start_streaming]
+        EL6 --> EL7[pending_jobに保存]
+        EL7 --> EL1
+        EL5 -->|No| EL8[preprocessor.process<br/>RGBA → NV12<br/>D3D11テクスチャ]
+        EL8 --> EL9[input_meta_queue<br/>メタ情報保存]
+        EL9 --> EL10[MFCreateDXGISurfaceBuffer<br/>DXGIバッファ作成]
+        EL10 --> EL11[MFCreateSample<br/>入力サンプル作成]
+        EL11 --> EL12{request_keyframe?}
+        EL12 -->|Yes| EL13[MFSampleExtension_VideoEncodePictureType<br/>設定]
+        EL12 -->|No| EL14[ProcessInput<br/>エンコーダに入力]
+        EL13 --> EL14
+        EL14 --> EL1
+        
+        EL3 -->|METransformHaveOutput| EL15[ProcessOutput<br/>エンコード済みデータ取得]
+        EL15 --> EL16[バッファLock<br/>データコピー]
+        EL16 --> EL17[annexb_from_mf_data<br/>AVC → Annex-B変換]
+        EL17 --> EL18[SPS/PPS検出<br/>is_keyframe判定<br/>MFSampleExtension_CleanPoint]
+        EL18 --> EL19{codec_config<br/>SPS/PPS注入必要?}
+        EL19 -->|Yes| EL20[SPS/PPS注入<br/>最初のキーフレーム]
+        EL19 -->|No| EL21[input_meta_queue<br/>メタ情報取得]
+        EL20 --> EL21
+        EL21 --> EL22[EncodeResult作成]
+        EL22 --> EL23[res_tx.send<br/>tokio::sync::mpsc]
+        EL23 --> EL1
+    end
+    
+    subgraph EncoderLoopH264OH[H.264 OpenH264 エンコーダワーカーループ]
+        direction TB
+        OH1[loop job_queue.take<br/>EncodeJob受信<br/>ブロッキング取得] --> OH2{解像度変更?}
+        OH2 -->|Yes| OH3[エンコーダ再初期化<br/>create_encoder]
+        OH3 --> OH1
+        OH2 -->|No| OH4[RGBA → YUV変換<br/>rgba_to_yuv I420]
+        OH4 --> OH5{request_keyframe?}
+        OH5 -->|Yes| OH6[encoder.force_intra_frame]
+        OH5 -->|No| OH7[encoder.encode<br/>OpenH264エンコード]
+        OH6 --> OH7
+        OH7 --> OH8[ビットストリーム生成]
+        OH8 --> OH9[annexb_from_bitstream<br/>Annex-B変換]
+        OH9 --> OH10[SPS/PPS検出<br/>is_keyframe判定]
+        OH10 --> OH11[EncodeResult作成]
+        OH11 --> OH12[res_tx.send<br/>tokio::sync::mpsc]
+        OH12 --> OH1
+    end
+    
+    CL10 -.->|Frame| WL2
+    WL11 -.->|EncodeJob<br/>job_queue.set| EL4
+    WL11 -.->|EncodeJob<br/>job_queue.set| OH1
+    EL23 -.->|EncodeResult| WL3
+    OH12 -.->|EncodeResult| WL3
+    WL14 -.->|RTP| RTP[WebRTC RTP送信<br/>PeerConnection]
+    RTP -.->|ネットワーク| Client[クライアント<br/>受信・デコード・表示]
+    
+    style CaptureLoop fill:#ffe1e1
+    style WebRtcLoop fill:#e1e1ff
+    style EncoderLoopH264MMF fill:#ffffe1
+    style EncoderLoopH264OH fill:#e1ffe1
+    style Client fill:#e1f5ff
+    style WL6 fill:#ffcccc
+    style WL8 fill:#ffcccc
+

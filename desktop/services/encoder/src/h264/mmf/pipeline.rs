@@ -1,4 +1,4 @@
-use core_types::{EncodeJobQueue, EncodeResult};
+use core_types::{EncodeJobQueue, EncodeResult, ShutdownError};
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
@@ -195,7 +195,13 @@ pub fn start_mf_encode_workers() -> (
 
         // イベントループを開始する前に、エンコーダーが初期化されている必要がある
         // 最初のフレームが来るまで待機
-        let first_job = job_queue_clone.take();
+        let first_job = match job_queue_clone.take() {
+            Ok(job) => job,
+            Err(ShutdownError) => {
+                info!("MF encoder worker: received shutdown signal before initialization, exiting");
+                return;
+            }
+        };
 
         // 最初のフレームで初期化
         let encode_width = (first_job.width / 2) * 2;
@@ -291,7 +297,13 @@ pub fn start_mf_encode_workers() -> (
                             job
                         } else {
                             // 最新のフレームを取得（利用可能な場合のみ）
-                            job_queue_clone.take()
+                            match job_queue_clone.take() {
+                                Ok(job) => job,
+                                Err(ShutdownError) => {
+                                    info!("MF encoder worker: received shutdown signal, exiting");
+                                    break;
+                                }
+                            }
                         };
 
                         let recv_at = Instant::now();

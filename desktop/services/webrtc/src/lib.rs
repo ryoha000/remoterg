@@ -289,7 +289,10 @@ impl WebRtcService {
                                             "Observed frame resize {}x{} -> {}x{} (recreating encoder)",
                                             track_state.width, track_state.height, frame.width, frame.height
                                         );
-                                        // 既存のencoderワーカーを停止（ドロップ）
+                                        // 既存のencoderワーカーを停止（シャットダウンしてからドロップ）
+                                        if let Some(old_queue) = encode_job_queue.as_ref() {
+                                            old_queue.shutdown();
+                                        }
                                         drop(encode_job_queue.take());
                                         drop(encode_result_rx.take());
                                     }

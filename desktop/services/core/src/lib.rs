@@ -92,12 +92,25 @@ pub struct EncodeResult {
     pub height: u32,
 }
 
+/// エンコードジョブキューのシャットダウンエラー
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShutdownError;
+
+impl std::fmt::Display for ShutdownError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EncodeJobQueue has been shut down")
+    }
+}
+
+impl std::error::Error for ShutdownError {}
+
 /// エンコードジョブキュー（Dumb Workerパターン用）
 /// 最新のフレームのみを保持し、古いフレームは自動的にドロップされる
 #[derive(Debug)]
 pub struct EncodeJobQueue {
     job: Mutex<Option<EncodeJob>>,
     condvar: Condvar,
+    shutdown: Mutex<bool>,
 }
 
 impl EncodeJobQueue {
@@ -106,7 +119,18 @@ impl EncodeJobQueue {
         Arc::new(Self {
             job: Mutex::new(None),
             condvar: Condvar::new(),
+            shutdown: Mutex::new(false),
         })
+    }
+
+    /// シャットダウンを通知する
+    /// すべての待機中のスレッドを起こし、`take()`が`ShutdownError`を返すようにする
+    /// このメソッドは即座に返り、ワーカースレッドの終了を待たない
+    pub fn shutdown(&self) {
+        let mut shutdown_guard = self.shutdown.lock().unwrap();
+        *shutdown_guard = true;
+        drop(shutdown_guard);
+        self.condvar.notify_all();
     }
 
     /// 最新のジョブをセット（古いものを置き換え）
@@ -119,21 +143,40 @@ impl EncodeJobQueue {
 
     /// ブロッキングでジョブを取得
     /// ジョブが利用可能になるまで待機する
-    pub fn take(&self) -> EncodeJob {
+    /// シャットダウンされた場合は`ShutdownError`を返す
+    pub fn take(&self) -> Result<EncodeJob, ShutdownError> {
         let mut guard = self.job.lock().unwrap();
         loop {
-            if let Some(job) = guard.take() {
-                return job;
+            // シャットダウンチェック
+            if *self.shutdown.lock().unwrap() {
+                return Err(ShutdownError);
             }
+
+            if let Some(job) = guard.take() {
+                return Ok(job);
+            }
+
             guard = self.condvar.wait(guard).unwrap();
+
+            // wait()の後にもシャットダウンチェック
+            if *self.shutdown.lock().unwrap() {
+                return Err(ShutdownError);
+            }
         }
     }
 
     /// ノンブロッキングでジョブを取得
     /// ジョブが利用可能な場合は`Some(EncodeJob)`を返し、そうでない場合は`None`を返す
-    pub fn try_take(&self) -> Option<EncodeJob> {
+    /// シャットダウンされた場合は`Some(Err(ShutdownError))`を返す
+    pub fn try_take(&self) -> Option<Result<EncodeJob, ShutdownError>> {
         let mut guard = self.job.lock().unwrap();
-        guard.take()
+
+        // シャットダウンチェック
+        if *self.shutdown.lock().unwrap() {
+            return Some(Err(ShutdownError));
+        }
+
+        guard.take().map(Ok)
     }
 }
 

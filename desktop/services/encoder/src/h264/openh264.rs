@@ -1,5 +1,5 @@
 use anyhow::Context;
-use core_types::{EncodeJobQueue, EncodeResult, VideoCodec, VideoEncoderFactory};
+use core_types::{EncodeJobQueue, EncodeResult, ShutdownError, VideoCodec, VideoEncoderFactory};
 use openh264::encoder::{BitRate, EncoderConfig, FrameRate, RateControlMode};
 use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
@@ -55,7 +55,13 @@ fn start_encode_worker() -> (
 
         loop {
             // ジョブを取得（ブロッキング、最新のフレームのみ）
-            let job = job_queue_clone.take();
+            let job = match job_queue_clone.take() {
+                Ok(job) => job,
+                Err(ShutdownError) => {
+                    info!("encoder worker: received shutdown signal, exiting");
+                    break;
+                }
+            };
 
             // OpenH264は幅と高さが2の倍数である必要があるため、2の倍数に調整
             let encode_width = (job.width / 2) * 2;

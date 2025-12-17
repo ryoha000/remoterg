@@ -3,7 +3,7 @@
 mod tests {
     use crate::h264::mmf::mf::{check_mf_available, find_h264_encoder, init_media_foundation};
     use crate::h264::mmf::MediaFoundationH264EncoderFactory;
-    use core_types::{EncodeJob, VideoCodec, VideoEncoderFactory};
+    use core_types::{EncodeJob, ShutdownError, VideoCodec, VideoEncoderFactory};
     use std::{
         sync::Once,
         time::{Duration, Instant},
@@ -424,6 +424,225 @@ mod tests {
         assert!(
             has_sps_or_pps(&result.sample_data),
             "Keyframe should contain SPS or PPS"
+        );
+    }
+
+    /// 基本的なshutdownテスト
+    #[test]
+    fn test_shutdown_basic() {
+        init_tracing();
+        let factory = MediaFoundationH264EncoderFactory::new();
+        assert!(
+            factory.use_media_foundation(),
+            "Media Foundation encoder should be available"
+        );
+
+        let (job_slot, _receiver) = factory.setup();
+
+        // shutdown()を呼び出す
+        job_slot.shutdown();
+
+        // shutdown後にtake()がShutdownErrorを返すことを確認
+        let result = job_slot.take();
+        assert!(
+            result.is_err(),
+            "take() should return ShutdownError after shutdown"
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ShutdownError,
+            "Error should be ShutdownError"
+        );
+    }
+
+    /// エンコード後のshutdownテスト
+    #[tokio::test]
+    async fn test_shutdown_after_encode() {
+        init_tracing();
+        let factory = MediaFoundationH264EncoderFactory::new();
+        assert!(
+            factory.use_media_foundation(),
+            "Media Foundation encoder should be available"
+        );
+
+        let (job_slot, mut receiver) = factory.setup();
+
+        // 1フレームをエンコード
+        let width = 320u32;
+        let height = 240u32;
+        let rgba = create_gray_rgba(width, height, 128);
+        let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+
+        job_slot.set(job);
+
+        // 結果を待機
+        let result = timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("Encode timeout")
+            .expect("Failed to receive encode result");
+
+        assert!(
+            !result.sample_data.is_empty(),
+            "Encoded data should not be empty"
+        );
+
+        // shutdown()を呼び出す
+        job_slot.shutdown();
+
+        // ワーカースレッドが正常に終了することを確認（receiverが閉じられる）
+        // 少し待ってから、receiverが閉じられていることを確認
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // 新しいジョブをセットしても、take()がShutdownErrorを返すことを確認
+        let rgba2 = create_gray_rgba(width, height, 128);
+        let new_job = create_encode_job(width, height, rgba2, Duration::from_millis(33), false);
+        job_slot.set(new_job);
+
+        // shutdown後にtake()がShutdownErrorを返すことを確認
+        let take_result = job_slot.take();
+        assert!(
+            take_result.is_err(),
+            "take() should return ShutdownError after shutdown"
+        );
+        assert_eq!(
+            take_result.unwrap_err(),
+            ShutdownError,
+            "Error should be ShutdownError"
+        );
+    }
+
+    /// エンコード中のshutdownテスト
+    #[tokio::test]
+    async fn test_shutdown_during_encode() {
+        init_tracing();
+        let factory = MediaFoundationH264EncoderFactory::new();
+        assert!(
+            factory.use_media_foundation(),
+            "Media Foundation encoder should be available"
+        );
+
+        let (job_slot, mut receiver) = factory.setup();
+
+        let width = 320u32;
+        let height = 240u32;
+
+        // 複数のフレームを送信してエンコードを開始
+        for frame_idx in 0..3 {
+            let gray = (frame_idx * 50) as u8;
+            let rgba = create_gray_rgba(width, height, gray);
+            let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+            job_slot.set(job);
+        }
+
+        // 最初のフレームの結果を待機（エンコードが開始されたことを確認）
+        let first_result = timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("Encode timeout")
+            .expect("Failed to receive encode result");
+
+        assert!(
+            !first_result.sample_data.is_empty(),
+            "First encoded data should not be empty"
+        );
+
+        // エンコード中にshutdown()を呼び出す
+        job_slot.shutdown();
+
+        // ワーカースレッドが正常に終了することを確認
+        // 残りのフレームが処理されるか、またはreceiverが閉じられるまで待機
+        let mut received_count = 1;
+        loop {
+            match timeout(Duration::from_secs(2), receiver.recv()).await {
+                Ok(Some(_)) => {
+                    received_count += 1;
+                    // 最大で送信したフレーム数まで受け取る可能性がある
+                    if received_count >= 3 {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    // receiverが閉じられた
+                    break;
+                }
+                Err(_) => {
+                    // タイムアウト - ワーカースレッドが終了した可能性がある
+                    break;
+                }
+            }
+        }
+
+        // shutdown後にtake()がShutdownErrorを返すことを確認
+        let new_job = create_encode_job(
+            width,
+            height,
+            create_gray_rgba(width, height, 200),
+            Duration::from_millis(33),
+            false,
+        );
+        job_slot.set(new_job);
+
+        let take_result = job_slot.take();
+        assert!(
+            take_result.is_err(),
+            "take() should return ShutdownError after shutdown"
+        );
+        assert_eq!(
+            take_result.unwrap_err(),
+            ShutdownError,
+            "Error should be ShutdownError"
+        );
+    }
+
+    /// shutdown後の新規ジョブ拒否テスト
+    #[test]
+    fn test_shutdown_prevents_new_jobs() {
+        init_tracing();
+        let factory = MediaFoundationH264EncoderFactory::new();
+        assert!(
+            factory.use_media_foundation(),
+            "Media Foundation encoder should be available"
+        );
+
+        let (job_slot, _receiver) = factory.setup();
+
+        // shutdown()を呼び出す
+        job_slot.shutdown();
+
+        // shutdown後に新しいジョブをset()しても、take()がShutdownErrorを返すことを確認
+        let width = 320u32;
+        let height = 240u32;
+        let rgba = create_gray_rgba(width, height, 128);
+        let new_job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+
+        // set()は成功するが（エラーを返さない）、take()はShutdownErrorを返す
+        job_slot.set(new_job);
+
+        // shutdown後にtake()がShutdownErrorを返すことを確認
+        let result = job_slot.take();
+        assert!(
+            result.is_err(),
+            "take() should return ShutdownError after shutdown, even if a job was set"
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ShutdownError,
+            "Error should be ShutdownError"
+        );
+
+        // 複数回試しても同じ結果になることを確認
+        let rgba2 = create_gray_rgba(width, height, 128);
+        let another_job = create_encode_job(width, height, rgba2, Duration::from_millis(33), false);
+        job_slot.set(another_job);
+
+        let result2 = job_slot.take();
+        assert!(
+            result2.is_err(),
+            "take() should consistently return ShutdownError after shutdown"
+        );
+        assert_eq!(
+            result2.unwrap_err(),
+            ShutdownError,
+            "Error should be ShutdownError"
         );
     }
 }

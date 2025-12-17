@@ -7,7 +7,7 @@ use windows::Win32::Media::MediaFoundation::{
     IMFMediaType, IMFTransform, MFCreateMediaType, MFMediaType_Video, MFVideoFormat_H264,
     MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFT_MESSAGE_COMMAND_FLUSH,
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY,
-    MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY,
+    MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY, MF_MT_MPEG_SEQUENCE_HEADER,
 };
 
 use crate::h264::mmf::d3d::D3D11Resources;
@@ -466,19 +466,155 @@ impl H264Encoder {
     }
 
     /// 次のフレームをキーフレームとして強制
-    pub fn force_keyframe(&self) -> Result<()> {
+    pub fn set_force_keyframe(&self, force: bool) -> Result<()> {
         unsafe {
             let codec_api: ICodecAPI = self
                 .transform
                 .cast()
                 .ok()
                 .context("Failed to cast transform to ICodecAPI")?;
+            // CODECAPI_AVEncVideoForceKeyFrameを設定（値は1）
             codec_api
-                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &true.into())
+                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &force.into())
                 .map_err(|e| {
                     anyhow::anyhow!("Failed to set CODECAPI_AVEncVideoForceKeyFrame: {}", e)
                 })?;
             Ok(())
+        }
+    }
+
+    /// 出力メディアタイプからcodec config (SPS/PPS) を取得（best-effort）
+    /// 戻り値: (SPS NAL, PPS NAL) - 取得できない場合はNone
+    pub fn get_codec_config(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        unsafe {
+            // 出力CurrentTypeを取得
+            let output_type = match self.transform.GetOutputCurrentType(0) {
+                Ok(t) => t,
+                Err(_) => {
+                    debug!("MF encoder: failed to get output current type for codec config");
+                    return None;
+                }
+            };
+
+            // 適切なサイズのバッファを割り当ててGetBlobを試す
+            // AVCDecoderConfigurationRecordは通常数百バイト程度
+            let mut blob_data = vec![0u8; 512];
+            let mut blob_len = blob_data.len() as u32;
+
+            match output_type.GetBlob(
+                &MF_MT_MPEG_SEQUENCE_HEADER,
+                &mut blob_data,
+                Some(&mut blob_len),
+            ) {
+                Ok(_) if blob_len > 0 && blob_len <= blob_data.len() as u32 => {
+                    blob_data.truncate(blob_len as usize);
+
+                    // AVCDecoderConfigurationRecordを解析
+                    if let Some((sps, pps)) = parse_avc_decoder_config(&blob_data) {
+                        debug!("MF encoder: extracted SPS/PPS from codec config (SPS: {} bytes, PPS: {} bytes)", sps.len(), pps.len());
+                        return Some((sps, pps));
+                    } else {
+                        debug!("MF encoder: failed to parse AVCDecoderConfigurationRecord");
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        "MF encoder: failed to get codec config blob: {} (HRESULT: {:?})",
+                        e,
+                        e.code()
+                    );
+                }
+                _ => {
+                    debug!("MF encoder: codec config not available or invalid size");
+                }
+            }
+
+            None
+        }
+    }
+}
+
+/// AVCDecoderConfigurationRecord (avcC) を解析してSPS/PPSを抽出
+/// フォーマット: ISO/IEC 14496-15 Annex E
+fn parse_avc_decoder_config(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    if data.len() < 7 {
+        return None;
+    }
+
+    // avcC構造:
+    // [0] configurationVersion (1 byte) = 1
+    // [1] AVCProfileIndication (1 byte)
+    // [2] profile_compatibility (1 byte)
+    // [3] AVCLevelIndication (1 byte)
+    // [4] lengthSizeMinusOne (1 byte, lower 2 bits) - NAL長のバイト数 - 1
+    // [5] numOfSequenceParameterSets (1 byte, lower 5 bits)
+    // [6+] SPS/PPSデータ
+
+    if data[0] != 1 {
+        debug!("MF encoder: invalid configurationVersion in avcC");
+        return None;
+    }
+
+    let num_sps = (data[5] & 0x1F) as usize;
+    let mut offset = 6;
+
+    // SPSを取得
+    let mut sps: Option<Vec<u8>> = None;
+    for i in 0..num_sps {
+        if offset + 2 > data.len() {
+            debug!("MF encoder: invalid SPS length in avcC");
+            return None;
+        }
+        let sps_len = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
+        offset += 2;
+
+        if offset + sps_len > data.len() {
+            debug!("MF encoder: SPS data out of bounds in avcC");
+            return None;
+        }
+
+        if i == 0 {
+            // 最初のSPSを使用
+            sps = Some(data[offset..offset + sps_len].to_vec());
+        }
+        offset += sps_len;
+    }
+
+    // PPSを取得
+    if offset >= data.len() {
+        debug!("MF encoder: no PPS data in avcC");
+        return None;
+    }
+
+    let num_pps = data[offset] as usize;
+    offset += 1;
+
+    let mut pps: Option<Vec<u8>> = None;
+    for i in 0..num_pps {
+        if offset + 2 > data.len() {
+            debug!("MF encoder: invalid PPS length in avcC");
+            return None;
+        }
+        let pps_len = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
+        offset += 2;
+
+        if offset + pps_len > data.len() {
+            debug!("MF encoder: PPS data out of bounds in avcC");
+            return None;
+        }
+
+        if i == 0 {
+            // 最初のPPSを使用
+            pps = Some(data[offset..offset + pps_len].to_vec());
+        }
+        offset += pps_len;
+    }
+
+    match (sps, pps) {
+        (Some(s), Some(p)) => Some((s, p)),
+        _ => {
+            debug!("MF encoder: failed to extract both SPS and PPS from avcC");
+            None
         }
     }
 }

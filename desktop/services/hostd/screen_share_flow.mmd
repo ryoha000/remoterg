@@ -26,7 +26,7 @@ flowchart TB
         WL7 -->|No| WL8[フレーム破棄<br/>continue]
         WL7 -->|Yes| WL9[frame_duration計算<br/>timestamp差分]
         WL9 --> WL10[EncodeJob作成<br/>width height rgba<br/>duration enqueue_at<br/>request_keyframe]
-        WL10 --> WL11[job_queue.set<br/>最新フレームのみ保持<br/>EncodeJobQueue]
+        WL10 --> WL11[job_slot.set<br/>最新フレームのみ保持<br/>EncodeJobSlot]
         WL11 --> WL1
         
         WL3 --> WL13[Sample作成<br/>data: Bytes<br/>duration]
@@ -43,7 +43,7 @@ flowchart TB
         EL1[loop イベント待機] --> EL2[encoder.event_generator<br/>GetEvent]
         EL2 --> EL3{イベント種別}
         
-        EL3 -->|METransformNeedInput| EL4[pending_job確認<br/>または job_queue.take<br/>ブロッキング取得]
+        EL3 -->|METransformNeedInput| EL4[pending_job確認<br/>または job_slot.take<br/>ブロッキング取得]
         EL4 --> EL5{解像度変更?}
         EL5 -->|Yes| EL6[エンコーダ再初期化<br/>preprocessor再作成<br/>start_streaming]
         EL6 --> EL7[pending_jobに保存]
@@ -73,7 +73,7 @@ flowchart TB
     
     subgraph EncoderLoopH264OH[H.264 OpenH264 エンコーダワーカーループ]
         direction TB
-        OH1[loop job_queue.take<br/>EncodeJob受信<br/>ブロッキング取得] --> OH2{解像度変更?}
+        OH1[loop job_slot.take<br/>EncodeJob受信<br/>ブロッキング取得] --> OH2{解像度変更?}
         OH2 -->|Yes| OH3[エンコーダ再初期化<br/>create_encoder]
         OH3 --> OH1
         OH2 -->|No| OH4[RGBA → YUV変換<br/>rgba_to_yuv I420]
@@ -90,8 +90,8 @@ flowchart TB
     end
     
     CL10 -.->|Frame| WL2
-    WL11 -.->|EncodeJob<br/>job_queue.set| EL4
-    WL11 -.->|EncodeJob<br/>job_queue.set| OH1
+    WL11 -.->|EncodeJob<br/>job_slot.set| EL4
+    WL11 -.->|EncodeJob<br/>job_slot.set| OH1
     EL23 -.->|EncodeResult| WL3
     OH12 -.->|EncodeResult| WL3
     WL14 -.->|RTP| RTP[WebRTC RTP送信<br/>PeerConnection]

@@ -1,4 +1,4 @@
-use core_types::{EncodeJobQueue, EncodeResult, ShutdownError};
+use core_types::{EncodeJobSlot, EncodeResult, ShutdownError};
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
@@ -170,11 +170,11 @@ struct InputFrameMeta {
 
 /// Media Foundationエンコードワーカーを起動
 pub fn start_mf_encode_workers() -> (
-    Arc<EncodeJobQueue>,
+    Arc<EncodeJobSlot>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
-    let job_queue = EncodeJobQueue::new();
-    let job_queue_clone = Arc::clone(&job_queue);
+    let job_slot = EncodeJobSlot::new();
+    let job_slot_clone = Arc::clone(&job_slot);
     let (res_tx, res_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
     std::thread::spawn(move || {
@@ -195,7 +195,7 @@ pub fn start_mf_encode_workers() -> (
 
         // イベントループを開始する前に、エンコーダーが初期化されている必要がある
         // 最初のフレームが来るまで待機
-        let first_job = match job_queue_clone.take() {
+        let first_job = match job_slot_clone.take() {
             Ok(job) => job,
             Err(ShutdownError) => {
                 info!("MF encoder worker: received shutdown signal before initialization, exiting");
@@ -297,7 +297,7 @@ pub fn start_mf_encode_workers() -> (
                             job
                         } else {
                             // 最新のフレームを取得（利用可能な場合のみ）
-                            match job_queue_clone.take() {
+                            match job_slot_clone.take() {
                                 Ok(job) => job,
                                 Err(ShutdownError) => {
                                     info!("MF encoder worker: received shutdown signal, exiting");
@@ -624,5 +624,5 @@ pub fn start_mf_encode_workers() -> (
         );
     });
 
-    (job_queue, res_rx)
+    (job_slot, res_rx)
 }

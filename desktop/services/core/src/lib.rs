@@ -92,29 +92,29 @@ pub struct EncodeResult {
     pub height: u32,
 }
 
-/// エンコードジョブキューのシャットダウンエラー
+/// エンコードジョブスロットのシャットダウンエラー
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShutdownError;
 
 impl std::fmt::Display for ShutdownError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "EncodeJobQueue has been shut down")
+        write!(f, "EncodeJobSlot has been shut down")
     }
 }
 
 impl std::error::Error for ShutdownError {}
 
-/// エンコードジョブキュー（Dumb Workerパターン用）
+/// エンコードジョブスロット（Dumb Workerパターン用）
 /// 最新のフレームのみを保持し、古いフレームは自動的にドロップされる
 #[derive(Debug)]
-pub struct EncodeJobQueue {
+pub struct EncodeJobSlot {
     job: Mutex<Option<EncodeJob>>,
     condvar: Condvar,
     shutdown: Mutex<bool>,
 }
 
-impl EncodeJobQueue {
-    /// 新しいキューを作成
+impl EncodeJobSlot {
+    /// 新しいスロットを作成
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             job: Mutex::new(None),
@@ -134,7 +134,7 @@ impl EncodeJobQueue {
     }
 
     /// 最新のジョブをセット（古いものを置き換え）
-    /// 常に成功する（キューが満杯になることがない）
+    /// 常に成功する（スロットが満杯になることがない）
     pub fn set(&self, job: EncodeJob) {
         let mut guard = self.job.lock().unwrap();
         *guard = Some(job);
@@ -182,7 +182,7 @@ impl EncodeJobQueue {
 
 /// エンコーダーファクトリ
 pub trait VideoEncoderFactory: Send + Sync {
-    fn setup(&self) -> (Arc<EncodeJobQueue>, UnboundedReceiver<EncodeResult>);
+    fn setup(&self) -> (Arc<EncodeJobSlot>, UnboundedReceiver<EncodeResult>);
 
     /// 利用するビデオコーデック
     fn codec(&self) -> VideoCodec;

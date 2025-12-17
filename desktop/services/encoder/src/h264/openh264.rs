@@ -1,5 +1,5 @@
 use anyhow::Context;
-use core_types::{EncodeJobQueue, EncodeResult, ShutdownError, VideoCodec, VideoEncoderFactory};
+use core_types::{EncodeJobSlot, EncodeResult, ShutdownError, VideoCodec, VideoEncoderFactory};
 use openh264::encoder::{BitRate, EncoderConfig, FrameRate, RateControlMode};
 use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
@@ -22,7 +22,7 @@ impl VideoEncoderFactory for OpenH264EncoderFactory {
     fn setup(
         &self,
     ) -> (
-        Arc<EncodeJobQueue>,
+        Arc<EncodeJobSlot>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
         start_encode_workers()
@@ -35,11 +35,11 @@ impl VideoEncoderFactory for OpenH264EncoderFactory {
 
 /// OpenH264エンコードワーカーを生成（前処理→エンコードを直列実行）
 fn start_encode_worker() -> (
-    Arc<EncodeJobQueue>,
+    Arc<EncodeJobSlot>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
-    let job_queue = EncodeJobQueue::new();
-    let job_queue_clone = Arc::clone(&job_queue);
+    let job_slot = EncodeJobSlot::new();
+    let job_slot_clone = Arc::clone(&job_slot);
     let (res_tx, res_rx) = tokio_mpsc::unbounded_channel::<EncodeResult>();
 
     info!("Starting OpenH264 encoder with serial preprocessing");
@@ -55,7 +55,7 @@ fn start_encode_worker() -> (
 
         loop {
             // ジョブを取得（ブロッキング、最新のフレームのみ）
-            let job = match job_queue_clone.take() {
+            let job = match job_slot_clone.take() {
                 Ok(job) => job,
                 Err(ShutdownError) => {
                     info!("encoder worker: received shutdown signal, exiting");
@@ -166,12 +166,12 @@ fn start_encode_worker() -> (
         );
     });
 
-    (job_queue, res_rx)
+    (job_slot, res_rx)
 }
 
 /// エンコードワーカーを起動する
 pub fn start_encode_workers() -> (
-    Arc<EncodeJobQueue>,
+    Arc<EncodeJobSlot>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
     // encoderの整合性を保つため、常に1つのワーカーのみを起動

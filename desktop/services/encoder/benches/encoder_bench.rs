@@ -156,9 +156,9 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
         frames.push(rgba_data);
     }
 
-    let (job_queue, res_rx) = factory.setup();
+    let (job_slot, res_rx) = factory.setup();
     let res_rx = std::sync::Arc::new(tokio::sync::Mutex::new(res_rx));
-    let input = (&frames, job_queue, res_rx);
+    let input = (&frames, job_slot, res_rx);
 
     let mut group = c.benchmark_group(format!("encode_{}_multiple", encoder_name));
     // ★ここが重要: 単位を「要素数（Elements）」に設定
@@ -178,11 +178,11 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
         move |b,
               input: &(
             &Vec<Vec<u8>>,
-            std::sync::Arc<core_types::EncodeJobQueue>,
+            std::sync::Arc<core_types::EncodeJobSlot>,
             std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>>>,
         )| {
             // iter_batchedを使用: エンコーダーを一度だけ初期化し、その後フレームを連続してエンコード
-            let job_queue = input.1.clone();
+            let job_slot = input.1.clone();
             let res_rx = input.2.clone();
             b.to_async(tokio::runtime::Runtime::new().unwrap())
                 .iter(|| async {
@@ -197,7 +197,7 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
                             enqueue_at: black_box(Instant::now()),
                             request_keyframe: false,
                         };
-                        job_queue.set(job);
+                        job_slot.set(job);
                         rx.recv().await.unwrap();
                     }
                 });

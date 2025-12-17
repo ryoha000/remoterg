@@ -277,7 +277,7 @@ mod tests {
 
         // エンコーダーを初期化
         println!("エンコーダーを初期化中...");
-        let (job_queue, encode_result_rx) = encoder_factory.setup();
+        let (job_slot, encode_result_rx) = encoder_factory.setup();
         println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
@@ -381,7 +381,7 @@ mod tests {
                         request_keyframe: false,
                     };
 
-                    job_queue.set(job);
+                    job_slot.set(job);
 
                     // 進捗表示
                     if frame_count % 30 == 0 {
@@ -491,7 +491,7 @@ mod tests {
         let frame_count = frames.len();
 
         // エンコードワーカーを起動
-        let (job_queue, encode_result_rx) = encoder_factory.setup();
+        let (job_slot, encode_result_rx) = encoder_factory.setup();
         println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
@@ -568,7 +568,7 @@ mod tests {
                 request_keyframe: false,
             };
 
-            job_queue.set(job);
+            job_slot.set(job);
 
             // 進捗表示
             if (idx + 1) % 100 == 0 {

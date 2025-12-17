@@ -10,7 +10,7 @@ pub mod pipeline;
 pub mod preprocessor;
 
 #[cfg(windows)]
-use core_types::{EncodeJobQueue, EncodeResult, VideoCodec, VideoEncoderFactory};
+use core_types::{EncodeJobSlot, EncodeResult, VideoCodec, VideoEncoderFactory};
 #[cfg(windows)]
 use std::sync::Arc;
 #[cfg(windows)]
@@ -51,7 +51,7 @@ impl VideoEncoderFactory for MediaFoundationH264EncoderFactory {
     fn setup(
         &self,
     ) -> (
-        Arc<EncodeJobQueue>,
+        Arc<EncodeJobSlot>,
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
         if self.use_mf {

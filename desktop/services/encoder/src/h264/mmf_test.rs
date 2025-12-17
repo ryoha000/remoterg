@@ -119,7 +119,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (_job_queue, _receiver) = factory.setup();
+        let (_job_slot, _receiver) = factory.setup();
     }
 
     /// 単一フレームのエンコードテスト
@@ -132,7 +132,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (job_queue, mut receiver) = factory.setup();
+        let (job_slot, mut receiver) = factory.setup();
 
         // テスト用のRGBA画像データを作成（1920x1080の赤い画像）
         let width = 1920u32;
@@ -140,7 +140,7 @@ mod tests {
         let rgba = create_solid_color_rgba(width, height, 255, 0, 0, 255);
         let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
 
-        job_queue.set(job);
+        job_slot.set(job);
 
         // 結果を待機（タイムアウト: 5秒）
         let result = timeout(Duration::from_secs(5), receiver.recv())
@@ -185,7 +185,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (job_queue, mut receiver) = factory.setup();
+        let (job_slot, mut receiver) = factory.setup();
 
         let width = 1920u32;
         let height = 1080u32;
@@ -199,7 +199,7 @@ mod tests {
             let rgba = create_gray_rgba(width, height, gray);
             let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
 
-            job_queue.set(job);
+            job_slot.set(job);
 
             // 結果を待機
             let result = timeout(Duration::from_secs(5), receiver.recv())
@@ -237,7 +237,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (job_queue, mut receiver) = factory.setup();
+        let (job_slot, mut receiver) = factory.setup();
 
         // Media Foundation H.264エンコーダーがサポートする解像度を使用
         let sizes = vec![(320, 240), (640, 480), (1280, 720)];
@@ -247,7 +247,7 @@ mod tests {
             let rgba = create_solid_color_rgba(width, height, 0, 0, 255, 255);
             let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
 
-            job_queue.set(job);
+            job_slot.set(job);
 
             let result = timeout(Duration::from_secs(5), receiver.recv())
                 .await
@@ -275,14 +275,14 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (job_queue, mut receiver) = factory.setup();
+        let (job_slot, mut receiver) = factory.setup();
 
         let width = 320u32;
         let height = 240u32;
         let rgba = create_gray_rgba(width, height, 128);
         let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
 
-        job_queue.set(job);
+        job_slot.set(job);
 
         let result = timeout(Duration::from_secs(5), receiver.recv())
             .await
@@ -344,7 +344,7 @@ mod tests {
             "Media Foundation encoder should be available"
         );
 
-        let (job_queue, mut receiver) = factory.setup();
+        let (job_slot, mut receiver) = factory.setup();
 
         let width = 320u32;
         let height = 240u32;
@@ -357,7 +357,7 @@ mod tests {
             let rgba = create_gray_rgba(width, height, gray);
             let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
 
-            job_queue.set(job);
+            job_slot.set(job);
 
             // 結果を待機（最初のフレームはキーフレームになる可能性があるが、必ずしもそうではない）
             let result = timeout(Duration::from_secs(5), receiver.recv())
@@ -389,7 +389,7 @@ mod tests {
             let rgba = create_solid_color_rgba(width, height, 255, 255, 255, 255);
             let job = create_encode_job(width, height, rgba, Duration::from_millis(33), true);
 
-            job_queue.set(job);
+            job_slot.set(job);
 
             let result = timeout(Duration::from_secs(5), receiver.recv())
                 .await

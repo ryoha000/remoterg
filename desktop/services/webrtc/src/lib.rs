@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use core_types::{EncodeJob, EncodeJobQueue, EncodeResult, VideoCodec, VideoEncoderFactory};
+use core_types::{EncodeJob, EncodeJobSlot, EncodeResult, VideoCodec, VideoEncoderFactory};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -217,7 +217,7 @@ impl WebRtcService {
 
         let mut peer_connection: Option<Arc<RTCPeerConnection>> = None;
         let mut video_track_state: Option<VideoTrackState> = None;
-        let mut encode_job_queue: Option<Arc<EncodeJobQueue>> = None;
+        let mut encode_job_slot: Option<Arc<EncodeJobSlot>> = None;
         let mut encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>> = None;
 
         let mut frame_count: u64 = 0;
@@ -290,10 +290,10 @@ impl WebRtcService {
                                             track_state.width, track_state.height, frame.width, frame.height
                                         );
                                         // 既存のencoderワーカーを停止（シャットダウンしてからドロップ）
-                                        if let Some(old_queue) = encode_job_queue.as_ref() {
-                                            old_queue.shutdown();
+                                        if let Some(old_slot) = encode_job_slot.as_ref() {
+                                            old_slot.shutdown();
                                         }
-                                        drop(encode_job_queue.take());
+                                        drop(encode_job_slot.take());
                                         drop(encode_result_rx.take());
                                     }
                                     // トラック状態を更新
@@ -302,13 +302,13 @@ impl WebRtcService {
                                     track_state.keyframe_sent = false; // 解像度変更後はキーフレームが必要
 
                                     // 新しいencoderワーカーを起動
-                                    let (job_queue, res_rx) = track_state.encoder_factory.setup();
-                                    encode_job_queue = Some(job_queue);
+                                    let (job_slot, res_rx) = track_state.encoder_factory.setup();
+                                    encode_job_slot = Some(job_slot);
                                     encode_result_rx = Some(res_rx);
                                 }
 
                                 // エンコードジョブ送信を span で計測
-                                if let Some(job_queue) = encode_job_queue.as_ref() {
+                                if let Some(job_slot) = encode_job_slot.as_ref() {
                                     let queue_encode_job_span = span!(
                                         Level::DEBUG,
                                         "queue_encode_job"
@@ -317,7 +317,7 @@ impl WebRtcService {
                                     let job_send_start = Instant::now();
                                     // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
                                     let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);
-                                    job_queue.set(EncodeJob {
+                                    job_slot.set(EncodeJob {
                                         width: frame.width,
                                         height: frame.height,
                                         rgba: frame.data,
@@ -589,8 +589,8 @@ impl WebRtcService {
                             });
 
                             // エンコードワーカーを起動
-                            let (job_queue, res_rx) = encoder_factory.setup();
-                            encode_job_queue = Some(job_queue);
+                            let (job_slot, res_rx) = encoder_factory.setup();
+                            encode_job_slot = Some(job_slot);
                             encode_result_rx = Some(res_rx);
 
                             // SPS/PPSの送出はLocalDescription設定後、最初のフレーム処理時に実行

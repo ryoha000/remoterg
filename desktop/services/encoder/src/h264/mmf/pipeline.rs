@@ -217,8 +217,8 @@ pub fn start_mf_encode_workers() -> (
         };
 
         // エンコーダーと前処理器の作成
-        let mut width = encode_width;
-        let mut height = encode_height;
+        let width = encode_width;
+        let height = encode_height;
 
         let mut preprocessor = match VideoProcessorPreprocessor::create(
             d3d_resources.clone(),
@@ -232,7 +232,7 @@ pub fn start_mf_encode_workers() -> (
             }
         };
 
-        let mut encoder =
+        let encoder =
             match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height) {
                 Ok(enc) => enc,
                 Err(e) => {
@@ -242,7 +242,7 @@ pub fn start_mf_encode_workers() -> (
             };
 
         // codec configからSPS/PPSを取得（best-effort、取得できない場合はNone）
-        let mut codec_config_sps_pps = encoder.get_codec_config();
+        let codec_config_sps_pps = encoder.get_codec_config();
         if codec_config_sps_pps.is_some() {
             info!("MF encoder worker: extracted SPS/PPS from codec config");
         } else {

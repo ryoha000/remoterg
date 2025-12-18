@@ -17,8 +17,6 @@ use core_types::{
 };
 #[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
-#[cfg(feature = "h264")]
-use encoder::h264::openh264::OpenH264EncoderFactory;
 use input::InputService;
 use signaling::SignalingService;
 use webrtc::WebRtcService;

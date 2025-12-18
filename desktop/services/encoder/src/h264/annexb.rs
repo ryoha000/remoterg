@@ -111,9 +111,3 @@ pub fn annexb_from_bitstream(bitstream: &EncodedBitStream) -> (Vec<u8>, bool) {
 
     (sample_data, has_sps_pps)
 }
-
-
-
-
-
-

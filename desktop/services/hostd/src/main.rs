@@ -18,16 +18,20 @@ use core_types::{
 #[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
 use input::InputService;
-use signaling::SignalingService;
+use signaling::SignalingClient;
 use webrtc::WebRtcService;
 
 #[derive(Parser, Debug)]
 #[command(name = "hostd")]
 #[command(about = "RemoteRG Host Daemon")]
 struct Args {
-    /// HTTP/WebSocket server port
-    #[arg(short, long, default_value_t = 8080)]
-    port: u16,
+    /// Cloudflare WebSocket URL (e.g., wss://example.com/api/signal)
+    #[arg(long, default_value = "ws://localhost:3000/api/signal")]
+    cloudflare_url: String,
+
+    /// Session ID
+    #[arg(long, default_value = "fixed")]
+    session_id: String,
 
     /// Log level (trace, debug, info, warn, error)
     #[arg(short, long, default_value = "info")]
@@ -58,7 +62,11 @@ async fn main() -> Result<()> {
     };
 
     info!("Starting RemoteRG Host Daemon");
-    info!("Port: {}, Log Level: {}", args.port, args.log_level);
+    info!(
+        "Cloudflare URL: {}, Session ID: {}",
+        args.cloudflare_url, args.session_id
+    );
+    info!("Log Level: {}", args.log_level);
     info!("Capture HWND: {}", hwnd);
 
     // チャンネル作成
@@ -89,7 +97,12 @@ async fn main() -> Result<()> {
         encoder_factories,
     );
     let input_service = InputService::new(data_channel_rx);
-    let signaling_service = SignalingService::new(args.port, webrtc_msg_tx, signaling_response_rx);
+    let signaling_client = SignalingClient::new(
+        args.cloudflare_url,
+        args.session_id,
+        webrtc_msg_tx,
+        signaling_response_rx,
+    );
 
     // CaptureServiceを開始
     capture_cmd_tx
@@ -105,7 +118,7 @@ async fn main() -> Result<()> {
     // サービスを独立タスクとして起動（Send でない WebRTC はこのスレッドで駆動する）
     let capture_handle = tokio::spawn(async move { capture_service.run().await });
     let input_handle = tokio::spawn(async move { input_service.run().await });
-    let signaling_handle = tokio::spawn(async move { signaling_service.run().await });
+    let signaling_handle = tokio::spawn(async move { signaling_client.run().await });
     // WebRTC は OpenH264 の非 Send 型を含むため spawn せず現在のタスクで実行する
     let webrtc_fut = webrtc_service.run();
     pin!(webrtc_fut);

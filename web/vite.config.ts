@@ -5,11 +5,15 @@ import viteReact from "@vitejs/plugin-react";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
+import { viteStaticCopy } from "vite-plugin-static-copy";
 
 const config = defineConfig({
   plugins: [
     devtools(),
-    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    cloudflare({
+      viteEnvironment: { name: "ssr" },
+      configPath: "./wrangler.jsonc",
+    }),
     // this is the plugin that enables path aliases
     viteTsConfigPaths({
       projects: ["./tsconfig.json"],
@@ -20,6 +24,14 @@ const config = defineConfig({
       babel: {
         plugins: ["babel-plugin-react-compiler"],
       },
+    }),
+    viteStaticCopy({
+      targets: [
+        {
+          src: "instrument.server.mjs",
+          dest: ".output/server",
+        },
+      ],
     }),
   ],
 });

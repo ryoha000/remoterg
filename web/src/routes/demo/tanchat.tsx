@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Send, Square } from "lucide-react";
-import { Streamdown } from "streamdown";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import { clientTools } from "@tanstack/ai-client";
 import type { UIMessage } from "@tanstack/ai-react";
@@ -82,10 +81,10 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
                   if (part.type === "text" && part.content) {
                     return (
                       <div
-                        className="flex-1 min-w-0 prose dark:prose-invert max-w-none prose-sm"
+                        className="flex-1 min-w-0 prose dark:prose-invert max-w-none prose-sm whitespace-pre-wrap"
                         key={index}
                       >
-                        <Streamdown>{part.content}</Streamdown>
+                        {part.content}
                       </div>
                     );
                   }

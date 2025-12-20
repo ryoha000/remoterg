@@ -3,7 +3,6 @@ import { useStore } from "@tanstack/react-store";
 import { Store } from "@tanstack/store";
 
 import { Send, X, ChevronRight } from "lucide-react";
-import { Streamdown } from "streamdown";
 
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import { clientTools } from "@tanstack/ai-client";
@@ -25,7 +24,8 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
 
   useEffect(() => {
     if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      messagesContainerRef.current.scrollTop =
+        messagesContainerRef.current.scrollHeight;
     }
   }, [messages]);
 
@@ -61,13 +61,17 @@ function Messages({ messages }: { messages: Array<UIMessage> }) {
                       Y
                     </div>
                   )}
-                  <div className="flex-1 min-w-0 text-white prose dark:prose-invert max-w-none prose-sm">
-                    <Streamdown>{part.content}</Streamdown>
+                  <div className="flex-1 min-w-0 text-white prose dark:prose-invert max-w-none prose-sm whitespace-pre-wrap">
+                    {part.content}
                   </div>
                 </div>
               );
             }
-            if (part.type === "tool-call" && part.name === "recommendGuitar" && part.output) {
+            if (
+              part.type === "tool-call" &&
+              part.name === "recommendGuitar" &&
+              part.output
+            ) {
               return (
                 <div key={part.id} className="max-w-[80%] mx-auto">
                   <GuitarRecommendation id={String(part.output?.id)} />
@@ -139,7 +143,8 @@ export default function AIAssistant() {
                   onInput={(e) => {
                     const target = e.target as HTMLTextAreaElement;
                     target.style.height = "auto";
-                    target.style.height = Math.min(target.scrollHeight, 120) + "px";
+                    target.style.height =
+                      Math.min(target.scrollHeight, 120) + "px";
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey && input.trim()) {

@@ -220,8 +220,8 @@ impl VideoProcessorPreprocessor {
                 void CSMain(uint3 id : SV_DispatchThreadID)
                 {
                     float4 rgba = rgba_texture[id.xy];
-                    // RGBA (R, G, B, A) -> BGRA (B, G, R, A)
-                    bgra_texture[id.xy] = float4(rgba.b, rgba.g, rgba.r, rgba.a);
+                    // GPU が BGRA テクスチャへの書き込み時に自動変換
+                    bgra_texture[id.xy] = rgba;
                 }
             "#;
 

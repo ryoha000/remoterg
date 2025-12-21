@@ -108,7 +108,7 @@ mod tests {
                 // assert_eq!(frame.width, 320);
                 // assert_eq!(frame.height, 240);
                 // assert!(frame.data.len() >= (320 * 240 * 4) as usize);
-                assert!(frame.timestamp > 0);
+                assert!(frame.windows_timespan > 0);
 
                 // RGBAデータの検証（データが有効であることを確認）
                 let stride = (320 * 32 + 31) / 32 * 4;

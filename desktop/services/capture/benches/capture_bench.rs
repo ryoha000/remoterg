@@ -101,11 +101,12 @@ fn bench_frame_processing(c: &mut Criterion) {
                 width: black_box(1920),
                 height: black_box(1080),
                 data: black_box(rgba_data.clone()),
-                timestamp: black_box(
+                windows_timespan: black_box(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
-                        .as_millis() as u64,
+                        .as_nanos() as u64
+                        / 100,
                 ),
             };
             // チャンネル送信（実際には送信しないが、構造体の作成を測定）
@@ -122,11 +123,12 @@ fn bench_frame_processing(c: &mut Criterion) {
                 width: black_box(1280),
                 height: black_box(720),
                 data: black_box(rgba_data.clone()),
-                timestamp: black_box(
+                windows_timespan: black_box(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
-                        .as_millis() as u64,
+                        .as_nanos() as u64
+                        / 100,
                 ),
             };
             let _ = tx.send(black_box(frame));
@@ -142,11 +144,12 @@ fn bench_frame_processing(c: &mut Criterion) {
                 width: black_box(640),
                 height: black_box(360),
                 data: black_box(rgba_data.clone()),
-                timestamp: black_box(
+                windows_timespan: black_box(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
-                        .as_millis() as u64,
+                        .as_nanos() as u64
+                        / 100,
                 ),
             };
             let _ = tx.send(black_box(frame));

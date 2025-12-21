@@ -4,6 +4,7 @@ use openh264::encoder::{BitRate, EncoderConfig, FrameRate, RateControlMode};
 use openh264::formats::YUVBuffer;
 use openh264::OpenH264API;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{info, span, warn, Level};
 
@@ -46,12 +47,11 @@ fn start_encode_worker() -> (
 
     // エンコードスレッド: ジョブを受信→前処理→エンコードを直列実行
     std::thread::spawn(move || {
-        let mut width = 0;
-        let mut height = 0;
         let mut encoder: Option<openh264::encoder::Encoder> = None;
         let mut encode_failures = 0u32;
         let mut empty_samples = 0u32;
         let mut successful_encodes = 0u32;
+        let mut last_timestamp: Option<u64> = None;
 
         loop {
             // ジョブを取得（ブロッキング、最新のフレームのみ）
@@ -62,6 +62,20 @@ fn start_encode_worker() -> (
                     break;
                 }
             };
+
+            // タイムスタンプから duration を計算
+            // windows_timespan は100ナノ秒単位の SystemRelativeTime（単調増加）
+            let duration = if let Some(prev_ts) = last_timestamp {
+                let delta_hns = job.timestamp.saturating_sub(prev_ts).max(1);
+                // 100ナノ秒単位からナノ秒単位に変換
+                // u64 の最大値は約584年分の100ナノ秒なので、オーバーフローを防ぐためにチェック
+                let delta_ns = delta_hns.saturating_mul(100) as u64;
+                Duration::from_nanos(delta_ns)
+            } else {
+                // 最初のフレーム: 1/60s = 約16.67ms
+                Duration::from_millis(16)
+            };
+            last_timestamp = Some(job.timestamp);
 
             // OpenH264は幅と高さが2の倍数である必要があるため、2の倍数に調整
             let encode_width = (job.width / 2) * 2;
@@ -92,9 +106,7 @@ fn start_encode_worker() -> (
 
             // 最初のフレームでエンコーダーを作成
             if encoder.is_none() {
-                width = encode_width;
-                height = encode_height;
-                match create_encoder(width, height) {
+                match create_encoder(encode_width, encode_height) {
                     Ok(enc) => encoder = Some(enc),
                     Err(e) => {
                         warn!("encoder worker: failed to create encoder: {}", e);
@@ -141,7 +153,7 @@ fn start_encode_worker() -> (
                         .send(EncodeResult {
                             sample_data,
                             is_keyframe: has_sps_pps,
-                            duration: job.duration,
+                            duration,
                             width: encode_width,
                             height: encode_height,
                         })

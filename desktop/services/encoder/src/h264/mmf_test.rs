@@ -44,14 +44,14 @@ mod tests {
         width: u32,
         height: u32,
         rgba: Vec<u8>,
-        duration: Duration,
+        timestamp: u64,
         request_keyframe: bool,
     ) -> EncodeJob {
         EncodeJob {
             width,
             height,
             rgba,
-            duration,
+            timestamp,
             enqueue_at: Instant::now(),
             request_keyframe,
         }
@@ -138,7 +138,7 @@ mod tests {
         let width = 1920u32;
         let height = 1080u32;
         let rgba = create_solid_color_rgba(width, height, 255, 0, 0, 255);
-        let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+        let job = create_encode_job(width, height, rgba, 0, false);
 
         job_slot.set(job);
 
@@ -155,7 +155,8 @@ mod tests {
         );
         assert_eq!(result.width, width, "Width should match");
         assert_eq!(result.height, height, "Height should match");
-        assert_eq!(result.duration, Duration::from_millis(33));
+        // 最初のフレームなので duration は 1/60s (約16ms)
+        assert_eq!(result.duration, Duration::from_millis(16));
 
         // H.264データの基本的な検証（Annex-B形式のスタートコードを確認）
         assert!(
@@ -197,7 +198,9 @@ mod tests {
             // 各フレームで異なる色を使用（グレースケール）
             let gray = (frame_idx * 50) as u8;
             let rgba = create_gray_rgba(width, height, gray);
-            let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+            // タイムスタンプは 33ms 間隔で設定
+            let timestamp = (frame_idx * 33) as u64;
+            let job = create_encode_job(width, height, rgba, timestamp, false);
 
             job_slot.set(job);
 
@@ -242,10 +245,11 @@ mod tests {
         // Media Foundation H.264エンコーダーがサポートする解像度を使用
         let sizes = vec![(320, 240), (640, 480), (1280, 720)];
 
-        for (width, height) in sizes {
+        for (idx, (width, height)) in sizes.iter().enumerate() {
             // 青い画像を作成
-            let rgba = create_solid_color_rgba(width, height, 0, 0, 255, 255);
-            let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+            let rgba = create_solid_color_rgba(*width, *height, 0, 0, 255, 255);
+            let timestamp = (idx * 33) as u64;
+            let job = create_encode_job(*width, *height, rgba, timestamp, false);
 
             job_slot.set(job);
 
@@ -260,8 +264,8 @@ mod tests {
                 width,
                 height
             );
-            assert_eq!(result.width, width);
-            assert_eq!(result.height, height);
+            assert_eq!(result.width, *width);
+            assert_eq!(result.height, *height);
         }
     }
 
@@ -280,7 +284,7 @@ mod tests {
         let width = 320u32;
         let height = 240u32;
         let rgba = create_gray_rgba(width, height, 128);
-        let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+        let job = create_encode_job(width, height, rgba, 0, false);
 
         job_slot.set(job);
 
@@ -355,7 +359,9 @@ mod tests {
             // 各フレームで異なる色を使用（グレースケール）
             let gray = (frame_idx * 50) as u8;
             let rgba = create_gray_rgba(width, height, gray);
-            let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+            // タイムスタンプは 33ms 間隔で設定
+            let timestamp = (frame_idx * 33) as u64;
+            let job = create_encode_job(width, height, rgba, timestamp, false);
 
             job_slot.set(job);
 
@@ -387,7 +393,9 @@ mod tests {
         let mut keyframe_result = None;
         for attempt in 0..10 {
             let rgba = create_solid_color_rgba(width, height, 255, 255, 255, 255);
-            let job = create_encode_job(width, height, rgba, Duration::from_millis(33), true);
+            // タイムスタンプは regular_frame_count から続けて 33ms 間隔で設定
+            let timestamp = ((regular_frame_count + attempt) * 33) as u64;
+            let job = create_encode_job(width, height, rgba, timestamp, true);
 
             job_slot.set(job);
 
@@ -471,7 +479,7 @@ mod tests {
         let width = 320u32;
         let height = 240u32;
         let rgba = create_gray_rgba(width, height, 128);
-        let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+        let job = create_encode_job(width, height, rgba, 0, false);
 
         job_slot.set(job);
 
@@ -495,7 +503,7 @@ mod tests {
 
         // 新しいジョブをセットしても、take()がShutdownErrorを返すことを確認
         let rgba2 = create_gray_rgba(width, height, 128);
-        let new_job = create_encode_job(width, height, rgba2, Duration::from_millis(33), false);
+        let new_job = create_encode_job(width, height, rgba2, 33, false);
         job_slot.set(new_job);
 
         // shutdown後にtake()がShutdownErrorを返すことを確認
@@ -530,7 +538,9 @@ mod tests {
         for frame_idx in 0..3 {
             let gray = (frame_idx * 50) as u8;
             let rgba = create_gray_rgba(width, height, gray);
-            let job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+            // タイムスタンプは 33ms 間隔で設定
+            let timestamp = (frame_idx * 33) as u64;
+            let job = create_encode_job(width, height, rgba, timestamp, false);
             job_slot.set(job);
         }
 
@@ -576,7 +586,7 @@ mod tests {
             width,
             height,
             create_gray_rgba(width, height, 200),
-            Duration::from_millis(33),
+            33,
             false,
         );
         job_slot.set(new_job);
@@ -612,7 +622,7 @@ mod tests {
         let width = 320u32;
         let height = 240u32;
         let rgba = create_gray_rgba(width, height, 128);
-        let new_job = create_encode_job(width, height, rgba, Duration::from_millis(33), false);
+        let new_job = create_encode_job(width, height, rgba, 0, false);
 
         // set()は成功するが（エラーを返さない）、take()はShutdownErrorを返す
         job_slot.set(new_job);
@@ -631,7 +641,7 @@ mod tests {
 
         // 複数回試しても同じ結果になることを確認
         let rgba2 = create_gray_rgba(width, height, 128);
-        let another_job = create_encode_job(width, height, rgba2, Duration::from_millis(33), false);
+        let another_job = create_encode_job(width, height, rgba2, 33, false);
         job_slot.set(another_job);
 
         let result2 = job_slot.take();

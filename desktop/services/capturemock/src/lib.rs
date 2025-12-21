@@ -102,11 +102,11 @@ impl CaptureService {
                             ((frame_index / COLOR_DWELL_FRAMES) as usize) % COLOR_PALETTE.len();
                         let idx = color_idx % precomputed_frames.len();
                         let mut frame = precomputed_frames[idx].clone();
-                        // 実送出時刻で timestamp を更新
-                        frame.timestamp = std::time::SystemTime::now()
+                        // 実送出時刻で windows_timespan を更新（100ナノ秒単位に変換）
+                        let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
+                            .unwrap();
+                        frame.windows_timespan = now.as_nanos() as u64 / 100;
                         frame_index = frame_index.wrapping_add(1);
                         let send_start = Instant::now();
                         if let Err(e) = self.frame_tx.send(frame).await {
@@ -191,10 +191,11 @@ impl CaptureService {
             width,
             height,
             data,
-            timestamp: std::time::SystemTime::now()
+            windows_timespan: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_nanos() as u64
+                / 100,
         }
     }
 }

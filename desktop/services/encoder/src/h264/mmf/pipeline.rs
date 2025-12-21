@@ -2,7 +2,7 @@ use core_types::{EncodeJobSlot, EncodeResult, ShutdownError};
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{debug, info, warn};
 use windows::core::Interface;
@@ -181,6 +181,7 @@ pub fn start_mf_encode_workers() -> (
         let mut encode_failures = 0u32;
         let mut empty_samples = 0u32;
         let mut frame_timestamp = 0i64;
+        let mut last_timestamp: Option<u64> = None;
 
         // 入力/出力の対応付け用キュー
         let mut input_meta_queue: VecDeque<InputFrameMeta> = VecDeque::new();
@@ -312,9 +313,23 @@ pub fn start_mf_encode_workers() -> (
                                 }
                             };
 
+                        // タイムスタンプから duration を計算
+                        // windows_timespan は100ナノ秒単位の SystemRelativeTime（単調増加）
+                        let duration = if let Some(prev_ts) = last_timestamp {
+                            let delta_hns = job.timestamp.saturating_sub(prev_ts).max(1);
+                            // 100ナノ秒単位からナノ秒単位に変換
+                            // u64 の最大値は約584年分の100ナノ秒なので、オーバーフローを防ぐためにチェック
+                            let delta_ns = delta_hns.saturating_mul(100);
+                            Duration::from_nanos(delta_ns)
+                        } else {
+                            // 最初のフレーム: 1/60s = 約16.67ms
+                            Duration::from_millis(16)
+                        };
+                        last_timestamp = Some(job.timestamp);
+
                         // メタ情報をキューに保存
                         input_meta_queue.push_back(InputFrameMeta {
-                            duration: job.duration,
+                            duration,
                             width: job_width,
                             height: job_height,
                         });
@@ -357,10 +372,9 @@ pub fn start_mf_encode_workers() -> (
                         }
 
                         // サンプルタイムと継続時間を設定
-                        // 参考実装では 10_000_000 / framerate を使用しているが、
-                        // ここでは job.duration を 100ns 単位に変換
+                        // duration を 100ns 単位に変換
                         let sample_time_hns = frame_timestamp;
-                        let sample_duration_hns = job.duration.as_nanos() as i64 / 100;
+                        let sample_duration_hns = duration.as_nanos() as i64 / 100;
 
                         if let Err(e) = input_sample.SetSampleTime(sample_time_hns) {
                             warn!("MF encoder worker: failed to set sample time: {}", e);

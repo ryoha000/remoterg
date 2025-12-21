@@ -206,7 +206,9 @@ mod tests {
         // フレームのタイムスタンプ情報を確認
         let first_frame = &frames[0];
         let last_frame = &frames[frames.len() - 1];
-        let actual_duration_ms = last_frame.timestamp.saturating_sub(first_frame.timestamp);
+        // windows_timespan は100ナノ秒単位なので、ミリ秒に変換
+        let delta_hns = last_frame.windows_timespan.saturating_sub(first_frame.windows_timespan);
+        let actual_duration_ms = delta_hns / 10_000;
         let actual_duration_sec = actual_duration_ms as f32 / 1000.0;
         let avg_fps = if actual_duration_sec > 0.0 {
             frames.len() as f32 / actual_duration_sec
@@ -214,10 +216,13 @@ mod tests {
             0.0
         };
         println!(
-            "  最初のフレームタイムスタンプ: {}ms",
-            first_frame.timestamp
+            "  最初のフレームタイムスタンプ: {} (100ns units)",
+            first_frame.windows_timespan
         );
-        println!("  最後のフレームタイムスタンプ: {}ms", last_frame.timestamp);
+        println!(
+            "  最後のフレームタイムスタンプ: {} (100ns units)",
+            last_frame.windows_timespan
+        );
         println!(
             "  実際のキャプチャ時間: {:.2}秒 (タイムスタンプ差分)",
             actual_duration_sec
@@ -362,21 +367,15 @@ mod tests {
                     last_frame = Some(frame.clone());
                     frame_count += 1;
 
-                    // フレーム間隔を計算
-                    let frame_duration = if let Some(prev_ts) = last_frame_ts {
-                        let delta_ms = frame.timestamp.saturating_sub(prev_ts).max(1);
-                        Duration::from_millis(delta_ms)
-                    } else {
-                        Duration::from_millis(22) // デフォルト45fps
-                    };
-                    last_frame_ts = Some(frame.timestamp);
+                    // タイムスタンプを更新（エンコーダー側で duration を計算するため、ここでは更新のみ）
+                    last_frame_ts = Some(frame.windows_timespan);
 
                     // EncodeJobを作成して即座に送信
                     let job = EncodeJob {
                         width: frame.width,
                         height: frame.height,
                         rgba: frame.data,
-                        duration: frame_duration,
+                        timestamp: frame.windows_timespan,
                         enqueue_at: Instant::now(),
                         request_keyframe: false,
                     };
@@ -413,17 +412,25 @@ mod tests {
         }
 
         // フレームのタイムスタンプ情報を確認
-        let first_frame_ts = first_frame.as_ref().unwrap().timestamp;
-        let last_frame_ts_val = last_frame.as_ref().unwrap().timestamp;
-        let actual_duration_ms = last_frame_ts_val.saturating_sub(first_frame_ts);
+        let first_frame_ts = first_frame.as_ref().unwrap().windows_timespan;
+        let last_frame_ts_val = last_frame.as_ref().unwrap().windows_timespan;
+        // windows_timespan は100ナノ秒単位なので、ミリ秒に変換
+        let delta_hns = last_frame_ts_val.saturating_sub(first_frame_ts);
+        let actual_duration_ms = delta_hns / 10_000;
         let actual_duration_sec = actual_duration_ms as f32 / 1000.0;
         let avg_fps = if actual_duration_sec > 0.0 {
             frame_count as f32 / actual_duration_sec
         } else {
             0.0
         };
-        println!("  最初のフレームタイムスタンプ: {}ms", first_frame_ts);
-        println!("  最後のフレームタイムスタンプ: {}ms", last_frame_ts_val);
+        println!(
+            "  最初のフレームタイムスタンプ: {} (100ns units)",
+            first_frame_ts
+        );
+        println!(
+            "  最後のフレームタイムスタンプ: {} (100ns units)",
+            last_frame_ts_val
+        );
         println!(
             "  実際のキャプチャ時間: {:.2}秒 (タイムスタンプ差分)",
             actual_duration_sec
@@ -549,21 +556,15 @@ mod tests {
         let mut last_frame_ts: Option<u64> = None;
 
         for (idx, frame) in frames.into_iter().enumerate() {
-            // フレーム間隔を計算
-            let frame_duration = if let Some(prev_ts) = last_frame_ts {
-                let delta_ms = frame.timestamp.saturating_sub(prev_ts).max(1);
-                Duration::from_millis(delta_ms)
-            } else {
-                Duration::from_millis(22) // デフォルト45fps
-            };
-            last_frame_ts = Some(frame.timestamp);
+            // タイムスタンプを更新（エンコーダー側で duration を計算するため、ここでは更新のみ）
+            last_frame_ts = Some(frame.windows_timespan);
 
             // EncodeJobを作成（frame.dataをmoveで渡す）
             let job = EncodeJob {
                 width: frame.width,
                 height: frame.height,
                 rgba: frame.data, // clone()を削除してmove
-                duration: frame_duration,
+                timestamp: frame.windows_timespan,
                 enqueue_at: Instant::now(),
                 request_keyframe: false,
             };

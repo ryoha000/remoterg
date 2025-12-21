@@ -1,9 +1,9 @@
+use crate::track_writer::VideoTrackState;
 use core_types::{EncodeJob, EncodeJobSlot, Frame};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tracing::{debug, info, span, warn, Level};
-use crate::track_writer::VideoTrackState;
 
 /// フレーム処理の統計情報
 pub struct FrameStats {
@@ -39,7 +39,11 @@ pub fn process_frame(
 ) -> Option<(u32, u32)> {
     stats.frames_received += 1;
     let interarrival_ms = last_frame_ts
-        .map(|prev| frame.timestamp.saturating_sub(prev))
+        .map(|prev| {
+            // windows_timespan は100ナノ秒単位なので、ミリ秒に変換
+            let delta_hns = frame.windows_timespan.saturating_sub(prev);
+            delta_hns / 10_000
+        })
         .unwrap_or(0);
 
     debug!(
@@ -51,7 +55,10 @@ pub fn process_frame(
     if !connection_ready.load(Ordering::Relaxed) {
         stats.frames_dropped_not_ready += 1;
         if stats.frames_dropped_not_ready % 30 == 0 {
-            debug!("Connection not ready yet, dropped {} frames", stats.frames_dropped_not_ready);
+            debug!(
+                "Connection not ready yet, dropped {} frames",
+                stats.frames_dropped_not_ready
+            );
         }
         return None;
     }
@@ -67,17 +74,12 @@ pub fn process_frame(
 
     // Video trackが存在する場合、エンコードワーカーへジョブを送信
     if let Some(track_state) = track_state {
-        // capture側のタイムスタンプ差分からフレーム間隔を推定（デフォルト22ms≒45fps）
-        let frame_duration = if let Some(prev) = *last_frame_ts {
-            let delta_ms = frame.timestamp.saturating_sub(prev).max(1);
-            Duration::from_millis(delta_ms)
-        } else {
-            Duration::from_millis(22)
-        };
-        *last_frame_ts = Some(frame.timestamp);
+        // タイムスタンプを更新（エンコーダー側で duration を計算するため、ここでは更新のみ）
+        *last_frame_ts = Some(frame.windows_timespan);
 
         // 解像度変更を検出した場合はencoderを再生成する必要がある
-        let resolution_changed = track_state.width != frame.width || track_state.height != frame.height;
+        let resolution_changed =
+            track_state.width != frame.width || track_state.height != frame.height;
         if resolution_changed {
             if track_state.width == 0 && track_state.height == 0 {
                 info!(
@@ -101,10 +103,7 @@ pub fn process_frame(
 
         // エンコードジョブ送信を span で計測
         if let Some(job_slot) = encode_job_slot {
-            let queue_encode_job_span = span!(
-                Level::DEBUG,
-                "queue_encode_job"
-            );
+            let queue_encode_job_span = span!(Level::DEBUG, "queue_encode_job");
             let _queue_encode_job_guard = queue_encode_job_span.enter();
             let job_send_start = Instant::now();
             // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
@@ -113,7 +112,7 @@ pub fn process_frame(
                 width: frame.width,
                 height: frame.height,
                 rgba: frame.data,
-                duration: frame_duration,
+                timestamp: frame.windows_timespan,
                 enqueue_at: pipeline_start,
                 request_keyframe,
             });
@@ -122,21 +121,24 @@ pub fn process_frame(
 
             stats.frames_queued += 1;
             if job_send_dur.as_millis() > 10 {
-                warn!(
-                    "Encode job set took {}ms",
-                    job_send_dur.as_millis()
-                );
+                warn!("Encode job set took {}ms", job_send_dur.as_millis());
             }
         } else {
             stats.frames_dropped_no_track += 1;
             if stats.frames_dropped_no_track % 30 == 0 {
-                debug!("Encoder worker not available, dropped {} frames", stats.frames_dropped_no_track);
+                debug!(
+                    "Encoder worker not available, dropped {} frames",
+                    stats.frames_dropped_no_track
+                );
             }
         }
     } else {
         stats.frames_dropped_no_track += 1;
         if stats.frames_dropped_no_track % 30 == 0 {
-            debug!("Video track not ready, dropped {} frames", stats.frames_dropped_no_track);
+            debug!(
+                "Video track not ready, dropped {} frames",
+                stats.frames_dropped_no_track
+            );
         }
     }
 
@@ -167,4 +169,3 @@ pub fn log_performance_stats(stats: &mut FrameStats) {
         stats.last_perf_log = Instant::now();
     }
 }
-

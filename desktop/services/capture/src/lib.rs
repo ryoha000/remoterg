@@ -96,14 +96,17 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         };
 
         // core_types::Frameに変換
+        // frame.timestamp() は100ナノ秒単位の TimeSpan を返す
+        // TimeSpan を Duration に変換してから、100ナノ秒単位の値を取得
+        let timespan = frame.timestamp()?;
+        let duration: std::time::Duration = timespan.into();
+        // Duration から100ナノ秒単位の値を取得（as_nanos() はナノ秒単位なので、100で割る）
+        let windows_timespan = (duration.as_nanos() / 100) as u64;
         let core_frame = Frame {
             width: dst_width,
             height: dst_height,
             data: final_data,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
+            windows_timespan,
         };
 
         // フレーム送信を span で計測

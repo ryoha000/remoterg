@@ -189,11 +189,13 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
                     // 測定対象: フレームエンコードのみ（初期化済みのエンコーダーを使用）
                     let mut rx = res_rx.lock().await;
                     for i in 0..batch_size {
+                        // タイムスタンプは 33ms 間隔で設定
+                        let timestamp = (i * 33) as u64;
                         let job = EncodeJob {
                             width: black_box(width),
                             height: black_box(height),
                             rgba: black_box(input.0[i as usize].clone()),
-                            duration: black_box(Duration::from_millis(33)),
+                            timestamp: black_box(timestamp),
                             enqueue_at: black_box(Instant::now()),
                             request_keyframe: false,
                         };

@@ -51,7 +51,7 @@ pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
-    pub timestamp: u64,
+    pub windows_timespan: u64,
 }
 
 /// ビデオコーデックの種類
@@ -77,7 +77,7 @@ pub struct EncodeJob {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
-    pub duration: Duration,
+    pub timestamp: u64,
     pub enqueue_at: Instant,
     pub request_keyframe: bool,
 }

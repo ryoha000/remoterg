@@ -169,6 +169,33 @@ impl WebRtcService {
                 msg = self.message_rx.recv() => {
                     match msg {
                         Some(WebRtcMessage::SetOffer { sdp, codec }) => {
+                            // 既存のPeerConnectionが存在する場合はクリーンアップ
+                            if peer_connection.is_some() {
+                                info!("Cleaning up existing PeerConnection before creating new one");
+                                
+                                // 1. 既存のエンコーダリソースをクリーンアップ
+                                if let Some(old_slot) = encode_job_slot.as_ref() {
+                                    old_slot.shutdown();
+                                }
+                                drop(encode_job_slot.take());
+                                drop(encode_result_rx.take());
+                                
+                                // 2. 既存のPeerConnectionをクリーンアップ
+                                if let Some(old_pc) = peer_connection.take() {
+                                    if let Err(e) = old_pc.close().await {
+                                        warn!("Failed to close existing PeerConnection: {}", e);
+                                    } else {
+                                        info!("Existing PeerConnection closed");
+                                    }
+                                }
+                                
+                                // 3. video_track_stateをクリア
+                                video_track_state = None;
+                                
+                                // 4. connection_readyフラグをリセット
+                                connection_ready.store(false, std::sync::atomic::Ordering::Relaxed);
+                            }
+
                             let (encoder_factory, selected_codec) =
                                 match self.select_encoder_factory(codec) {
                                     Ok(res) => res,

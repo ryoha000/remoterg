@@ -232,14 +232,14 @@ pub fn start_mf_encode_workers() -> (
             }
         };
 
-        let encoder =
-            match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height) {
-                Ok(enc) => enc,
-                Err(e) => {
-                    warn!("MF encoder worker: failed to create encoder: {}", e);
-                    return;
-                }
-            };
+        let encoder = match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height)
+        {
+            Ok(enc) => enc,
+            Err(e) => {
+                warn!("MF encoder worker: failed to create encoder: {}", e);
+                return;
+            }
+        };
 
         // codec configからSPS/PPSを取得（best-effort、取得できない場合はNone）
         let codec_config_sps_pps = encoder.get_codec_config();

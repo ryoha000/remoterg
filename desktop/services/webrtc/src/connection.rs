@@ -165,14 +165,17 @@ pub async fn handle_set_offer(
     };
 
     // PeerConnectionを作成
-    let pc = Arc::new(api.new_peer_connection(config).await
-        .context("Failed to create peer connection")?);
+    let pc = Arc::new(
+        api.new_peer_connection(config)
+            .await
+            .context("Failed to create peer connection")?,
+    );
 
     // OfferをRemoteDescriptionとして設定
-    let offer = RTCSessionDescription::offer(sdp)
-        .context("Failed to parse offer SDP")?;
+    let offer = RTCSessionDescription::offer(sdp).context("Failed to parse offer SDP")?;
     info!("Offer SDP received:\n{}", offer.sdp);
-    pc.set_remote_description(offer).await
+    pc.set_remote_description(offer)
+        .await
         .context("Failed to set remote description")?;
 
     // Video trackを作成して追加（encoderが提供するコーデックに合わせる）
@@ -189,7 +192,8 @@ pub async fn handle_set_offer(
     ));
 
     // Transceiverを追加（sendonly）
-    let sender: Arc<RTCRtpSender> = pc.add_track(video_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+    let sender: Arc<RTCRtpSender> = pc
+        .add_track(video_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
         .await
         .context("Failed to add video track")?;
 
@@ -203,7 +207,10 @@ pub async fn handle_set_offer(
             match sender_for_rtcp.read_rtcp().await {
                 Ok((pkts, _)) => {
                     for pkt in pkts {
-                        if pkt.as_any().downcast_ref::<PictureLossIndication>().is_some()
+                        if pkt
+                            .as_any()
+                            .downcast_ref::<PictureLossIndication>()
+                            .is_some()
                             || pkt.as_any().downcast_ref::<FullIntraRequest>().is_some()
                         {
                             debug!("RTCP feedback (PLI/FIR) received, requesting keyframe");
@@ -340,7 +347,9 @@ pub async fn handle_set_offer(
     }));
 
     // Answerを生成
-    let answer = pc.create_answer(None).await
+    let answer = pc
+        .create_answer(None)
+        .await
         .context("Failed to create answer")?;
     info!("Answer SDP generated:\n{}", answer.sdp);
 
@@ -368,7 +377,8 @@ pub async fn handle_set_offer(
                 // candidateのcomponentからm-lineを特定
                 // component 1 = RTP, component 2 = RTCP
                 let sdp_mid = if candidate.component == 1 {
-                    m_lines.iter()
+                    m_lines
+                        .iter()
                         .find(|m| m.media_type == "video")
                         .and_then(|m| m.mid.clone())
                 } else {
@@ -376,21 +386,27 @@ pub async fn handle_set_offer(
                 };
 
                 let sdp_mline_index = if candidate.component == 1 {
-                    m_lines.iter()
+                    m_lines
+                        .iter()
                         .find(|m| m.media_type == "video")
                         .map(|m| m.index as u16)
                 } else {
                     None
                 };
 
-                info!("ICE candidate: {} (mid: {:?}, mline_index: {:?})",
-                    candidate_str, sdp_mid, sdp_mline_index);
+                info!(
+                    "ICE candidate: {} (mid: {:?}, mline_index: {:?})",
+                    candidate_str, sdp_mid, sdp_mline_index
+                );
 
-                if let Err(e) = signaling_tx.send(SignalingResponse::IceCandidate {
-                    candidate: candidate_str,
-                    sdp_mid,
-                    sdp_mline_index,
-                }).await {
+                if let Err(e) = signaling_tx
+                    .send(SignalingResponse::IceCandidate {
+                        candidate: candidate_str,
+                        sdp_mid,
+                        sdp_mline_index,
+                    })
+                    .await
+                {
                     warn!("Failed to send ICE candidate: {}", e);
                 } else {
                     debug!("ICE candidate sent to signaling service");
@@ -400,7 +416,8 @@ pub async fn handle_set_offer(
     }));
 
     // LocalDescriptionとして設定
-    pc.set_local_description(answer.clone()).await
+    pc.set_local_description(answer.clone())
+        .await
         .context("Failed to set local description")?;
 
     // 念のため送信開始を明示的にトリガー（start_rtp_senders 依存の補完）
@@ -415,9 +432,10 @@ pub async fn handle_set_offer(
     });
 
     // Answerをシグナリングサービスに送信
-    if let Err(e) = signaling_tx.send(SignalingResponse::Answer {
-        sdp: answer.sdp
-    }).await {
+    if let Err(e) = signaling_tx
+        .send(SignalingResponse::Answer { sdp: answer.sdp })
+        .await
+    {
         error!("Failed to send answer to signaling service: {}", e);
     } else {
         info!("Answer sent to signaling service");
@@ -535,9 +553,10 @@ pub async fn handle_add_ice_candidate(
         sdp_mline_index,
         username_fragment: None,
     };
-    peer_connection.add_ice_candidate(ice_candidate).await
+    peer_connection
+        .add_ice_candidate(ice_candidate)
+        .await
         .context("Failed to add ICE candidate")?;
     debug!("ICE candidate added");
     Ok(())
 }
-

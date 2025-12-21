@@ -1,0 +1,14 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema-jsonc.json",
+  "entry": [
+    "src/router.tsx",
+    "instrument.server.mjs",
+    "src/env.ts",
+    "src/worker.ts"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "paths": {
+    "@/*": ["./src/*"]
+  },
+  "ignoreDependencies": ["cloudflare"]
+}

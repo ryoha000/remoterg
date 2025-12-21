@@ -233,23 +233,11 @@ pub async fn handle_set_offer(
         while let Ok((_, _)) = sender_for_rtcp_drain.read(&mut rtcp_buf).await {}
     });
 
-    // 送信トラックのパラメータ・送信統計・transceiver 状態を定期ログ（5秒間隔）
-    let sender_for_log = sender.clone();
+    // 送信統計 状態を定期ログ（5秒間隔）
     let pc_for_log = pc.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
-
-            // パラメータ（webrtc-rs 0.14 では get_parameters は Result ではなく値を返す）
-            let params = sender_for_log.get_parameters().await;
-            let ssrcs: Vec<_> = params.encodings.iter().map(|e| e.ssrc).collect();
-            let pts: Vec<_> = params
-                .rtp_parameters
-                .codecs
-                .iter()
-                .map(|c| (c.payload_type, c.capability.mime_type.clone()))
-                .collect();
-            info!("sender params: ssrcs={:?}, codecs={:?}", ssrcs, pts);
 
             // sender/get_stats 相当の情報（OutboundRTP）を PeerConnection 経由で確認
             let stats = pc_for_log.get_stats().await;
@@ -272,19 +260,6 @@ pub async fn handle_set_offer(
             }
             if !outbound_logged {
                 info!("sender stats: outbound video RTP not found in get_stats");
-            }
-
-            // transceiver の希望方向・現在方向を確認
-            let transceivers = pc_for_log.get_transceivers().await;
-            for (idx, t) in transceivers.iter().enumerate() {
-                info!(
-                    "transceiver[{}]: mid={:?} kind={:?} direction={:?} current_direction={:?}",
-                    idx,
-                    t.mid(),
-                    t.kind(),
-                    t.direction(),
-                    t.current_direction()
-                );
             }
         }
     });

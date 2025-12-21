@@ -180,15 +180,7 @@ pub fn start_mf_encode_workers() -> (
     std::thread::spawn(move || {
         let mut encode_failures = 0u32;
         let mut empty_samples = 0u32;
-        let mut successful_encodes = 0u32;
         let mut frame_timestamp = 0i64;
-
-        // パフォーマンス統計用
-        let mut total_preprocess_dur = Duration::ZERO;
-        let mut total_encode_dur = Duration::ZERO;
-        let mut total_pack_dur = Duration::ZERO;
-        let mut total_queue_wait_dur = Duration::ZERO;
-        let mut last_stats_log = Instant::now();
 
         // 入力/出力の対応付け用キュー
         let mut input_meta_queue: VecDeque<InputFrameMeta> = VecDeque::new();
@@ -306,13 +298,10 @@ pub fn start_mf_encode_workers() -> (
                             }
                         };
 
-                        let recv_at = Instant::now();
-                        let queue_wait_dur = recv_at.duration_since(job.enqueue_at);
                         let job_width = (job.width / 2) * 2;
                         let job_height = (job.height / 2) * 2;
 
                         // 前処理（RGBA → NV12 テクスチャ）
-                        let preprocess_start = Instant::now();
                         let nv12_texture =
                             match preprocessor.process(&job.rgba, width, height, frame_timestamp) {
                                 Ok(texture) => texture,
@@ -322,7 +311,6 @@ pub fn start_mf_encode_workers() -> (
                                     continue;
                                 }
                             };
-                        let preprocess_dur = preprocess_start.elapsed();
 
                         // メタ情報をキューに保存
                         input_meta_queue.push_back(InputFrameMeta {
@@ -404,13 +392,10 @@ pub fn start_mf_encode_workers() -> (
                         }
 
                         frame_timestamp += sample_duration_hns;
-                        total_preprocess_dur += preprocess_dur;
-                        total_queue_wait_dur += queue_wait_dur;
                     }
                     #[allow(non_upper_case_globals)]
                     METransformHaveOutput => {
                         // 出力が準備できた場合、ProcessOutputを呼んでデータを取得
-                        let encode_start = Instant::now();
                         let output_data_buffer = MFT_OUTPUT_DATA_BUFFER {
                             dwStreamID: 0,
                             pSample: ManuallyDrop::new(None),
@@ -480,13 +465,9 @@ pub fn start_mf_encode_workers() -> (
                                         );
                                     }
 
-                                    let encode_dur = encode_start.elapsed();
-
                                     // Annex-B形式に変換（フォーマット自動判定）
-                                    let pack_start = Instant::now();
                                     let (mut sample_data, has_sps_pps_in_data) =
                                         annexb_from_mf_data(&encoded_data);
-                                    let pack_dur = pack_start.elapsed();
 
                                     // キーフレーム判定（MFSampleExtension_CleanPoint + SPS/PPS検出）
                                     let is_clean_point =
@@ -543,32 +524,6 @@ pub fn start_mf_encode_workers() -> (
                                         continue;
                                     }
 
-                                    successful_encodes += 1;
-                                    total_encode_dur += encode_dur;
-                                    total_pack_dur += pack_dur;
-
-                                    if successful_encodes % 50 == 0
-                                        || last_stats_log.elapsed().as_secs() >= 5
-                                    {
-                                        let avg_preprocess = total_preprocess_dur.as_secs_f64()
-                                            / successful_encodes as f64;
-                                        let avg_encode = total_encode_dur.as_secs_f64()
-                                            / successful_encodes as f64;
-                                        let avg_pack = total_pack_dur.as_secs_f64()
-                                            / successful_encodes as f64;
-                                        let avg_queue = total_queue_wait_dur.as_secs_f64()
-                                            / successful_encodes as f64;
-                                        info!(
-                                            "MF encoder worker stats [{} frames]: avg_preprocess={:.3}ms avg_encode={:.3}ms avg_pack={:.3}ms avg_queue={:.3}ms",
-                                            successful_encodes,
-                                            avg_preprocess * 1000.0,
-                                            avg_encode * 1000.0,
-                                            avg_pack * 1000.0,
-                                            avg_queue * 1000.0
-                                        );
-                                        last_stats_log = Instant::now();
-                                    }
-
                                     if res_tx
                                         .send(EncodeResult {
                                             sample_data,
@@ -619,8 +574,8 @@ pub fn start_mf_encode_workers() -> (
         }
 
         info!(
-            "MF encoder worker: exiting (successful: {}, failures: {}, empty samples: {})",
-            successful_encodes, encode_failures, empty_samples
+            "MF encoder worker: exiting (failures: {}, empty samples: {})",
+            encode_failures, empty_samples
         );
     });
 

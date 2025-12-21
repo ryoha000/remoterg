@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export const Route = createFileRoute("/viewer")({
   component: ViewerPage,
@@ -71,7 +72,10 @@ function ViewerPage() {
   return (
     <div className="min-h-screen bg-background flex flex-col items-center p-6">
       <div className="max-w-6xl w-full space-y-6">
-        <h1 className="text-3xl font-bold text-foreground text-center">RemoteRG</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold text-foreground">RemoteRG</h1>
+          <ThemeToggle />
+        </div>
 
         <Card>
           <CardHeader>

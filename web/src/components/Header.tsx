@@ -1,69 +1,56 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
-import { Home, Menu, Monitor, X } from "lucide-react";
+import { Home, Menu, Monitor } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
 
 export default function Header() {
-  const [isOpen, setIsOpen] = useState(false);
-
   return (
     <>
-      <header className="p-4 flex items-center bg-gray-800 text-white shadow-lg">
-        <button
-          onClick={() => setIsOpen(true)}
-          className="p-2 hover:bg-gray-700 rounded-lg transition-colors"
-          aria-label="Open menu"
-        >
-          <Menu size={24} />
-        </button>
-        <h1 className="ml-4 text-xl font-semibold">
+      <header className="p-4 flex items-center bg-background border-b border-border shadow-sm">
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label="Open menu">
+              <Menu size={24} />
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-80">
+            <SheetHeader>
+              <SheetTitle>Navigation</SheetTitle>
+            </SheetHeader>
+            <nav className="flex flex-col gap-2 mt-6">
+              <Link
+                to="/"
+                className={cn(
+                  "flex items-center gap-3 p-3 rounded-lg hover:bg-accent transition-colors"
+                )}
+              >
+                <Home size={20} />
+                <span className="font-medium">Home</span>
+              </Link>
+
+              <Link
+                to="/viewer"
+                className={cn(
+                  "flex items-center gap-3 p-3 rounded-lg hover:bg-accent transition-colors"
+                )}
+              >
+                <Monitor size={20} />
+                <span className="font-medium">Viewer</span>
+              </Link>
+            </nav>
+          </SheetContent>
+        </Sheet>
+        <h1 className="ml-4 text-xl font-semibold text-foreground">
           <Link to="/">RemoteRG</Link>
         </h1>
       </header>
-
-      <aside
-        className={`fixed top-0 left-0 h-full w-80 bg-gray-900 text-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${
-          isOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="flex items-center justify-between p-4 border-b border-gray-700">
-          <h2 className="text-xl font-bold">Navigation</h2>
-          <button
-            onClick={() => setIsOpen(false)}
-            className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
-            aria-label="Close menu"
-          >
-            <X size={24} />
-          </button>
-        </div>
-
-        <nav className="flex-1 p-4 overflow-y-auto">
-          <Link
-            to="/"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                "flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2",
-            }}
-          >
-            <Home size={20} />
-            <span className="font-medium">Home</span>
-          </Link>
-
-          <Link
-            to="/viewer"
-            onClick={() => setIsOpen(false)}
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors mb-2"
-            activeProps={{
-              className:
-                "flex items-center gap-3 p-3 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors mb-2",
-            }}
-          >
-            <Monitor size={20} />
-            <span className="font-medium">Viewer</span>
-          </Link>
-        </nav>
-      </aside>
     </>
   );
 }

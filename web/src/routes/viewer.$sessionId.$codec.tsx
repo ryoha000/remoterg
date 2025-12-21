@@ -3,19 +3,15 @@ import { useState, useRef, useEffect } from "react";
 import { useWebRTC } from "@/lib/use-webrtc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-export const Route = createFileRoute("/viewer")({
+export const Route = createFileRoute("/viewer/$sessionId/$codec")({
   component: ViewerPage,
 });
 
 function ViewerPage() {
-  const [sessionId, setSessionId] = useState<string>("fixed");
-  const [codec, setCodec] = useState<"h264" | "any">("h264");
+  const { sessionId, codec } = Route.useParams();
   const [stream, setStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -31,7 +27,7 @@ function ViewerPage() {
   } = useWebRTC({
     signalUrl: "/api/signal",
     sessionId,
-    codec,
+    codec: codec as "h264" | "any",
     onTrack: (receivedStream) => {
       setStream(receivedStream);
       if (videoRef.current) {
@@ -58,9 +54,14 @@ function ViewerPage() {
     return "接続待機中...";
   };
 
-  const getStatusVariant = (): "default" | "destructive" | "secondary" | "outline" => {
+  const getStatusVariant = ():
+    | "default"
+    | "destructive"
+    | "secondary"
+    | "outline" => {
     if (connectionState === "connected") return "default";
-    if (connectionState === "error" || connectionState === "failed") return "destructive";
+    if (connectionState === "error" || connectionState === "failed")
+      return "destructive";
     return "secondary";
   };
 
@@ -88,45 +89,12 @@ function ViewerPage() {
         <Card>
           <CardContent className="pt-6">
             <div className="flex flex-wrap items-center gap-4">
-              <Label htmlFor="session-id">セッションID:</Label>
-              <Input
-                id="session-id"
-                type="text"
-                value={sessionId}
-                onChange={(e) => setSessionId(e.target.value)}
-                placeholder="fixed"
-                disabled={
-                  connectionState === "connecting" ||
-                  connectionState === "connected"
-                }
-                className="flex-1 min-w-[200px]"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex flex-wrap items-center gap-4">
-              <Label>コーデック:</Label>
-              <RadioGroup
-                value={codec}
-                onValueChange={(value) => setCodec(value as "h264" | "any")}
-                disabled={
-                  connectionState === "connecting" ||
-                  connectionState === "connected"
-                }
-                className="flex flex-wrap gap-4"
-              >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="h264" id="h264" />
-                  <Label htmlFor="h264" className="cursor-pointer">H.264</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="any" id="any" />
-                  <Label htmlFor="any" className="cursor-pointer">自動</Label>
-                </div>
-              </RadioGroup>
+              <span className="text-sm text-muted-foreground">
+                セッションID: {sessionId}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                コーデック: {codec}
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -144,7 +112,8 @@ function ViewerPage() {
               )}
               {stats.track && (
                 <>
-                  track stats: decoded={stats.track.framesDecoded ?? "-"} dropped=
+                  track stats: decoded={stats.track.framesDecoded ?? "-"}{" "}
+                  dropped=
                   {stats.track.framesDropped ?? "-"} freeze=
                   {stats.track.freezeCount ?? "-"}
                   {"\n"}
@@ -171,10 +140,16 @@ function ViewerPage() {
           connectionState === "failed" ? (
             <Button onClick={connect}>接続</Button>
           ) : (
-            <Button variant="outline" onClick={disconnect}>切断</Button>
+            <Button variant="outline" onClick={disconnect}>
+              切断
+            </Button>
           )}
-          <Button variant="outline" onClick={handleNext}>次へ (Enter)</Button>
-          <Button variant="outline" onClick={requestScreenshot}>スクリーンショット</Button>
+          <Button variant="outline" onClick={handleNext}>
+            次へ (Enter)
+          </Button>
+          <Button variant="outline" onClick={requestScreenshot}>
+            スクリーンショット
+          </Button>
         </div>
 
         <Card>
@@ -204,4 +179,3 @@ function ViewerPage() {
     </div>
   );
 }
-

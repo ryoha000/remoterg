@@ -9,15 +9,10 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ViewerRouteImport } from './routes/viewer'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiSignalRouteImport } from './routes/api/signal'
+import { Route as ViewerSessionIdCodecRouteImport } from './routes/viewer.$sessionId.$codec'
 
-const ViewerRoute = ViewerRouteImport.update({
-  id: '/viewer',
-  path: '/viewer',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -28,46 +23,44 @@ const ApiSignalRoute = ApiSignalRouteImport.update({
   path: '/api/signal',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ViewerSessionIdCodecRoute = ViewerSessionIdCodecRouteImport.update({
+  id: '/viewer/$sessionId/$codec',
+  path: '/viewer/$sessionId/$codec',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/viewer': typeof ViewerRoute
   '/api/signal': typeof ApiSignalRoute
+  '/viewer/$sessionId/$codec': typeof ViewerSessionIdCodecRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/viewer': typeof ViewerRoute
   '/api/signal': typeof ApiSignalRoute
+  '/viewer/$sessionId/$codec': typeof ViewerSessionIdCodecRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/viewer': typeof ViewerRoute
   '/api/signal': typeof ApiSignalRoute
+  '/viewer/$sessionId/$codec': typeof ViewerSessionIdCodecRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/viewer' | '/api/signal'
+  fullPaths: '/' | '/api/signal' | '/viewer/$sessionId/$codec'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/viewer' | '/api/signal'
-  id: '__root__' | '/' | '/viewer' | '/api/signal'
+  to: '/' | '/api/signal' | '/viewer/$sessionId/$codec'
+  id: '__root__' | '/' | '/api/signal' | '/viewer/$sessionId/$codec'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  ViewerRoute: typeof ViewerRoute
   ApiSignalRoute: typeof ApiSignalRoute
+  ViewerSessionIdCodecRoute: typeof ViewerSessionIdCodecRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/viewer': {
-      id: '/viewer'
-      path: '/viewer'
-      fullPath: '/viewer'
-      preLoaderRoute: typeof ViewerRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
@@ -82,13 +75,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSignalRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/viewer/$sessionId/$codec': {
+      id: '/viewer/$sessionId/$codec'
+      path: '/viewer/$sessionId/$codec'
+      fullPath: '/viewer/$sessionId/$codec'
+      preLoaderRoute: typeof ViewerSessionIdCodecRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  ViewerRoute: ViewerRoute,
   ApiSignalRoute: ApiSignalRoute,
+  ViewerSessionIdCodecRoute: ViewerSessionIdCodecRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

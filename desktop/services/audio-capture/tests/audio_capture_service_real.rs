@@ -109,9 +109,7 @@ mod tests {
     async fn test_audio_capture_service_real() -> Result<()> {
         init_tracing();
 
-        // HWNDを取得（デスクトップウィンドウを使用）
-        let hwnd = unsafe { get_desktop_window() };
-        // let hwnd_raw = hwnd.0 as u64;
+        // HWNDを取得
         let hwnd_raw = 1123566;
         println!("Using desktop window HWND: {}", hwnd_raw);
 

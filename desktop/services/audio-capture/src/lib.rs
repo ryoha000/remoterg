@@ -155,8 +155,13 @@ impl AudioCaptureService {
 
         // ActivateAudioInterfaceAsyncを使用してプロセスループバックモードでオーディオクライアントを取得
         let audio_client = unsafe {
-            Self::setup_audio_client(process_id, &wave_format)
-                .context("Failed to setup audio client")?
+            match Self::setup_audio_client(process_id, &wave_format) {
+                Ok(client) => client,
+                Err(e) => {
+                    error!("Failed to setup audio client: {:?}", e);
+                    return Err(e);
+                }
+            }
         };
 
         // キャプチャクライアントを取得

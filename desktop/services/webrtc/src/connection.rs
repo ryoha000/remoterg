@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use core_types::{
-    AudioEncoderFactory, DataChannelMessage, SignalingResponse, VideoCodec, VideoEncoderFactory,
+    AudioEncoderFactory, AudioFrame, DataChannelMessage, SignalingResponse, VideoCodec, VideoEncoderFactory,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -143,6 +143,7 @@ pub async fn handle_set_offer(
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     connection_ready: Arc<AtomicBool>,
     keyframe_tx: mpsc::UnboundedSender<()>,
+    audio_frame_rx: Option<mpsc::Receiver<AudioFrame>>,
     audio_encoder_factory: Option<Arc<dyn AudioEncoderFactory>>,
 ) -> Result<SetOfferResult> {
     info!("SetOffer received, generating answer");
@@ -211,7 +212,9 @@ pub async fn handle_set_offer(
         tokio::sync::mpsc::UnboundedReceiver<core_types::AudioEncodeResult>,
     > = None;
 
-    if let Some(ref audio_encoder_factory) = audio_encoder_factory {
+    if let (Some(mut audio_frame_rx), Some(audio_encoder_factory)) =
+        (audio_frame_rx, audio_encoder_factory)
+    {
         info!("Adding audio track with Opus codec");
         let audio_track_local = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
@@ -230,9 +233,19 @@ pub async fn handle_set_offer(
         info!("Audio track added to peer connection");
 
         // 音声エンコーダーをセットアップ
-        let (_audio_frame_tx, audio_result_rx) = audio_encoder_factory.setup();
-        audio_encode_result_rx = Some(audio_result_rx);
+        let (audio_encoder_tx, audio_result_rx) = audio_encoder_factory.setup();
 
+        // 音声フレームをエンコーダーに転送するタスクをスポーン
+        tokio::spawn(async move {
+            while let Some(frame) = audio_frame_rx.recv().await {
+                if audio_encoder_tx.send(frame).await.is_err() {
+                    debug!("Audio encoder channel closed");
+                    break;
+                }
+            }
+        });
+
+        audio_encode_result_rx = Some(audio_result_rx);
         audio_track = Some(audio_track_local);
     }
 

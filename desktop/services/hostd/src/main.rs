@@ -12,7 +12,7 @@ use capture::CaptureService;
 #[cfg(feature = "mock")]
 use capturemock::CaptureService;
 use core_types::{
-    AudioCaptureMessage, CaptureBackend, AudioEncoderFactory, CaptureMessage, DataChannelMessage, Frame,
+    AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
     SignalingResponse, VideoCodec, VideoEncoderFactory,
 };
 use audio_capture::AudioCaptureService;
@@ -93,21 +93,21 @@ async fn main() -> Result<()> {
         );
     }
 
-    // 音声エンコーダーファクトリを作成
-    let audio_encoder_factory = Arc::new(OpusEncoderFactory::new());
+    // 音声フレーム用のチャンネルを作成
+    let (audio_frame_tx, audio_frame_rx) = mpsc::channel::<AudioFrame>(100);
 
-    // 音声エンコーダーをセットアップ
-    let (audio_encoder_frame_tx, _audio_encoder_result_rx) = audio_encoder_factory.setup();
+    // 音声エンコーダーファクトリを作成（WebRtcServiceに渡すのみ）
+    let audio_encoder_factory = Arc::new(OpusEncoderFactory::new());
 
     // サービス作成
     let capture_service = CaptureService::new(frame_tx, capture_cmd_rx);
-    let audio_capture_service = AudioCaptureService::new(audio_encoder_frame_tx, audio_capture_cmd_rx);
+    let audio_capture_service = AudioCaptureService::new(audio_frame_tx, audio_capture_cmd_rx);
     let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
         frame_rx,
         signaling_response_tx,
         data_channel_tx,
         encoder_factories,
-        Some(audio_encoder_factory.clone()),
+        Some((audio_frame_rx, audio_encoder_factory)),
     );
     let input_service = InputService::new(data_channel_rx);
     let signaling_client = SignalingClient::new(

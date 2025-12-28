@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use webrtc_rs::peer_connection::RTCPeerConnection;
 
-use core_types::{DataChannelMessage, Frame, SignalingResponse, WebRtcMessage};
+use core_types::{AudioFrame, DataChannelMessage, Frame, SignalingResponse, WebRtcMessage};
 
 use connection::{handle_add_ice_candidate, handle_set_offer};
 use frame_handler::{log_performance_stats, process_frame, FrameStats};
@@ -25,7 +25,7 @@ pub struct WebRtcService {
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
-    audio_encoder_factory: Option<Arc<dyn AudioEncoderFactory>>,
+    audio_input: Option<(mpsc::Receiver<AudioFrame>, Arc<dyn AudioEncoderFactory>)>,
 }
 
 impl WebRtcService {
@@ -34,7 +34,7 @@ impl WebRtcService {
         signaling_tx: mpsc::Sender<SignalingResponse>,
         data_channel_tx: mpsc::Sender<DataChannelMessage>,
         encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
-        audio_encoder_factory: Option<Arc<dyn AudioEncoderFactory>>,
+        audio_input: Option<(mpsc::Receiver<AudioFrame>, Arc<dyn AudioEncoderFactory>)>,
     ) -> (Self, mpsc::Sender<WebRtcMessage>) {
         let (message_tx, message_rx) = mpsc::channel(100);
         (
@@ -44,7 +44,7 @@ impl WebRtcService {
                 signaling_tx,
                 data_channel_tx,
                 encoder_factories,
-                audio_encoder_factory,
+                audio_input,
             },
             message_tx,
         )
@@ -218,6 +218,13 @@ impl WebRtcService {
                                     }
                                 };
 
+                            // audio_inputを取り出す（一度だけ使用）
+                            let (audio_frame_rx, audio_encoder_factory) = if let Some((rx, factory)) = self.audio_input.take() {
+                                (Some(rx), Some(factory))
+                            } else {
+                                (None, None)
+                            };
+
                             match handle_set_offer(
                                 sdp,
                                 codec,
@@ -227,7 +234,8 @@ impl WebRtcService {
                                 self.data_channel_tx.clone(),
                                 connection_ready.clone(),
                                 keyframe_tx.clone(),
-                                self.audio_encoder_factory.clone(),
+                                audio_frame_rx,
+                                audio_encoder_factory,
                             ).await {
                                 Ok(result) => {
                                     peer_connection = Some(result.peer_connection);

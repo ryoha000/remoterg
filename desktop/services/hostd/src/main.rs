@@ -12,9 +12,11 @@ use capture::CaptureService;
 #[cfg(feature = "mock")]
 use capturemock::CaptureService;
 use core_types::{
-    CaptureBackend, CaptureMessage, DataChannelMessage, Frame, SignalingResponse, VideoCodec,
-    VideoEncoderFactory,
+    AudioCaptureMessage, CaptureBackend, AudioEncoderFactory, CaptureMessage, DataChannelMessage, Frame,
+    SignalingResponse, VideoCodec, VideoEncoderFactory,
 };
+use audio_capture::AudioCaptureService;
+use audio_encoder::OpusEncoderFactory;
 #[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
 use input::InputService;
@@ -75,6 +77,9 @@ async fn main() -> Result<()> {
     let (signaling_response_tx, signaling_response_rx) = mpsc::channel::<SignalingResponse>(100);
     let (data_channel_tx, data_channel_rx) = mpsc::channel::<DataChannelMessage>(100);
 
+    // 音声チャンネル作成
+    let (audio_capture_cmd_tx, audio_capture_cmd_rx) = mpsc::channel::<AudioCaptureMessage>(10);
+
     #[cfg(not(feature = "h264"))]
     compile_error!("h264 feature must be enabled for hostd");
 
@@ -88,13 +93,21 @@ async fn main() -> Result<()> {
         );
     }
 
+    // 音声エンコーダーファクトリを作成
+    let audio_encoder_factory = Arc::new(OpusEncoderFactory::new());
+
+    // 音声エンコーダーをセットアップ
+    let (audio_encoder_frame_tx, _audio_encoder_result_rx) = audio_encoder_factory.setup();
+
     // サービス作成
     let capture_service = CaptureService::new(frame_tx, capture_cmd_rx);
+    let audio_capture_service = AudioCaptureService::new(audio_encoder_frame_tx, audio_capture_cmd_rx);
     let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
         frame_rx,
         signaling_response_tx,
         data_channel_tx,
         encoder_factories,
+        Some(audio_encoder_factory.clone()),
     );
     let input_service = InputService::new(data_channel_rx);
     let signaling_client = SignalingClient::new(
@@ -115,8 +128,16 @@ async fn main() -> Result<()> {
         info!("CaptureService started (real capture)");
     }
 
+    // AudioCaptureServiceを開始
+    audio_capture_cmd_tx
+        .send(AudioCaptureMessage::Start { hwnd })
+        .await
+        .context("Failed to start audio capture service")?;
+    info!("AudioCaptureService started");
+
     // サービスを独立タスクとして起動（Send でない WebRTC はこのスレッドで駆動する）
     let capture_handle = tokio::spawn(async move { capture_service.run().await });
+    let audio_capture_handle = tokio::spawn(async move { audio_capture_service.run().await });
     let input_handle = tokio::spawn(async move { input_service.run().await });
     let signaling_handle = tokio::spawn(async move { signaling_client.run().await });
     // WebRTC は OpenH264 の非 Send 型を含むため spawn せず現在のタスクで実行する
@@ -132,6 +153,11 @@ async fn main() -> Result<()> {
             Ok(Ok(())) => info!("CaptureService finished"),
             Ok(Err(e)) => tracing::error!("CaptureService error: {}", e),
             Err(e) => tracing::error!("CaptureService task panicked: {}", e),
+        },
+        result = audio_capture_handle => match result {
+            Ok(Ok(())) => info!("AudioCaptureService finished"),
+            Ok(Err(e)) => tracing::error!("AudioCaptureService error: {}", e),
+            Err(e) => tracing::error!("AudioCaptureService task panicked: {}", e),
         },
         result = input_handle => match result {
             Ok(Ok(())) => info!("InputService finished"),

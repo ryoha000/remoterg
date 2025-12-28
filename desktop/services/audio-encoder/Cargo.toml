@@ -1,0 +1,17 @@
+[package]
+name = "audio-encoder"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+core-types = { path = "../core" }
+opus-sys = { path = "../opus-sys" }
+bytes = "1.0"
+
+
+
+
+

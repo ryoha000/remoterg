@@ -1,0 +1,12 @@
+[package]
+name = "opus-sys"
+version.workspace = true
+edition.workspace = true
+links = "opus"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.69"
+cmake = "0.1"

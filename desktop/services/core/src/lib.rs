@@ -234,3 +234,36 @@ pub trait CaptureBackend: Send {
 
     fn run(self) -> CaptureFuture;
 }
+
+/// 音声フレーム
+#[derive(Debug, Clone)]
+pub struct AudioFrame {
+    pub samples: Vec<f32>, // インターリーブPCM（L,R,L,R,...）
+    pub sample_rate: u32,  // 48000
+    pub channels: u16,     // 2
+    pub timestamp_us: u64, // マイクロ秒タイムスタンプ
+}
+
+/// 音声キャプチャサービスへのメッセージ
+#[derive(Debug, Clone)]
+pub enum AudioCaptureMessage {
+    Start { hwnd: u64 },
+    Stop,
+}
+
+pub type AudioFrameSender = Sender<AudioFrame>;
+pub type AudioCaptureCommandReceiver = Receiver<AudioCaptureMessage>;
+
+/// 音声エンコード結果
+#[derive(Debug)]
+pub struct AudioEncodeResult {
+    pub encoded_data: Vec<u8>, // Opusエンコード済みデータ
+    pub duration: Duration,    // フレームの長さ（10ms）
+}
+
+/// 音声エンコーダーファクトリ
+pub trait AudioEncoderFactory: Send + Sync {
+    /// エンコード済みデータの受信チャンネルを返す
+    /// 音声フレームを送信するチャンネルを返す
+    fn setup(&self) -> (Sender<AudioFrame>, UnboundedReceiver<AudioEncodeResult>);
+}

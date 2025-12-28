@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use core_types::{DataChannelMessage, SignalingResponse, VideoCodec, VideoEncoderFactory};
+use core_types::{
+    AudioEncoderFactory, DataChannelMessage, SignalingResponse, VideoCodec, VideoEncoderFactory,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -126,6 +128,9 @@ pub struct SetOfferResult {
     pub video_track_state: VideoTrackState,
     pub encode_job_slot: Arc<core_types::EncodeJobSlot>,
     pub encode_result_rx: tokio::sync::mpsc::UnboundedReceiver<core_types::EncodeResult>,
+    pub audio_track: Option<Arc<TrackLocalStaticSample>>,
+    pub audio_encode_result_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<core_types::AudioEncodeResult>>,
 }
 
 /// SetOfferメッセージを処理
@@ -138,6 +143,7 @@ pub async fn handle_set_offer(
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     connection_ready: Arc<AtomicBool>,
     keyframe_tx: mpsc::UnboundedSender<()>,
+    audio_encoder_factory: Option<Arc<dyn AudioEncoderFactory>>,
 ) -> Result<SetOfferResult> {
     info!("SetOffer received, generating answer");
 
@@ -198,6 +204,37 @@ pub async fn handle_set_offer(
         .context("Failed to add video track")?;
 
     info!("Video track added to peer connection");
+
+    // 音声トラックを追加（オプション）
+    let mut audio_track: Option<Arc<TrackLocalStaticSample>> = None;
+    let mut audio_encode_result_rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<core_types::AudioEncodeResult>,
+    > = None;
+
+    if let Some(ref audio_encoder_factory) = audio_encoder_factory {
+        info!("Adding audio track with Opus codec");
+        let audio_track_local = Arc::new(TrackLocalStaticSample::new(
+            RTCRtpCodecCapability {
+                mime_type: "audio/opus".to_string(),
+                ..Default::default()
+            },
+            "audio".to_string(),
+            "stream".to_string(),
+        ));
+
+        let _audio_sender: Arc<RTCRtpSender> = pc
+            .add_track(audio_track_local.clone() as Arc<dyn TrackLocal + Send + Sync>)
+            .await
+            .context("Failed to add audio track")?;
+
+        info!("Audio track added to peer connection");
+
+        // 音声エンコーダーをセットアップ
+        let (_audio_frame_tx, audio_result_rx) = audio_encoder_factory.setup();
+        audio_encode_result_rx = Some(audio_result_rx);
+
+        audio_track = Some(audio_track_local);
+    }
 
     // RTCP 受信ループを開始し、PLI/FIR を受けたらキーフレーム再送を要求
     let keyframe_tx_rtcp = keyframe_tx.clone();
@@ -511,6 +548,8 @@ pub async fn handle_set_offer(
         video_track_state,
         encode_job_slot,
         encode_result_rx,
+        audio_track,
+        audio_encode_result_rx,
     })
 }
 

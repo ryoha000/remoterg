@@ -105,12 +105,60 @@ mod tests {
         Ok(())
     }
 
+    /// 音声フレームの無音を検出
+    /// RMSレベルを計算し、閾値以下であれば無音と判定
+    fn detect_silence(frames: &[AudioFrame], threshold_db: f32) -> Result<bool> {
+        if frames.is_empty() {
+            return Err(anyhow::anyhow!("フレームが空です"));
+        }
+
+        // 全サンプルのRMS（Root Mean Square）を計算
+        let mut sum_squares: f64 = 0.0;
+        let mut total_samples: usize = 0;
+
+        for frame in frames {
+            for sample in &frame.samples {
+                sum_squares += (*sample as f64) * (*sample as f64);
+                total_samples += 1;
+            }
+        }
+
+        if total_samples == 0 {
+            return Err(anyhow::anyhow!("サンプルが0です"));
+        }
+
+        let rms = (sum_squares / total_samples as f64).sqrt();
+
+        // RMSをデシベル（dB）に変換
+        let rms_db = if rms > 0.0 {
+            20.0 * rms.log10()
+        } else {
+            -96.0
+        } as f32;
+
+        println!("音声レベル分析:");
+        println!("  RMS: {:.6}", rms);
+        println!("  RMS (dB): {:.2} dB", rms_db);
+        println!("  閾値: {:.2} dB", threshold_db);
+        println!("  総サンプル数: {}", total_samples);
+
+        // ピーク値も計算（デバッグ用）
+        let peak = frames
+            .iter()
+            .flat_map(|f| &f.samples)
+            .map(|s| s.abs())
+            .fold(0.0f32, f32::max);
+        println!("  ピーク振幅: {:.6}", peak);
+
+        Ok(rms_db < threshold_db)
+    }
+
     #[tokio::test]
     async fn test_audio_capture_service_real() -> Result<()> {
         init_tracing();
 
         // HWNDを取得
-        let hwnd_raw = 1123566;
+        let hwnd_raw = 2958432;
         println!("Using desktop window HWND: {}", hwnd_raw);
 
         // チャネルを作成
@@ -207,6 +255,19 @@ mod tests {
 
         // WAVファイルとして保存
         save_audio_frames_as_wav(&frames)?;
+
+        // 無音検出テスト（重要！）
+        const SILENCE_THRESHOLD_DB: f32 = -60.0;
+        let is_silent = detect_silence(&frames, SILENCE_THRESHOLD_DB)?;
+
+        assert!(
+            !is_silent,
+            "キャプチャされた音声が無音です (閾値: {} dB)。\
+             実装を確認してください。",
+            SILENCE_THRESHOLD_DB
+        );
+
+        println!("✓ 音声が正常にキャプチャされています");
 
         // サービスを停止（チャネルを閉じる）
         drop(command_tx);

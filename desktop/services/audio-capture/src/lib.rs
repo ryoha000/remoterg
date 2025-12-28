@@ -255,8 +255,22 @@ impl AudioCaptureService {
                         (num_frames_available * 2) as usize, // ステレオなので2倍
                     )
                 };
+
+                // デバッグ: 実際のデータレベルを計算
+                let sum_squares: f64 = data_slice.iter().map(|s| (*s as f64) * (*s as f64)).sum();
+                let rms = (sum_squares / data_slice.len() as f64).sqrt();
+                let peak = data_slice.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+
+                debug!(
+                    "GetBuffer: frames={}, RMS={:.6}, peak={:.6}, flags={:#x}",
+                    num_frames_available, rms, peak, flags
+                );
+
                 Some(data_slice.to_vec())
             } else {
+                if flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
+                    debug!("SILENT flag set for {} frames", num_frames_available);
+                }
                 None
             };
 
@@ -327,6 +341,11 @@ impl AudioCaptureService {
             .ProcessLoopbackParams
             .TargetProcessId = process_id;
 
+        info!(
+            "Process loopback params: PID={}, mode=INCLUDE_TARGET_PROCESS_TREE",
+            process_id
+        );
+
         // PROPVARIANTを構築（VT_BLOBとして）
         let mut prop_variant = PROPVARIANT::default();
         (*prop_variant.Anonymous.Anonymous).vt = VT_BLOB;
@@ -364,6 +383,7 @@ impl AudioCaptureService {
         CloseHandle(ev).context("Failed to close event")?;
 
         // PROPVARIANT のライフタイム管理（activation_params への参照を含むため）
+        // activation_operation が完了するまで prop_variant を保持
         std::mem::forget(prop_variant);
 
         // IAudioClient にキャスト
@@ -373,18 +393,40 @@ impl AudioCaptureService {
             .map_err(|e| anyhow::anyhow!("Failed to cast to IAudioClient: {:?}", e))?;
 
         // オーディオクライアントを初期化
-        audio_client
-            .Initialize(
-                AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK
-                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-                10_000_000, // 100msバッファ
-                0,
-                wave_format,
-                None,
-            )
-            .context("Failed to initialize audio client")?;
+        let init_result = audio_client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK
+                | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+            10_000_000, // 100msバッファ
+            0,
+            wave_format,
+            None,
+        );
+
+        if let Err(e) = init_result {
+            error!("Failed to initialize audio client: {:?}", e);
+            // packed構造体のフィールドを直接参照できないため、ローカル変数にコピー
+            let sample_rate = wave_format.nSamplesPerSec;
+            let channels = wave_format.nChannels;
+            let bits_per_sample = wave_format.wBitsPerSample;
+            error!(
+                "  Format: {}Hz, {} ch, {} bits",
+                sample_rate, channels, bits_per_sample
+            );
+            return Err(anyhow::anyhow!("Audio client initialization failed: {:?}", e));
+        }
+
+        info!("Audio client initialized successfully");
+
+        // バッファサイズを確認
+        let buffer_frames = audio_client.GetBufferSize()?;
+        let sample_rate = wave_format.nSamplesPerSec;
+        info!(
+            "Buffer size: {} frames ({:.2}ms)",
+            buffer_frames,
+            buffer_frames as f64 * 1000.0 / sample_rate as f64
+        );
 
         Ok(audio_client)
     }

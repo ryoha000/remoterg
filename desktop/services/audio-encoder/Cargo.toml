@@ -11,7 +11,8 @@ core-types = { path = "../core" }
 opus-sys = { path = "../opus-sys" }
 bytes = "1.0"
 
-
-
+[dev-dependencies]
+hound = "3.5"
+tracing-subscriber = { workspace = true }
 
 

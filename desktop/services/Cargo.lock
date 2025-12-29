@@ -256,9 +256,11 @@ dependencies = [
  "anyhow",
  "bytes",
  "core-types",
+ "hound",
  "opus-sys",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

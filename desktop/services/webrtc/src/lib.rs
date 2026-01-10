@@ -3,7 +3,9 @@ mod frame_handler;
 mod track_writer;
 
 use anyhow::{bail, Result};
-use core_types::{AudioEncodeResult, AudioEncoderFactory, EncodeResult, VideoCodec, VideoEncoderFactory};
+use core_types::{
+    AudioEncodeResult, AudioEncoderFactory, EncodeResult, VideoCodec, VideoEncoderFactory,
+};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -36,7 +38,10 @@ impl WebRtcService {
         encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
         audio_input: Option<(mpsc::Receiver<AudioFrame>, Arc<dyn AudioEncoderFactory>)>,
     ) -> (Self, mpsc::Sender<WebRtcMessage>) {
-        info!("WebRtcService::new - audio_input is_some: {}", audio_input.is_some());
+        info!(
+            "WebRtcService::new - audio_input is_some: {}",
+            audio_input.is_some()
+        );
         let (message_tx, message_rx) = mpsc::channel(100);
         (
             Self {
@@ -87,9 +92,12 @@ impl WebRtcService {
         let mut video_track_state: Option<VideoTrackState> = None;
         let mut encode_job_slot: Option<Arc<core_types::EncodeJobSlot>> = None;
         let mut encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>> = None;
-        let mut audio_track: Option<Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>> = None;
-        let mut audio_encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<AudioEncodeResult>> = None;
-        let mut audio_sender: Option<Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>> = None;
+        let mut audio_track: Option<
+            Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
+        > = None;
+        let mut audio_encode_result_rx: Option<
+            tokio::sync::mpsc::UnboundedReceiver<AudioEncodeResult>,
+        > = None;
 
         let mut frame_count: u64 = 0;
         let mut last_frame_ts: Option<u64> = None;
@@ -183,14 +191,14 @@ impl WebRtcService {
                             // 既存のPeerConnectionが存在する場合はクリーンアップ
                             if peer_connection.is_some() {
                                 info!("Cleaning up existing PeerConnection before creating new one");
-                                
+
                                 // 1. 既存のエンコーダリソースをクリーンアップ
                                 if let Some(old_slot) = encode_job_slot.as_ref() {
                                     old_slot.shutdown();
                                 }
                                 drop(encode_job_slot.take());
                                 drop(encode_result_rx.take());
-                                
+
                                 // 2. 既存のPeerConnectionをクリーンアップ
                                 if let Some(old_pc) = peer_connection.take() {
                                     if let Err(e) = old_pc.close().await {
@@ -199,10 +207,10 @@ impl WebRtcService {
                                         info!("Existing PeerConnection closed");
                                     }
                                 }
-                                
+
                                 // 3. video_track_stateをクリア
                                 video_track_state = None;
-                                
+
                                 // 4. connection_readyフラグをリセット
                                 connection_ready.store(false, std::sync::atomic::Ordering::Relaxed);
                             }
@@ -251,7 +259,6 @@ impl WebRtcService {
                                     encode_result_rx = Some(result.encode_result_rx);
                                     audio_track = result.audio_track;
                                     audio_encode_result_rx = result.audio_encode_result_rx;
-                                    audio_sender = result.audio_sender;
                                 }
                                 Err(e) => {
                                     warn!("Failed to handle SetOffer: {}", e);

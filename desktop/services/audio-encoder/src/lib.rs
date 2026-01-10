@@ -66,6 +66,23 @@ impl Drop for OpusEncoderWrapper {
 
 unsafe impl Send for OpusEncoderWrapper {}
 
+/// PCMサンプルが無音かどうかを判定する
+/// RMS（Root Mean Square）を計算し、閾値以下なら無音と判断
+fn is_silent(samples: &[f32]) -> bool {
+    if samples.is_empty() {
+        return true;
+    }
+
+    // RMSを計算
+    let sum_of_squares: f32 = samples.iter().map(|&s| s * s).sum();
+    let rms = (sum_of_squares / samples.len() as f32).sqrt();
+
+    // 閾値: -60dB相当（0.001）
+    // 通常の音声は0.01以上、無音は0.001以下
+    const SILENCE_THRESHOLD: f32 = 0.001;
+    rms < SILENCE_THRESHOLD
+}
+
 /// Opus エンコーダーファクトリ
 pub struct OpusEncoderFactory;
 
@@ -102,6 +119,9 @@ impl AudioEncoderFactory for OpusEncoderFactory {
             loop {
                 match frame_rx.recv().await {
                     Some(frame) => {
+                        // 無音判定
+                        let silent = is_silent(&frame.samples);
+
                         // フレームをエンコード（f32 サンプルを直接エンコード）
                         let encoded_len = match encoder.encode_float(&frame.samples, &mut encoded_buffer) {
                             Ok(len) => len,
@@ -115,6 +135,7 @@ impl AudioEncoderFactory for OpusEncoderFactory {
                         let result = AudioEncodeResult {
                             encoded_data: encoded_buffer[..encoded_len].to_vec(),
                             duration: Duration::from_millis(10), // 10msフレーム
+                            is_silent: silent,
                         };
 
                         if let Err(e) = result_tx.send(result) {
@@ -122,7 +143,7 @@ impl AudioEncoderFactory for OpusEncoderFactory {
                             break;
                         }
 
-                        debug!("Encoded audio frame: {} bytes", encoded_len);
+                        debug!("Encoded audio frame: {} bytes, silent: {}", encoded_len, silent);
                     }
                     None => {
                         debug!("Audio frame channel closed");

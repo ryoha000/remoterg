@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(task hostd)",
+      "Bash(cargo check:*)",
+      "Bash(git config:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:opus-codec.org)",
+      "WebSearch",
+      "Bash(timeout 10 task:*)",
+      "Bash(timeout 60 task:*)",
+      "Bash(cargo clean:*)",
+      "Bash(cargo build:*)",
+      "Bash(git add:*)",
+      "Bash(cargo test:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(tasklist:*)",
+      "Bash(python3:*)",
+      "Bash(xxd:*)",
+      "Bash(findstr:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(cargo tree:*)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(task e2e)",
+      "Bash(pnpm list:*)",
+      "Bash(cat:*)",
+      "WebFetch(domain:zenn.dev)",
+      "Bash(pnpm exec tsc:*)",
+      "Bash(pnpm tsc:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(tee:*)"
+    ]
+  }
+}

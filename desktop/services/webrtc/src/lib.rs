@@ -36,6 +36,7 @@ impl WebRtcService {
         encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
         audio_input: Option<(mpsc::Receiver<AudioFrame>, Arc<dyn AudioEncoderFactory>)>,
     ) -> (Self, mpsc::Sender<WebRtcMessage>) {
+        info!("WebRtcService::new - audio_input is_some: {}", audio_input.is_some());
         let (message_tx, message_rx) = mpsc::channel(100);
         (
             Self {
@@ -88,6 +89,7 @@ impl WebRtcService {
         let mut encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>> = None;
         let mut audio_track: Option<Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>> = None;
         let mut audio_encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<AudioEncodeResult>> = None;
+        let mut audio_sender: Option<Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>> = None;
 
         let mut frame_count: u64 = 0;
         let mut last_frame_ts: Option<u64> = None;
@@ -96,6 +98,7 @@ impl WebRtcService {
         // キーフレーム要求フラグ（PLI/FIR受信時に設定）
         let keyframe_requested = Arc::new(AtomicBool::new(false));
         let mut audio_frame_count: u64 = 0;
+        let mut audio_silent_count: u64 = 0;
         let mut last_audio_log = Instant::now();
 
         loop {
@@ -176,6 +179,7 @@ impl WebRtcService {
                 msg = self.message_rx.recv() => {
                     match msg {
                         Some(WebRtcMessage::SetOffer { sdp, codec }) => {
+                            info!("Received SetOffer message (codec: {:?})", codec);
                             // 既存のPeerConnectionが存在する場合はクリーンアップ
                             if peer_connection.is_some() {
                                 info!("Cleaning up existing PeerConnection before creating new one");
@@ -219,9 +223,12 @@ impl WebRtcService {
                                 };
 
                             // audio_inputを取り出す（一度だけ使用）
+                            info!("Checking audio_input availability: {}", self.audio_input.is_some());
                             let (audio_frame_rx, audio_encoder_factory) = if let Some((rx, factory)) = self.audio_input.take() {
+                                info!("Audio input taken from WebRtcService");
                                 (Some(rx), Some(factory))
                             } else {
+                                info!("No audio input available in WebRtcService");
                                 (None, None)
                             };
 
@@ -244,6 +251,7 @@ impl WebRtcService {
                                     encode_result_rx = Some(result.encode_result_rx);
                                     audio_track = result.audio_track;
                                     audio_encode_result_rx = result.audio_encode_result_rx;
+                                    audio_sender = result.audio_sender;
                                 }
                                 Err(e) => {
                                     warn!("Failed to handle SetOffer: {}", e);
@@ -285,13 +293,9 @@ impl WebRtcService {
                     }
                 } => {
                     if let Some(result) = audio_encoded {
+                        debug!("Received audio encode result: {} bytes, silent: {}", result.encoded_data.len(), result.is_silent);
                         if let Some(ref track) = audio_track {
-                            if !connection_ready.load(std::sync::atomic::Ordering::Relaxed) {
-                                debug!("Received audio encode result but connection is not ready");
-                                continue;
-                            }
-
-                            use webrtc_media::Sample;
+                            use webrtc_rs::media::Sample;
                             use bytes::Bytes;
                             let sample = Sample {
                                 data: Bytes::from(result.encoded_data),
@@ -302,10 +306,22 @@ impl WebRtcService {
                             match track.write_sample(&sample).await {
                                 Ok(_) => {
                                     audio_frame_count += 1;
+                                    if result.is_silent {
+                                        audio_silent_count += 1;
+                                    }
                                     let elapsed = last_audio_log.elapsed();
                                     if elapsed.as_secs_f32() >= 5.0 {
-                                        info!("Audio frames sent: {} (last {}s)", audio_frame_count, elapsed.as_secs());
+                                        if audio_silent_count == audio_frame_count && audio_frame_count > 0 {
+                                            warn!("Audio frames sent: {} (last {}s) - ALL FRAMES ARE SILENT! No audio detected.",
+                                                  audio_frame_count, elapsed.as_secs());
+                                        } else {
+                                            info!("Audio frames sent: {} (last {}s), silent: {} ({:.1}%)",
+                                                  audio_frame_count, elapsed.as_secs(),
+                                                  audio_silent_count,
+                                                  (audio_silent_count as f32 / audio_frame_count as f32) * 100.0);
+                                        }
                                         audio_frame_count = 0;
+                                        audio_silent_count = 0;
                                         last_audio_log = Instant::now();
                                     }
                                 }
@@ -315,6 +331,11 @@ impl WebRtcService {
                             }
                         } else {
                             debug!("Received audio encode result but audio track is not ready");
+                        }
+                    } else {
+                        // audio_encode_result_rx がある場合、チャネルがクローズされた
+                        if audio_encode_result_rx.is_some() {
+                            info!("Audio encode result channel closed");
                         }
                     }
                 }

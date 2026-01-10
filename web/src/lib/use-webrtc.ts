@@ -22,6 +22,37 @@ export interface WebRTCStats {
   };
 }
 
+interface RTCInboundRtpStats {
+  type: string;
+  kind?: string;
+  bytesReceived?: number;
+  framesReceived?: number;
+  packetsLost?: number;
+}
+
+interface RTCTrackStats {
+  type: string;
+  framesDecoded?: number;
+  framesDropped?: number;
+  freezeCount?: number;
+}
+
+function isRTCInboundRtpStats(report: unknown): report is RTCInboundRtpStats {
+  if (typeof report !== 'object' || report === null) {
+    return false;
+  }
+  const r = report as Record<string, unknown>;
+  return r.type === 'inbound-rtp';
+}
+
+function isRTCTrackStats(report: unknown): report is RTCTrackStats {
+  if (typeof report !== 'object' || report === null) {
+    return false;
+  }
+  const r = report as Record<string, unknown>;
+  return r.type === 'track';
+}
+
 export function useWebRTC(options: WebRTCOptions) {
   const {
     signalUrl,
@@ -43,6 +74,7 @@ export function useWebRTC(options: WebRTCOptions) {
   const statsIntervalRef = useRef<number | null>(null);
   const pendingIceCandidatesRef = useRef<Array<RTCIceCandidateInit>>([]);
   const remoteDescSetRef = useRef<boolean>(false);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   const addLog = useCallback((message: string, type: string = 'info') => {
     const time = new Date().toLocaleTimeString();
@@ -51,6 +83,12 @@ export function useWebRTC(options: WebRTCOptions) {
 
   const connect = useCallback(async () => {
     try {
+      // 前回の接続のMediaStreamをクリア
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+      }
+
       setConnectionState('connecting');
       addLog('WebSocket接続を開始...');
 
@@ -182,12 +220,19 @@ export function useWebRTC(options: WebRTCOptions) {
         addLog(`トラック情報 kind=${event.track.kind} id=${event.track.id} readyState=${event.track.readyState}`);
       }
 
-      if (event.streams && event.streams.length > 0) {
-        onTrack?.(event.streams[0]);
-      } else if (event.track) {
-        const stream = new MediaStream([event.track]);
-        onTrack?.(stream);
-        addLog('TrackからMediaStreamを作成', 'success');
+      // MediaStreamを再利用して、すべてのトラックを1つのストリームに集約
+      if (!mediaStreamRef.current) {
+        mediaStreamRef.current = new MediaStream();
+        addLog('新しいMediaStreamを作成', 'success');
+      }
+
+      // 受信したトラックを既存のストリームに追加
+      if (event.track) {
+        mediaStreamRef.current.addTrack(event.track);
+        addLog(`トラックを追加: kind=${event.track.kind}, total tracks=${mediaStreamRef.current.getTracks().length}`, 'success');
+
+        // ストリームが更新されたことをコールバックで通知
+        onTrack?.(mediaStreamRef.current);
       }
     };
 
@@ -229,6 +274,10 @@ export function useWebRTC(options: WebRTCOptions) {
     const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
     addLog('Video recvonly transceiverを追加', 'success');
 
+    // Audio受信用のtransceiverを追加（recvonly）
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+    addLog('Audio recvonly transceiverを追加', 'success');
+
     // codec指定
     if (codec === 'h264') {
       try {
@@ -263,7 +312,7 @@ export function useWebRTC(options: WebRTCOptions) {
         try {
           await pc.setLocalDescription(offer);
           addLog('Offerを作成しました', 'success');
-          addLog(`Offer SDP (最初の100文字): ${offer.sdp.substring(0, 100)}...`);
+          addLog(`Offer SDP (最初の100文字): ${offer.sdp?.substring(0, 100)}...`);
 
           // WebSocket状態を確認
           if (!wsRef.current) {
@@ -289,7 +338,7 @@ export function useWebRTC(options: WebRTCOptions) {
               };
               wsRef.current.send(JSON.stringify(offerMessage));
               addLog('OfferをWebSocketで送信しました', 'success');
-              addLog(`送信メッセージ: type=${offerMessage.type}, codec=${offerMessage.codec}, sdp_length=${offer.sdp.length}`);
+              addLog(`送信メッセージ: type=${offerMessage.type}, codec=${offerMessage.codec}, sdp_length=${offer.sdp?.length ?? 0}`);
             } catch (sendError) {
               addLog(`Offer送信エラー: ${sendError}`, 'error');
               console.error('Offer送信エラー詳細:', sendError);
@@ -320,32 +369,28 @@ export function useWebRTC(options: WebRTCOptions) {
     statsIntervalRef.current = window.setInterval(async () => {
       try {
         const reports = await receiver.getStats();
-        let inbound = null;
-        let trackReport = null;
+        let inboundStats: WebRTCStats['inbound'] = undefined;
+        let trackStats: WebRTCStats['track'] = undefined;
 
         reports.forEach((report) => {
-          if (report.type === 'inbound-rtp' && report.kind === 'video') {
-            inbound = report;
-          } else if (report.type === 'track') {
-            trackReport = report;
+          if (isRTCInboundRtpStats(report) && report.kind === 'video') {
+            inboundStats = {
+              bytesReceived: report.bytesReceived,
+              framesReceived: report.framesReceived,
+              packetsLost: report.packetsLost,
+            };
+          } else if (isRTCTrackStats(report)) {
+            trackStats = {
+              framesDecoded: report.framesDecoded,
+              framesDropped: report.framesDropped,
+              freezeCount: report.freezeCount,
+            };
           }
         });
 
         setStats({
-          inbound: inbound
-            ? {
-                bytesReceived: inbound.bytesReceived,
-                framesReceived: inbound.framesReceived,
-                packetsLost: inbound.packetsLost,
-              }
-            : undefined,
-          track: trackReport
-            ? {
-                framesDecoded: trackReport.framesDecoded,
-                framesDropped: trackReport.framesDropped,
-                freezeCount: trackReport.freezeCount,
-              }
-            : undefined,
+          inbound: inboundStats,
+          track: trackStats,
         });
       } catch (err) {
         addLog(`stats取得エラー: ${err}`, 'error');
@@ -397,6 +442,11 @@ export function useWebRTC(options: WebRTCOptions) {
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
+    }
+    // MediaStreamをクリア
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
     }
     setConnectionState('disconnected');
     addLog('接続を切断しました');

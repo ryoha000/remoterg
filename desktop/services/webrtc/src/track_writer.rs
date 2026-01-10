@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info, span, Level};
-use webrtc_media::Sample;
+use webrtc_rs::media::Sample;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use bytes::Bytes;
 

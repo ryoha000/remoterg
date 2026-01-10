@@ -15,6 +15,7 @@
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
+    "tsc": "tsc --noEmit",
     "knip": "knip"
   },
   "dependencies": {
@@ -45,6 +46,7 @@
     "zod": "^4.1.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@tanstack/devtools-event-client": "^0.3.2",
     "@tanstack/devtools-vite": "^0.3.11",
     "@types/node": "^22.10.2",
@@ -56,6 +58,7 @@
     "knip": "^5.76.1",
     "oxfmt": "^0.17.0",
     "oxlint": "^1.32.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^7.1.7",
     "vite-plugin-static-copy": "^3.1.4",

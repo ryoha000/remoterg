@@ -14,6 +14,7 @@ function ViewerPage() {
   const { sessionId, codec } = Route.useParams();
   const [stream, setStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [isMuted, setIsMuted] = useState(true);
 
   const {
     connectionState,
@@ -129,8 +130,8 @@ function ViewerPage() {
         <video
           ref={videoRef}
           autoPlay
+          muted={isMuted}
           playsInline
-          muted
           className="w-full max-w-5xl bg-black rounded-lg"
         />
 
@@ -146,6 +147,18 @@ function ViewerPage() {
           )}
           <Button variant="outline" onClick={handleNext}>
             次へ (Enter)
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (videoRef.current) {
+                const newMuted = !isMuted;
+                videoRef.current.muted = newMuted;
+                setIsMuted(newMuted);
+              }
+            }}
+          >
+            {isMuted ? "🔇 音声ON" : "🔊 音声OFF"}
           </Button>
           <Button variant="outline" onClick={requestScreenshot}>
             スクリーンショット

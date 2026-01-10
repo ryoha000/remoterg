@@ -49,7 +49,7 @@ export function logMessageReceived(
 export function logWebSocketState(
   targetRole: Role,
   state: number,
-  messageType: string
+  _messageType: string
 ): void {
   const stateText = getWebSocketStateText(state);
   console.log(

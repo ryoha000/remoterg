@@ -3594,7 +3594,6 @@ dependencies = [
  "tokio",
  "tracing",
  "webrtc 0.14.0",
- "webrtc-media",
 ]
 
 [[package]]

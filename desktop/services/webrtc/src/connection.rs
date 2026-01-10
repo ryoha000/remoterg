@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use webrtc_rs::api::interceptor_registry::register_default_interceptors;
-use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264};
+use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
 use webrtc_rs::api::setting_engine::SettingEngine;
 use webrtc_rs::api::APIBuilder;
 use webrtc_rs::data_channel::data_channel_message::DataChannelMessage as RTCDataChannelMessage;
@@ -131,6 +131,7 @@ pub struct SetOfferResult {
     pub audio_track: Option<Arc<TrackLocalStaticSample>>,
     pub audio_encode_result_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<core_types::AudioEncodeResult>>,
+    pub audio_sender: Option<Arc<RTCRtpSender>>,
 }
 
 /// SetOfferメッセージを処理
@@ -211,6 +212,12 @@ pub async fn handle_set_offer(
     let mut audio_encode_result_rx: Option<
         tokio::sync::mpsc::UnboundedReceiver<core_types::AudioEncodeResult>,
     > = None;
+    let mut audio_sender: Option<Arc<RTCRtpSender>> = None;
+
+    info!(
+        "Audio input available: {}",
+        audio_frame_rx.is_some() && audio_encoder_factory.is_some()
+    );
 
     if let (Some(mut audio_frame_rx), Some(audio_encoder_factory)) =
         (audio_frame_rx, audio_encoder_factory)
@@ -218,19 +225,26 @@ pub async fn handle_set_offer(
         info!("Adding audio track with Opus codec");
         let audio_track_local = Arc::new(TrackLocalStaticSample::new(
             RTCRtpCodecCapability {
-                mime_type: "audio/opus".to_string(),
+                mime_type: MIME_TYPE_OPUS.to_string(),
                 ..Default::default()
             },
             "audio".to_string(),
             "stream".to_string(),
         ));
 
-        let _audio_sender: Arc<RTCRtpSender> = pc
+        let audio_sender_local: Arc<RTCRtpSender> = pc
             .add_track(audio_track_local.clone() as Arc<dyn TrackLocal + Send + Sync>)
             .await
             .context("Failed to add audio track")?;
 
         info!("Audio track added to peer connection");
+
+        // Audio用のRTCPドレインループ
+        let audio_sender_for_rtcp = audio_sender_local.clone();
+        tokio::spawn(async move {
+            let mut rtcp_buf = vec![0u8; 1500];
+            while let Ok((_, _)) = audio_sender_for_rtcp.read(&mut rtcp_buf).await {}
+        });
 
         // 音声エンコーダーをセットアップ
         let (audio_encoder_tx, audio_result_rx) = audio_encoder_factory.setup();
@@ -247,6 +261,7 @@ pub async fn handle_set_offer(
 
         audio_encode_result_rx = Some(audio_result_rx);
         audio_track = Some(audio_track_local);
+        audio_sender = Some(audio_sender_local);
     }
 
     // RTCP 受信ループを開始し、PLI/FIR を受けたらキーフレーム再送を要求
@@ -291,12 +306,13 @@ pub async fn handle_set_offer(
 
             // sender/get_stats 相当の情報（OutboundRTP）を PeerConnection 経由で確認
             let stats = pc_for_log.get_stats().await;
-            let mut outbound_logged = false;
+            let mut video_logged = false;
+            let mut audio_logged = false;
             for report in stats.reports.values() {
                 if let StatsReportType::OutboundRTP(out) = report {
                     if out.kind == "video" {
                         info!(
-                            "sender stats: ssrc={} bytes_sent={} packets_sent={} nack={} pli={:?} fir={:?}",
+                            "video sender stats: ssrc={} bytes_sent={} packets_sent={} nack={} pli={:?} fir={:?}",
                             out.ssrc,
                             out.bytes_sent,
                             out.packets_sent,
@@ -304,12 +320,23 @@ pub async fn handle_set_offer(
                             out.pli_count,
                             out.fir_count,
                         );
-                        outbound_logged = true;
+                        video_logged = true;
+                    } else if out.kind == "audio" {
+                        info!(
+                            "audio sender stats: ssrc={} bytes_sent={} packets_sent={}",
+                            out.ssrc,
+                            out.bytes_sent,
+                            out.packets_sent,
+                        );
+                        audio_logged = true;
                     }
                 }
             }
-            if !outbound_logged {
-                info!("sender stats: outbound video RTP not found in get_stats");
+            if !video_logged {
+                info!("video sender stats: outbound RTP not found in get_stats");
+            }
+            if !audio_logged {
+                debug!("audio sender stats: outbound RTP not found in get_stats");
             }
         }
     });
@@ -401,20 +428,16 @@ pub async fn handle_set_offer(
 
                 // candidateのcomponentからm-lineを特定
                 // component 1 = RTP, component 2 = RTCP
+                // BUNDLEにより全メディアが同じトランスポートを共有するため、
+                // 最初のm-lineを使用
                 let sdp_mid = if candidate.component == 1 {
-                    m_lines
-                        .iter()
-                        .find(|m| m.media_type == "video")
-                        .and_then(|m| m.mid.clone())
+                    m_lines.first().and_then(|m| m.mid.clone())
                 } else {
                     None
                 };
 
                 let sdp_mline_index = if candidate.component == 1 {
-                    m_lines
-                        .iter()
-                        .find(|m| m.media_type == "video")
-                        .map(|m| m.index as u16)
+                    m_lines.first().map(|m| m.index as u16)
                 } else {
                     None
                 };
@@ -451,10 +474,22 @@ pub async fn handle_set_offer(
     tokio::spawn(async move {
         let params = sender_for_start.get_parameters().await;
         match sender_for_start.send(&params).await {
-            Ok(_) => info!("RTCRtpSender::send() invoked explicitly"),
-            Err(e) => debug!("RTCRtpSender::send() explicit call returned: {}", e),
+            Ok(_) => info!("Video RTCRtpSender::send() invoked explicitly"),
+            Err(e) => debug!("Video RTCRtpSender::send() explicit call returned: {}", e),
         }
     });
+
+    // Audio senderに対しても明示的に送信開始をトリガー
+    if let Some(ref audio_sender_local) = audio_sender {
+        let audio_sender_for_start = audio_sender_local.clone();
+        tokio::spawn(async move {
+            let params = audio_sender_for_start.get_parameters().await;
+            match audio_sender_for_start.send(&params).await {
+                Ok(_) => info!("Audio RTCRtpSender::send() invoked explicitly"),
+                Err(e) => debug!("Audio RTCRtpSender::send() explicit call returned: {}", e),
+            }
+        });
+    }
 
     // Answerをシグナリングサービスに送信
     if let Err(e) = signaling_tx
@@ -563,6 +598,7 @@ pub async fn handle_set_offer(
         encode_result_rx,
         audio_track,
         audio_encode_result_rx,
+        audio_sender,
     })
 }
 

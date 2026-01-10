@@ -259,6 +259,7 @@ pub type AudioCaptureCommandReceiver = Receiver<AudioCaptureMessage>;
 pub struct AudioEncodeResult {
     pub encoded_data: Vec<u8>, // Opusエンコード済みデータ
     pub duration: Duration,    // フレームの長さ（10ms）
+    pub is_silent: bool,       // 無音フレームかどうか
 }
 
 /// 音声エンコーダーファクトリ

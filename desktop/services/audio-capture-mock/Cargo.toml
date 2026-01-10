@@ -1,0 +1,14 @@
+[package]
+name = "audio-capture-mock"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+core-types = { path = "../core" }
+hound = "3.5"
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }

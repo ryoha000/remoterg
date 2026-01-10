@@ -1,0 +1,5 @@
+# WAVファイルは各自で配置するため、バージョン管理しない
+src/assets/audio.wav
+
+# テスト成果物
+tests/artifacts/

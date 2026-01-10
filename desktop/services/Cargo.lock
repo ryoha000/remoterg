@@ -250,6 +250,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "audio-capture-mock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "core-types",
+ "hound",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "audio-encoder"
 version = "0.1.0"
 dependencies = [

@@ -11,6 +11,7 @@ members = [
   "hostd",
   "tests",
   "audio-capture",
+  "audio-capture-mock",
   "audio-encoder",
   "opus-sys",
 ]

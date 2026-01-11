@@ -24,6 +24,8 @@ core-types = { path = "../core" }
 audio-capture = { path = "../audio-capture" }
 audio-capture-mock = { path = "../audio-capture-mock" }
 audio-encoder = { path = "../audio-encoder" }
+audio-stream = { path = "../audio-stream" }
+webrtc-rs = { package = "webrtc", version = "0.14" }
 clap = { version = "4.5", features = ["derive"] }
 
 [features]

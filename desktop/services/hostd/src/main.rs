@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 use audio_capture;
 use audio_capture_mock;
 use audio_encoder::OpusEncoderFactory;
+use audio_stream::AudioStreamService;
 use capture;
 use capturemock;
 use core_types::{
@@ -111,6 +112,12 @@ async fn main() -> Result<()> {
     // 音声チャンネル作成
     let (audio_capture_cmd_tx, audio_capture_cmd_rx) = mpsc::channel::<AudioCaptureMessage>(10);
 
+    // 音声トラック情報を受け渡すためのワンショットチャネル
+    let (audio_track_tx, audio_track_rx) = tokio::sync::oneshot::channel::<(
+        Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
+        Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
+    )>();
+
     #[cfg(not(feature = "h264"))]
     compile_error!("h264 feature must be enabled for hostd");
 
@@ -152,8 +159,9 @@ async fn main() -> Result<()> {
         signaling_response_tx,
         data_channel_tx,
         encoder_factories,
-        Some((audio_frame_rx, audio_encoder_factory)),
+        Some(audio_track_tx),
     );
+    let audio_stream_service = AudioStreamService::new(audio_frame_rx, audio_encoder_factory);
     let input_service = InputService::new(data_channel_rx);
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,
@@ -189,6 +197,21 @@ async fn main() -> Result<()> {
     let audio_capture_handle = tokio::spawn(async move { audio_capture_service.run().await });
     let input_handle = tokio::spawn(async move { input_service.run().await });
     let signaling_handle = tokio::spawn(async move { signaling_client.run().await });
+
+    // AudioStreamService起動タスク（音声トラック受信後に起動）
+    let audio_stream_handle = tokio::spawn(async move {
+        match audio_track_rx.await {
+            Ok((track, sender)) => {
+                info!("Received audio track, starting AudioStreamService");
+                audio_stream_service.run(track, sender).await
+            }
+            Err(_) => {
+                info!("Audio track channel closed without sending");
+                Ok(())
+            }
+        }
+    });
+
     // WebRTC は OpenH264 の非 Send 型を含むため spawn せず現在のタスクで実行する
     let webrtc_fut = webrtc_service.run();
     pin!(webrtc_fut);
@@ -207,6 +230,11 @@ async fn main() -> Result<()> {
             Ok(Ok(())) => info!("AudioCaptureService finished"),
             Ok(Err(e)) => tracing::error!("AudioCaptureService error: {}", e),
             Err(e) => tracing::error!("AudioCaptureService task panicked: {}", e),
+        },
+        result = audio_stream_handle => match result {
+            Ok(Ok(())) => info!("AudioStreamService finished"),
+            Ok(Err(e)) => tracing::error!("AudioStreamService error: {}", e),
+            Err(e) => tracing::error!("AudioStreamService task panicked: {}", e),
         },
         result = input_handle => match result {
             Ok(Ok(())) => info!("InputService finished"),

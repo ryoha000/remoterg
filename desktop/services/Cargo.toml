@@ -13,6 +13,7 @@ members = [
   "audio-capture",
   "audio-capture-mock",
   "audio-encoder",
+  "audio-stream",
   "opus-sys",
 ]
 

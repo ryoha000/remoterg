@@ -1,8 +1,5 @@
 use anyhow::{Context, Result};
-use core_types::{
-    AudioEncoderFactory, AudioFrame, DataChannelMessage, SignalingResponse, VideoCodec,
-    VideoEncoderFactory,
-};
+use core_types::{DataChannelMessage, SignalingResponse, VideoCodec, VideoEncoderFactory};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -130,8 +127,6 @@ pub struct SetOfferResult {
     pub encode_job_slot: Arc<core_types::EncodeJobSlot>,
     pub encode_result_rx: tokio::sync::mpsc::UnboundedReceiver<core_types::EncodeResult>,
     pub audio_track: Option<Arc<TrackLocalStaticSample>>,
-    pub audio_encode_result_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<core_types::AudioEncodeResult>>,
     pub audio_sender: Option<Arc<RTCRtpSender>>,
 }
 
@@ -145,8 +140,6 @@ pub async fn handle_set_offer(
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     connection_ready: Arc<AtomicBool>,
     keyframe_tx: mpsc::UnboundedSender<()>,
-    audio_frame_rx: Option<mpsc::Receiver<AudioFrame>>,
-    audio_encoder_factory: Option<Arc<dyn AudioEncoderFactory>>,
 ) -> Result<SetOfferResult> {
     info!("SetOffer received, generating answer");
 
@@ -210,60 +203,29 @@ pub async fn handle_set_offer(
 
     // 音声トラックを追加（オプション）
     let mut audio_track: Option<Arc<TrackLocalStaticSample>> = None;
-    let mut audio_encode_result_rx: Option<
-        tokio::sync::mpsc::UnboundedReceiver<core_types::AudioEncodeResult>,
-    > = None;
     let mut audio_sender: Option<Arc<RTCRtpSender>> = None;
 
-    info!(
-        "Audio input available: {}",
-        audio_frame_rx.is_some() && audio_encoder_factory.is_some()
-    );
+    // 音声トラックを常に作成（AudioStreamServiceで使用）
+    info!("Adding audio track with Opus codec");
+    let audio_track_local = Arc::new(TrackLocalStaticSample::new(
+        RTCRtpCodecCapability {
+            mime_type: MIME_TYPE_OPUS.to_string(),
+            ..Default::default()
+        },
+        "audio".to_string(),
+        "stream".to_string(),
+    ));
 
-    if let (Some(mut audio_frame_rx), Some(audio_encoder_factory)) =
-        (audio_frame_rx, audio_encoder_factory)
-    {
-        info!("Adding audio track with Opus codec");
-        let audio_track_local = Arc::new(TrackLocalStaticSample::new(
-            RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_OPUS.to_string(),
-                ..Default::default()
-            },
-            "audio".to_string(),
-            "stream".to_string(),
-        ));
+    let audio_sender_local: Arc<RTCRtpSender> = pc
+        .add_track(audio_track_local.clone() as Arc<dyn TrackLocal + Send + Sync>)
+        .await
+        .context("Failed to add audio track")?;
 
-        let audio_sender_local: Arc<RTCRtpSender> = pc
-            .add_track(audio_track_local.clone() as Arc<dyn TrackLocal + Send + Sync>)
-            .await
-            .context("Failed to add audio track")?;
+    info!("Audio track added to peer connection");
 
-        info!("Audio track added to peer connection");
-
-        // Audio用のRTCPドレインループ
-        let audio_sender_for_rtcp = audio_sender_local.clone();
-        tokio::spawn(async move {
-            let mut rtcp_buf = vec![0u8; 1500];
-            while let Ok((_, _)) = audio_sender_for_rtcp.read(&mut rtcp_buf).await {}
-        });
-
-        // 音声エンコーダーをセットアップ
-        let (audio_encoder_tx, audio_result_rx) = audio_encoder_factory.setup();
-
-        // 音声フレームをエンコーダーに転送するタスクをスポーン
-        tokio::spawn(async move {
-            while let Some(frame) = audio_frame_rx.recv().await {
-                if audio_encoder_tx.send(frame).await.is_err() {
-                    debug!("Audio encoder channel closed");
-                    break;
-                }
-            }
-        });
-
-        audio_encode_result_rx = Some(audio_result_rx);
-        audio_track = Some(audio_track_local);
-        audio_sender = Some(audio_sender_local);
-    }
+    // 音声トラックとsenderを保持（AudioStreamServiceに渡すため）
+    audio_track = Some(audio_track_local);
+    audio_sender = Some(audio_sender_local);
 
     // RTCP 受信ループを開始し、PLI/FIR を受けたらキーフレーム再送を要求
     let keyframe_tx_rtcp = keyframe_tx.clone();
@@ -478,18 +440,6 @@ pub async fn handle_set_offer(
         }
     });
 
-    // Audio senderに対しても明示的に送信開始をトリガー
-    if let Some(ref audio_sender_local) = audio_sender {
-        let audio_sender_for_start = audio_sender_local.clone();
-        tokio::spawn(async move {
-            let params = audio_sender_for_start.get_parameters().await;
-            match audio_sender_for_start.send(&params).await {
-                Ok(_) => info!("Audio RTCRtpSender::send() invoked explicitly"),
-                Err(e) => debug!("Audio RTCRtpSender::send() explicit call returned: {}", e),
-            }
-        });
-    }
-
     // Answerをシグナリングサービスに送信
     if let Err(e) = signaling_tx
         .send(SignalingResponse::Answer { sdp: answer.sdp })
@@ -596,7 +546,6 @@ pub async fn handle_set_offer(
         encode_job_slot,
         encode_result_rx,
         audio_track,
-        audio_encode_result_rx,
         audio_sender,
     })
 }

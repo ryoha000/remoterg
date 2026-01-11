@@ -277,6 +277,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "audio-stream"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "core-types",
+ "tokio",
+ "tracing",
+ "webrtc 0.14.0",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1418,6 +1430,7 @@ dependencies = [
  "audio-capture",
  "audio-capture-mock",
  "audio-encoder",
+ "audio-stream",
  "capture",
  "capturemock",
  "clap",
@@ -1431,6 +1444,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webrtc 0.1.0",
+ "webrtc 0.14.0",
 ]
 
 [[package]]

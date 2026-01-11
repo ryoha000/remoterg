@@ -65,16 +65,17 @@ export function handleWebSocketUpgrade(
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair);
 
-  // 接続を受け入れる
-  ctx.acceptWebSocket(server);
-  console.log("acceptWebSocket");
-
-  // 接続を更新
+  // 接続を更新（acceptWebSocket前に状態を更新する必要がある）
   const newState = updateConnection(state, role, server);
   updateState(newState);
 
-  // イベントハンドラを設定（最新の状態を取得する関数を渡す）
-  setupWebSocketHandlers(server, role, getState, updateState);
+  // 接続を受け入れる
+  ctx.acceptWebSocket(server);
+  console.log("acceptWebSocket", role);
+
+  // 注意: setupWebSocketHandlers は不要
+  // Cloudflare Durable Objectsでは、acceptWebSocket()後に
+  // webSocketMessage/webSocketClose/webSocketErrorメソッドが自動的に呼ばれる
 
   return new Response(null, {
     status: 101,

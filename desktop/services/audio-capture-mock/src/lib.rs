@@ -200,13 +200,20 @@ fn load_audio_samples() -> Result<Vec<Vec<f32>>> {
 pub struct AudioCaptureService {
     frame_tx: AudioFrameSender,
     command_rx: AudioCaptureCommandReceiver,
+    frames: Vec<Vec<f32>>,
 }
 
 impl AudioCaptureService {
     pub fn new(frame_tx: AudioFrameSender, command_rx: AudioCaptureCommandReceiver) -> Self {
+        // 起動時にWAVファイルをロードしてフレーム分割
+        let frames = load_audio_samples()
+            .expect("Failed to load audio samples from embedded WAV file");
+        info!("Loaded {} audio frames from WAV file", frames.len());
+
         Self {
             frame_tx,
             command_rx,
+            frames,
         }
     }
 
@@ -226,11 +233,8 @@ impl AudioCaptureService {
             }
         }
 
-        // 起動時にWAVファイルをロードしてフレーム分割
-        let frames =
-            load_audio_samples().context("Failed to load audio samples from embedded WAV file")?;
-
-        info!("Loaded {} audio frames from WAV file", frames.len());
+        // 事前ロード済みフレームを使用
+        let frames = self.frames;
 
         let mut is_capturing = false;
         let mut frame_index = 0usize;

@@ -302,7 +302,6 @@ pub async fn handle_set_offer(
         }
     });
 
-
     // DataChannelハンドラを設定
     let dc_tx = data_channel_tx.clone();
     pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
@@ -356,11 +355,6 @@ pub async fn handle_set_offer(
     // Answer SDPからm-line情報を解析（ICEハンドラ設定に使用）
     let m_lines = parse_answer_m_lines(&answer.sdp);
     info!("Answer SDP parsed: {} m-lines", m_lines.len());
-    info!(
-        "Answer SDP includes mime {}: {}",
-        mime_type,
-        answer.sdp.contains(&mime_type)
-    );
 
     // ICE candidateのイベントハンドラを LocalDescription 設定前に登録して、
     // 初期ホスト候補を取りこぼさないようにする
@@ -451,11 +445,19 @@ pub async fn handle_set_offer(
                 }
                 RTCPeerConnectionState::Connecting => {
                     info!("PeerConnection state: Connecting");
+                    let was_ready = connection_ready_pc.load(Ordering::Relaxed);
                     connection_ready_pc.store(false, Ordering::Relaxed);
+                    if was_ready {
+                        info!("connection_ready flag set to false (PeerConnection Connecting)");
+                    }
                 }
                 RTCPeerConnectionState::Connected => {
                     info!("PeerConnection state: Connected - Media stream should be active");
+                    let was_ready = connection_ready_pc.load(Ordering::Relaxed);
                     connection_ready_pc.store(true, Ordering::Relaxed);
+                    if !was_ready {
+                        info!("connection_ready flag set to true (PeerConnection Connected)");
+                    }
                     // 接続確立時に即座にキーフレーム送出を要求
                     let _ = video_stream_msg_tx_on_connect
                         .send(VideoStreamMessage::RequestKeyframe)
@@ -463,11 +465,19 @@ pub async fn handle_set_offer(
                 }
                 RTCPeerConnectionState::Disconnected => {
                     warn!("PeerConnection state: Disconnected - Connection lost");
+                    let was_ready = connection_ready_pc.load(Ordering::Relaxed);
                     connection_ready_pc.store(false, Ordering::Relaxed);
+                    if was_ready {
+                        warn!("connection_ready flag set to false (PeerConnection Disconnected)");
+                    }
                 }
                 RTCPeerConnectionState::Failed => {
                     error!("PeerConnection state: Failed - Connection failed");
+                    let was_ready = connection_ready_pc.load(Ordering::Relaxed);
                     connection_ready_pc.store(false, Ordering::Relaxed);
+                    if was_ready {
+                        error!("connection_ready flag set to false (PeerConnection Failed)");
+                    }
                 }
                 RTCPeerConnectionState::Closed => {
                     info!("PeerConnection state: Closed");
@@ -483,8 +493,13 @@ pub async fn handle_set_offer(
     // ICE接続状態の監視
     let pc_for_ice = pc.clone();
     let connection_ready_ice = connection_ready.clone();
+    let video_stream_msg_tx_ice = video_stream_msg_tx.clone();
+    // 猶予期間中のフラグ（猶予期間中にConnectedに戻った場合、タイマーを無効化するため）
+    let grace_period_active = Arc::new(AtomicBool::new(false));
     pc_for_ice.on_ice_connection_state_change(Box::new(move |state| {
         let connection_ready_ice = connection_ready_ice.clone();
+        let video_stream_msg_tx_ice = video_stream_msg_tx_ice.clone();
+        let grace_period_active = grace_period_active.clone();
         Box::pin(async move {
             match state {
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::New => {
@@ -492,26 +507,67 @@ pub async fn handle_set_offer(
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Checking => {
                     info!("ICE connection state: Checking");
+                    let was_ready = connection_ready_ice.load(Ordering::Relaxed);
                     connection_ready_ice.store(false, Ordering::Relaxed);
+                    if was_ready {
+                        info!("connection_ready flag set to false (ICE Checking)");
+                    }
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Connected => {
                     info!("ICE connection state: Connected - ICE connection established");
+                    // 猶予期間中にConnectedに戻った場合は、タイマーを無効化
+                    grace_period_active.store(false, Ordering::Relaxed);
+                    let was_ready = connection_ready_ice.load(Ordering::Relaxed);
                     connection_ready_ice.store(true, Ordering::Relaxed);
+                    if !was_ready {
+                        info!("connection_ready flag set to true (ICE Connected)");
+                        // ICE接続確立時にもキーフレーム送出を要求
+                        let _ = video_stream_msg_tx_ice
+                            .send(VideoStreamMessage::RequestKeyframe)
+                            .await;
+                    }
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Completed => {
                     info!("ICE connection state: Completed - ICE gathering complete");
+                    // 猶予期間中にCompletedになった場合も、タイマーを無効化
+                    grace_period_active.store(false, Ordering::Relaxed);
+                    let was_ready = connection_ready_ice.load(Ordering::Relaxed);
                     connection_ready_ice.store(true, Ordering::Relaxed);
+                    if !was_ready {
+                        info!("connection_ready flag set to true (ICE Completed)");
+                    }
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Failed => {
                     error!("ICE connection state: Failed - ICE connection failed");
+                    grace_period_active.store(false, Ordering::Relaxed);
                     connection_ready_ice.store(false, Ordering::Relaxed);
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Disconnected => {
                     warn!("ICE connection state: Disconnected - ICE connection lost");
-                    connection_ready_ice.store(false, Ordering::Relaxed);
+                    let was_ready = connection_ready_ice.load(Ordering::Relaxed);
+                    if was_ready {
+                        // 猶予期間を設定（5秒）
+                        grace_period_active.store(true, Ordering::Relaxed);
+                        let connection_ready_grace = connection_ready_ice.clone();
+                        let grace_period_active_grace = grace_period_active.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            // 猶予期間が終了した時、まだ猶予期間中（Connectedに戻っていない）なら
+                            // connection_readyをfalseにする
+                            if grace_period_active_grace.load(Ordering::Relaxed) {
+                                connection_ready_grace.store(false, Ordering::Relaxed);
+                                warn!("connection_ready flag set to false (ICE Disconnected - grace period expired)");
+                            }
+                        });
+                        warn!("ICE connection disconnected, starting 5-second grace period");
+                    } else {
+                        // 既にready=falseの場合は即座にfalseのまま
+                        connection_ready_ice.store(false, Ordering::Relaxed);
+                    }
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Closed => {
                     info!("ICE connection state: Closed");
+                    grace_period_active.store(false, Ordering::Relaxed);
                     connection_ready_ice.store(false, Ordering::Relaxed);
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Unspecified => {

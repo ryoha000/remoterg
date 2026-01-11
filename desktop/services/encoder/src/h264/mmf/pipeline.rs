@@ -303,15 +303,23 @@ pub fn start_mf_encode_workers() -> (
                         let job_height = (job.height / 2) * 2;
 
                         // 前処理（RGBA → NV12 テクスチャ）
-                        let nv12_texture =
-                            match preprocessor.process(&job.rgba, width, height, frame_timestamp) {
-                                Ok(texture) => texture,
-                                Err(e) => {
-                                    warn!("MF encoder worker: preprocess failed: {}", e);
-                                    encode_failures += 1;
-                                    continue;
-                                }
-                            };
+                        let nv12_texture = match preprocessor.process(
+                            &job.rgba,
+                            width,
+                            height,
+                            frame_timestamp,
+                        ) {
+                            Ok(texture) => texture,
+                            Err(e) => {
+                                warn!(
+                                        "MF encoder worker: preprocess failed for {}x{} frame: {} (HRESULT: {:?})",
+                                        job.width, job.height, e, e.source()
+                                    );
+                                encode_failures += 1;
+                                input_meta_queue.pop_back(); // メタ情報も削除
+                                continue;
+                            }
+                        };
 
                         // タイムスタンプから duration を計算
                         // windows_timespan は100ナノ秒単位の SystemRelativeTime（単調増加）
@@ -399,9 +407,19 @@ pub fn start_mf_encode_workers() -> (
 
                         // ProcessInput を呼び出す
                         if let Err(e) = encoder.transform().ProcessInput(0, &input_sample, 0) {
-                            warn!("MF encoder worker: ProcessInput failed: {}", e);
+                            warn!(
+                                "MF encoder worker: ProcessInput failed for {}x{} frame: {} (HRESULT: {:?})",
+                                job_width, job_height, e, e.code()
+                            );
                             encode_failures += 1;
                             input_meta_queue.pop_back();
+                            // エラーが続く場合は警告を出力
+                            if encode_failures > 5 {
+                                warn!(
+                                    "MF encoder worker: ProcessInput failures exceeded threshold ({} failures)",
+                                    encode_failures
+                                );
+                            }
                             continue;
                         }
 
@@ -569,13 +587,25 @@ pub fn start_mf_encode_workers() -> (
                                 // ここでは警告のみ
                             }
                             Err(e) => {
+                                let error_code = e.code();
                                 warn!(
                                     "MF encoder worker: ProcessOutput failed: {} (code: {:?}, status: {})",
                                     e,
-                                    e.code(),
+                                    error_code,
                                     status
                                 );
                                 encode_failures += 1;
+                                // エラーが続く場合は警告を出力
+                                if encode_failures > 5 {
+                                    warn!(
+                                        "MF encoder worker: ProcessOutput failures exceeded threshold ({} failures)",
+                                        encode_failures
+                                    );
+                                }
+                                // MF_E_TRANSFORM_NEED_MORE_INPUT の場合は次の入力待ちに続行
+                                if error_code == MF_E_TRANSFORM_NEED_MORE_INPUT {
+                                    debug!("MF encoder worker: need more input, continuing");
+                                }
                             }
                         }
                     }

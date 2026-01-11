@@ -41,13 +41,17 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
 pub struct CaptureService {
     frame_tx: CaptureFrameSender,
     command_rx: CaptureCommandReceiver,
+    precomputed_frames: Vec<Frame>,
 }
 
 impl CaptureBackend for CaptureService {
     fn new(frame_tx: CaptureFrameSender, command_rx: CaptureCommandReceiver) -> Self {
+        let config = CaptureConfig::default();
+        let precomputed_frames = Self::generate_frame_set(&config, PREGENERATED_FRAMES);
         Self {
             frame_tx,
             command_rx,
+            precomputed_frames,
         }
     }
 
@@ -63,8 +67,8 @@ impl CaptureService {
         let mut is_capturing = false;
         let mut config = CaptureConfig::default();
 
-        // 起動時に事前生成
-        let mut precomputed_frames = Self::generate_frame_set(&config, PREGENERATED_FRAMES);
+        // 事前生成済みフレームを使用
+        let mut precomputed_frames = self.precomputed_frames;
         let mut frame_index: u64 = 0;
         let mut last_frame_log = Instant::now();
         loop {

@@ -63,6 +63,7 @@ pub async fn run_frame_router(
     let mut current_height: u32 = 0;
     let mut last_frame_ts: Option<u64> = None;
     let mut stats = FrameStats::new();
+    let mut first_frame_received = false;
 
     while let Some(frame) = frame_rx.recv().await {
         let pipeline_start = Instant::now();
@@ -76,6 +77,16 @@ pub async fn run_frame_router(
             })
             .unwrap_or(0);
 
+        if !first_frame_received {
+            info!(
+                "First frame received: {}x{} (connection_ready: {})",
+                frame.width,
+                frame.height,
+                connection_ready.load(Ordering::Relaxed)
+            );
+            first_frame_received = true;
+        }
+
         debug!(
             "Received frame: {}x{} (since_last={}ms)",
             frame.width, frame.height, interarrival_ms
@@ -84,9 +95,9 @@ pub async fn run_frame_router(
         // ICE/DTLS 接続完了まで映像送出を保留
         if !connection_ready.load(Ordering::Relaxed) {
             stats.frames_dropped_not_ready += 1;
-            if stats.frames_dropped_not_ready % 30 == 0 {
-                debug!(
-                    "Connection not ready yet, dropped {} frames",
+            if stats.frames_dropped_not_ready == 1 || stats.frames_dropped_not_ready % 10 == 0 {
+                info!(
+                    "Connection not ready yet, dropped {} frames (connection_ready: false)",
                     stats.frames_dropped_not_ready
                 );
             }
@@ -109,32 +120,38 @@ pub async fn run_frame_router(
         let resolution_changed = current_width != frame.width || current_height != frame.height;
         if resolution_changed {
             if current_width == 0 && current_height == 0 {
+                // 最初のフレーム: エンコーダーは既に起動済みで最初のフレームを待機中
+                // shutdownせずに解像度を更新するだけ
                 info!(
-                    "Observed first frame {}x{} (encoder will initialize)",
+                    "Observed first frame {}x{} (encoder already initialized and waiting)",
                     frame.width, frame.height
                 );
+                current_width = frame.width;
+                current_height = frame.height;
+                // 最初のキーフレームを要求
+                keyframe_requested.store(true, Ordering::Relaxed);
             } else {
+                // 実際の解像度変更: エンコーダーを再起動
                 info!(
                     "Observed frame resize {}x{} -> {}x{} (recreating encoder)",
                     current_width, current_height, frame.width, frame.height
                 );
+
+                // 既存のencoderワーカーを停止
+                if let Some(old_slot) = encode_job_slot.as_ref() {
+                    old_slot.shutdown();
+                }
+                drop(encode_job_slot.take());
+
+                // 新しいencoderワーカーを起動
+                // TODO: 解像度変更時のencode_result_rx破棄問題を修正する必要がある
+                let (new_slot, _new_rx) = encoder_factory.setup();
+                encode_job_slot = Some(new_slot);
+
+                current_width = frame.width;
+                current_height = frame.height;
+                keyframe_requested.store(true, Ordering::Relaxed);
             }
-
-            // 既存のencoderワーカーを停止
-            if let Some(old_slot) = encode_job_slot.as_ref() {
-                old_slot.shutdown();
-            }
-            drop(encode_job_slot.take());
-
-            // 新しいencoderワーカーを起動
-            let (new_slot, _new_rx) = encoder_factory.setup();
-            encode_job_slot = Some(new_slot);
-
-            current_width = frame.width;
-            current_height = frame.height;
-
-            // 解像度変更後はキーフレームが必要
-            keyframe_requested.store(true, Ordering::Relaxed);
         }
 
         // エンコードジョブ送信を span で計測
@@ -145,6 +162,13 @@ pub async fn run_frame_router(
 
             // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
             let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);
+
+            if stats.frames_queued == 0 {
+                info!(
+                    "Queueing first encode job: {}x{} (keyframe: {})",
+                    frame.width, frame.height, request_keyframe
+                );
+            }
 
             job_slot.set(EncodeJob {
                 width: frame.width,
@@ -164,8 +188,8 @@ pub async fn run_frame_router(
             }
         } else {
             stats.frames_dropped_no_encoder += 1;
-            if stats.frames_dropped_no_encoder % 30 == 0 {
-                debug!(
+            if stats.frames_dropped_no_encoder == 1 || stats.frames_dropped_no_encoder % 10 == 0 {
+                warn!(
                     "Encoder worker not available, dropped {} frames",
                     stats.frames_dropped_no_encoder
                 );

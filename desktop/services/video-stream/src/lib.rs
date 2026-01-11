@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
@@ -74,6 +74,9 @@ impl VideoStreamService {
         // 統計情報
         let mut video_frame_count: u64 = 0;
         let mut last_video_log = Instant::now();
+        let mut first_encode_result_received = false;
+        let mut last_encode_result_wait_start = Instant::now();
+        let mut encode_result_timeout_warned = false;
 
         // エンコード結果受信ループ
         loop {
@@ -82,11 +85,21 @@ impl VideoStreamService {
                 result = encode_result_rx.recv() => {
                     match result {
                         Some(encode_result) => {
-                            debug!(
-                                "Received video encode result: {} bytes, keyframe: {}",
-                                encode_result.sample_data.len(),
-                                encode_result.is_keyframe
-                            );
+                            if !first_encode_result_received {
+                                info!(
+                                    "First video encode result received: {} bytes, keyframe: {}",
+                                    encode_result.sample_data.len(),
+                                    encode_result.is_keyframe
+                                );
+                                first_encode_result_received = true;
+                                encode_result_timeout_warned = false;
+                            } else {
+                                debug!(
+                                    "Received video encode result: {} bytes, keyframe: {}",
+                                    encode_result.sample_data.len(),
+                                    encode_result.is_keyframe
+                                );
+                            }
 
                             // トラック書き込み
                             track_writer::write_encoded_sample(
@@ -95,6 +108,7 @@ impl VideoStreamService {
                             ).await?;
 
                             video_frame_count += 1;
+                            last_encode_result_wait_start = Instant::now();
 
                             // 統計ログ（5秒ごと）
                             let elapsed = last_video_log.elapsed();
@@ -125,6 +139,20 @@ impl VideoStreamService {
                         None => {
                             info!("Video stream message channel closed");
                             break;
+                        }
+                    }
+                }
+                // エンコード結果が受信されない場合のタイムアウトチェック
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(3)) => {
+                    if !first_encode_result_received && connection_ready.load(Ordering::Relaxed) {
+                        let wait_duration = last_encode_result_wait_start.elapsed();
+                        if wait_duration.as_secs() >= 3 && !encode_result_timeout_warned {
+                            warn!(
+                                "No encode result received for {}s (connection_ready: {})",
+                                wait_duration.as_secs(),
+                                connection_ready.load(Ordering::Relaxed)
+                            );
+                            encode_result_timeout_warned = true;
                         }
                     }
                 }

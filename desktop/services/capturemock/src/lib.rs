@@ -8,21 +8,34 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
-// 単色パレットとローテーション設定
-const COLOR_PALETTE: [(u8, u8, u8); 10] = [
-    (255, 0, 0),     // red
-    (0, 255, 0),     // green
-    (0, 0, 255),     // blue
-    (255, 255, 255), // white
-    (255, 255, 0),   // yellow
-    (0, 255, 255),   // cyan
-    (255, 0, 255),   // magenta
-    (255, 128, 0),   // orange
-    (128, 0, 255),   // purple
-    (0, 0, 0),       // black
-];
-const COLOR_DWELL_FRAMES: u64 = 60; // 約1.3秒/色（45fps前提）
-const PREGENERATED_FRAMES: usize = COLOR_PALETTE.len(); // 各色1フレームだけ持つ
+// グラデーションアニメーション設定
+const PREGENERATED_FRAMES: usize = 450; // 45fps × 10秒
+
+/// HSVからRGBに変換
+/// h: 色相 (0.0-360.0)
+/// s: 彩度 (0.0-1.0)
+/// v: 明度 (0.0-1.0)
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+    let c = v * s;
+    let h_prime = h / 60.0;
+    let x = c * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+    let m = v - c;
+
+    let (r, g, b) = match h_prime as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
+}
 
 /// ダミーキャプチャサービス
 pub struct CaptureService {
@@ -98,9 +111,7 @@ impl CaptureService {
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(1000 / config.fps.max(1) as u64)) => {
                     if is_capturing {
                         let frame_start = Instant::now();
-                        let color_idx =
-                            ((frame_index / COLOR_DWELL_FRAMES) as usize) % COLOR_PALETTE.len();
-                        let idx = color_idx % precomputed_frames.len();
+                        let idx = (frame_index as usize) % precomputed_frames.len();
                         let mut frame = precomputed_frames[idx].clone();
                         // 実送出時刻で windows_timespan を更新（100ナノ秒単位に変換）
                         let now = std::time::SystemTime::now()
@@ -147,7 +158,7 @@ impl CaptureService {
     fn generate_frame_set(config: &CaptureConfig, count: usize) -> Vec<Frame> {
         let start = Instant::now();
         let frames: Vec<Frame> = (0..count as u64)
-            .map(|i| Self::generate_dummy_frame(config, i))
+            .map(|i| Self::generate_gradient_frame(config, i))
             .collect();
         let (width, height) = match &config.size {
             core_types::CaptureSize::UseSourceSize => (0, 0),
@@ -164,7 +175,7 @@ impl CaptureService {
         frames
     }
 
-    fn generate_dummy_frame(config: &CaptureConfig, frame_index: u64) -> Frame {
+    fn generate_gradient_frame(config: &CaptureConfig, frame_index: u64) -> Frame {
         let (width, height) = match &config.size {
             core_types::CaptureSize::UseSourceSize => {
                 // mock では UseSourceSize の場合はデフォルトサイズを使用
@@ -172,19 +183,27 @@ impl CaptureService {
             }
             core_types::CaptureSize::Custom { width, height } => (*width, *height),
         };
-        // 単色フレームを生成
+
         let size = (width * height * 4) as usize;
         let mut data = vec![0u8; size];
 
-        // 画面内は完全単色。事前生成ではパレット順に1色1フレームだけ持つ
-        let color_index = (frame_index as usize) % COLOR_PALETTE.len();
-        let (r, g, b) = COLOR_PALETTE[color_index];
+        // フレームごとの色相オフセット (0.8度/フレーム)
+        let frame_hue_offset = (frame_index as f32 / 450.0) * 360.0;
 
-        for px in data.chunks_exact_mut(4) {
-            px[0] = r;
-            px[1] = g;
-            px[2] = b;
-            px[3] = 255;
+        for y in 0..height {
+            for x in 0..width {
+                // 横方向のグラデーション
+                let gradient_hue = (x as f32 / width as f32) * 360.0;
+                let pixel_hue = (gradient_hue + frame_hue_offset) % 360.0;
+
+                let (r, g, b) = hsv_to_rgb(pixel_hue, 1.0, 0.7);
+
+                let pixel_offset = ((y * width + x) * 4) as usize;
+                data[pixel_offset] = r;
+                data[pixel_offset + 1] = g;
+                data[pixel_offset + 2] = b;
+                data[pixel_offset + 3] = 255; // Alpha
+            }
         }
 
         Frame {
@@ -218,12 +237,13 @@ mod tests {
             .await
             .unwrap();
 
-        // 少し待ってからフレームを受信
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        // フレームが生成されているか確認
-        let frame = frame_rx.try_recv();
-        assert!(frame.is_ok(), "Frame should be generated after start");
+        // フレームが生成されるまで待つ（450フレーム生成に時間がかかるため、最大30秒待つ）
+        let frame = tokio::time::timeout(
+            tokio::time::Duration::from_secs(30),
+            frame_rx.recv()
+        ).await;
+        assert!(frame.is_ok(), "Frame should be generated within timeout");
+        assert!(frame.unwrap().is_some(), "Frame should be generated after start");
 
         // キャプチャ停止
         cmd_tx.send(CaptureMessage::Stop).await.unwrap();
@@ -234,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dummy_frame_generation() {
+    fn test_gradient_frame_generation() {
         let config = CaptureConfig {
             size: core_types::CaptureSize::Custom {
                 width: 640,
@@ -243,11 +263,15 @@ mod tests {
             fps: 30,
         };
 
-        let frame = CaptureService::generate_dummy_frame(&config, 0);
+        let frame = CaptureService::generate_gradient_frame(&config, 0);
 
         assert_eq!(frame.width, 640);
         assert_eq!(frame.height, 480);
         assert_eq!(frame.data.len(), 640 * 480 * 4);
+
+        // フレーム0とフレーム225で異なることを確認（色相が180度異なる）
+        let frame2 = CaptureService::generate_gradient_frame(&config, 225);
+        assert_ne!(frame.data, frame2.data);
     }
 }
 

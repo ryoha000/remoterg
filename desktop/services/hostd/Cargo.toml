@@ -15,17 +15,17 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 capture = { path = "../capture" }
-capturemock = { path = "../capturemock", optional = true }
+capturemock = { path = "../capturemock" }
 signaling = { path = "../signaling" }
 webrtc = { path = "../webrtc" }
 encoder = { path = "../encoder" }
 input = { path = "../input" }
 core-types = { path = "../core" }
 audio-capture = { path = "../audio-capture" }
+audio-capture-mock = { path = "../audio-capture-mock" }
 audio-encoder = { path = "../audio-encoder" }
 clap = { version = "4.5", features = ["derive"] }
 
 [features]
 default = ["h264"]
 h264 = ["encoder/h264"]
-mock = ["capturemock"]

@@ -7,15 +7,14 @@ use tokio::sync::mpsc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-#[cfg(not(feature = "mock"))]
-use capture::CaptureService;
-#[cfg(feature = "mock")]
-use capturemock::CaptureService;
+use capture;
+use capturemock;
+use audio_capture;
+use audio_capture_mock;
 use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
     SignalingResponse, VideoCodec, VideoEncoderFactory,
 };
-use audio_capture::AudioCaptureService;
 use audio_encoder::OpusEncoderFactory;
 #[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
@@ -42,6 +41,38 @@ struct Args {
     /// Capture target window handle (HWND)
     #[arg(long, default_value_t = 0)]
     hwnd: u64,
+
+    /// Use mock implementations for video and audio capture
+    #[arg(long)]
+    mock: bool,
+}
+
+enum CaptureServiceEnum {
+    Real(capture::CaptureService),
+    Mock(capturemock::CaptureService),
+}
+
+impl CaptureServiceEnum {
+    async fn run(self) -> Result<()> {
+        match self {
+            CaptureServiceEnum::Real(service) => service.run().await,
+            CaptureServiceEnum::Mock(service) => service.run().await,
+        }
+    }
+}
+
+enum AudioCaptureServiceEnum {
+    Real(audio_capture::AudioCaptureService),
+    Mock(audio_capture_mock::AudioCaptureService),
+}
+
+impl AudioCaptureServiceEnum {
+    async fn run(self) -> Result<()> {
+        match self {
+            AudioCaptureServiceEnum::Real(service) => service.run().await,
+            AudioCaptureServiceEnum::Mock(service) => service.run().await,
+        }
+    }
 }
 
 #[tokio::main]
@@ -100,8 +131,22 @@ async fn main() -> Result<()> {
     let audio_encoder_factory = Arc::new(OpusEncoderFactory::new());
 
     // サービス作成
-    let capture_service = CaptureService::new(frame_tx, capture_cmd_rx);
-    let audio_capture_service = AudioCaptureService::new(audio_frame_tx, audio_capture_cmd_rx);
+    let capture_service = if args.mock {
+        CaptureServiceEnum::Mock(capturemock::CaptureService::new(frame_tx, capture_cmd_rx))
+    } else {
+        CaptureServiceEnum::Real(capture::CaptureService::new(frame_tx, capture_cmd_rx))
+    };
+    let audio_capture_service = if args.mock {
+        AudioCaptureServiceEnum::Mock(audio_capture_mock::AudioCaptureService::new(
+            audio_frame_tx,
+            audio_capture_cmd_rx,
+        ))
+    } else {
+        AudioCaptureServiceEnum::Real(audio_capture::AudioCaptureService::new(
+            audio_frame_tx,
+            audio_capture_cmd_rx,
+        ))
+    };
     let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
         frame_rx,
         signaling_response_tx,
@@ -122,7 +167,7 @@ async fn main() -> Result<()> {
         .send(CaptureMessage::Start { hwnd })
         .await
         .context("Failed to start capture service")?;
-    if cfg!(feature = "mock") {
+    if args.mock {
         info!("CaptureService started (mock frames)");
     } else {
         info!("CaptureService started (real capture)");
@@ -133,7 +178,11 @@ async fn main() -> Result<()> {
         .send(AudioCaptureMessage::Start { hwnd })
         .await
         .context("Failed to start audio capture service")?;
-    info!("AudioCaptureService started");
+    if args.mock {
+        info!("AudioCaptureService started (mock audio)");
+    } else {
+        info!("AudioCaptureService started (real audio)");
+    }
 
     // サービスを独立タスクとして起動（Send でない WebRTC はこのスレッドで駆動する）
     let capture_handle = tokio::spawn(async move { capture_service.run().await });

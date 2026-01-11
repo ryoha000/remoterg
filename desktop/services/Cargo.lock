@@ -1415,6 +1415,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "audio-capture",
+ "audio-capture-mock",
  "audio-encoder",
  "capture",
  "capturemock",

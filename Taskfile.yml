@@ -13,6 +13,10 @@ tasks:
     dir: "desktop/services"
     cmds:
       - cargo run --bin hostd -- --cloudflare-url "wss://remoterg.the7uya.workers.dev/api/signal" --session-id "fixed"
+  hostd:mock:
+    dir: "desktop/services"
+    cmds:
+      - cargo run --bin hostd -- --mock
   web:
     dir: "web"
     cmds:

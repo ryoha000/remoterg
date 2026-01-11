@@ -12,12 +12,7 @@ const SAMPLES_PER_FRAME_STEREO: usize = SAMPLES_PER_FRAME * 2; // 960
 const TIMER_RESOLUTION_MS: u32 = 1;
 
 /// 線形補間によるリサンプリング（任意Hz → 48kHz）
-fn resample_linear(
-    samples: &[f32],
-    src_rate: u32,
-    dst_rate: u32,
-    channels: u16,
-) -> Vec<f32> {
+fn resample_linear(samples: &[f32], src_rate: u32, dst_rate: u32, channels: u16) -> Vec<f32> {
     if src_rate == dst_rate {
         return samples.to_vec();
     }
@@ -56,9 +51,7 @@ fn resample_linear(
 
     info!(
         "Resampled {}Hz → 48000Hz ({} frames → {} frames)",
-        src_rate,
-        src_frames,
-        dst_frames
+        src_rate, src_frames, dst_frames
     );
 
     output
@@ -75,7 +68,11 @@ fn convert_to_stereo(samples: &[f32], src_channels: u16) -> Vec<f32> {
                 output.push(sample);
                 output.push(sample);
             }
-            info!("Converted mono to stereo: {} → {} samples", samples.len(), output.len());
+            info!(
+                "Converted mono to stereo: {} → {} samples",
+                samples.len(),
+                output.len()
+            );
             output
         }
         _ => {
@@ -85,8 +82,8 @@ fn convert_to_stereo(samples: &[f32], src_channels: u16) -> Vec<f32> {
 
             for frame_idx in 0..frames {
                 let base_idx = frame_idx * src_channels as usize;
-                output.push(samples[base_idx]);      // L
-                output.push(samples[base_idx + 1]);  // R
+                output.push(samples[base_idx]); // L
+                output.push(samples[base_idx + 1]); // R
             }
 
             info!(
@@ -220,15 +217,18 @@ impl AudioCaptureService {
         unsafe {
             let result = timeBeginPeriod(TIMER_RESOLUTION_MS);
             if result != 0 {
-                tracing::warn!("Failed to set timer resolution to {}ms", TIMER_RESOLUTION_MS);
+                tracing::warn!(
+                    "Failed to set timer resolution to {}ms",
+                    TIMER_RESOLUTION_MS
+                );
             } else {
                 tracing::info!("Timer resolution set to {}ms", TIMER_RESOLUTION_MS);
             }
         }
 
         // 起動時にWAVファイルをロードしてフレーム分割
-        let frames = load_audio_samples()
-            .context("Failed to load audio samples from embedded WAV file")?;
+        let frames =
+            load_audio_samples().context("Failed to load audio samples from embedded WAV file")?;
 
         info!("Loaded {} audio frames from WAV file", frames.len());
 
@@ -237,9 +237,8 @@ impl AudioCaptureService {
         let mut current_timestamp_us = 0u64;
 
         // 10ms間隔のタイマー（ドリフト補正あり）
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(
-            FRAME_DURATION_MS as u64,
-        ));
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_millis(FRAME_DURATION_MS as u64));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {

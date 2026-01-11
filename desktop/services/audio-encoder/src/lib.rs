@@ -1,5 +1,5 @@
 use anyhow::Result;
-use core_types::{AudioEncoderFactory, AudioEncodeResult, AudioFrame};
+use core_types::{AudioEncodeResult, AudioEncoderFactory, AudioFrame};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -23,7 +23,10 @@ impl OpusEncoderWrapper {
         };
 
         if error != opus_sys::OPUS_OK as i32 || encoder.is_null() {
-            return Err(anyhow::anyhow!("Failed to create Opus encoder: error {}", error));
+            return Err(anyhow::anyhow!(
+                "Failed to create Opus encoder: error {}",
+                error
+            ));
         }
 
         Ok(Self { encoder })
@@ -93,7 +96,12 @@ impl OpusEncoderFactory {
 }
 
 impl AudioEncoderFactory for OpusEncoderFactory {
-    fn setup(&self) -> (tokio::sync::mpsc::Sender<AudioFrame>, tokio::sync::mpsc::UnboundedReceiver<AudioEncodeResult>) {
+    fn setup(
+        &self,
+    ) -> (
+        tokio::sync::mpsc::Sender<AudioFrame>,
+        tokio::sync::mpsc::UnboundedReceiver<AudioEncodeResult>,
+    ) {
         let (frame_tx, mut frame_rx) = mpsc::channel::<AudioFrame>(100);
         let (result_tx, result_rx) = mpsc::unbounded_channel::<AudioEncodeResult>();
 
@@ -123,13 +131,14 @@ impl AudioEncoderFactory for OpusEncoderFactory {
                         let silent = is_silent(&frame.samples);
 
                         // フレームをエンコード（f32 サンプルを直接エンコード）
-                        let encoded_len = match encoder.encode_float(&frame.samples, &mut encoded_buffer) {
-                            Ok(len) => len,
-                            Err(e) => {
-                                error!("Failed to encode audio frame: {}", e);
-                                continue;
-                            }
-                        };
+                        let encoded_len =
+                            match encoder.encode_float(&frame.samples, &mut encoded_buffer) {
+                                Ok(len) => len,
+                                Err(e) => {
+                                    error!("Failed to encode audio frame: {}", e);
+                                    continue;
+                                }
+                            };
 
                         // エンコード結果を送信
                         let result = AudioEncodeResult {
@@ -143,7 +152,10 @@ impl AudioEncoderFactory for OpusEncoderFactory {
                             break;
                         }
 
-                        debug!("Encoded audio frame: {} bytes, silent: {}", encoded_len, silent);
+                        debug!(
+                            "Encoded audio frame: {} bytes, silent: {}",
+                            encoded_len, silent
+                        );
                     }
                     None => {
                         debug!("Audio frame channel closed");

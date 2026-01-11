@@ -238,12 +238,13 @@ mod tests {
             .unwrap();
 
         // フレームが生成されるまで待つ（450フレーム生成に時間がかかるため、最大30秒待つ）
-        let frame = tokio::time::timeout(
-            tokio::time::Duration::from_secs(30),
-            frame_rx.recv()
-        ).await;
+        let frame =
+            tokio::time::timeout(tokio::time::Duration::from_secs(30), frame_rx.recv()).await;
         assert!(frame.is_ok(), "Frame should be generated within timeout");
-        assert!(frame.unwrap().is_some(), "Frame should be generated after start");
+        assert!(
+            frame.unwrap().is_some(),
+            "Frame should be generated after start"
+        );
 
         // キャプチャ停止
         cmd_tx.send(CaptureMessage::Stop).await.unwrap();
@@ -274,4 +275,3 @@ mod tests {
         assert_ne!(frame.data, frame2.data);
     }
 }
-

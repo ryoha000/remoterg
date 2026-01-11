@@ -33,9 +33,7 @@ pub enum SignalingMessage {
         negotiation_id: Option<String>,
     },
     #[serde(rename = "error")]
-    Error {
-        message: String,
-    },
+    Error { message: String },
     #[serde(rename = "ice_candidate")]
     IceCandidate {
         candidate: String,
@@ -114,7 +112,10 @@ impl SignalingClient {
                     let backoff = INITIAL_BACKOFF
                         .mul_f64(2_f64.powi(retry_count as i32 - 1))
                         .min(MAX_BACKOFF);
-                    warn!("Retrying in {:?} (attempt {}/{})", backoff, retry_count, MAX_RETRIES);
+                    warn!(
+                        "Retrying in {:?} (attempt {}/{})",
+                        backoff, retry_count, MAX_RETRIES
+                    );
                     sleep(backoff).await;
                 }
             }
@@ -130,8 +131,7 @@ impl SignalingClient {
         signaling_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<SignalingResponse>>>,
     ) -> Result<()> {
         // WebSocket URLを構築
-        let mut url = Url::parse(&cloudflare_url)
-            .context("Failed to parse cloudflare_url")?;
+        let mut url = Url::parse(&cloudflare_url).context("Failed to parse cloudflare_url")?;
         url.query_pairs_mut()
             .append_pair("session_id", &session_id)
             .append_pair("role", "host");
@@ -156,7 +156,7 @@ impl SignalingClient {
                     let mut rx = signaling_rx_for_write.lock().await;
                     rx.recv().await
                 };
-                
+
                 let Some(response) = response else {
                     break;
                 };
@@ -286,4 +286,3 @@ fn parse_codec_param(codec: Option<String>) -> Option<VideoCodec> {
         None
     }
 }
-

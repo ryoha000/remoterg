@@ -39,7 +39,8 @@ fn generate_sine_wave(config: SineWaveConfig) -> Vec<AudioFrame> {
 
         for i in 0..SAMPLES_PER_FRAME {
             let t = (frame_idx * SAMPLES_PER_FRAME + i) as f32 / SAMPLE_RATE as f32;
-            let value = config.amplitude * (2.0 * std::f32::consts::PI * config.frequency * t).sin();
+            let value =
+                config.amplitude * (2.0 * std::f32::consts::PI * config.frequency * t).sin();
 
             // ステレオ: L, R同じ値
             samples.push(value);
@@ -66,9 +67,8 @@ struct OpusDecoderWrapper {
 impl OpusDecoderWrapper {
     fn new(sample_rate: i32, channels: i32) -> Result<Self> {
         let mut error: i32 = 0;
-        let decoder = unsafe {
-            opus_sys::opus_decoder_create(sample_rate, channels, &mut error as *mut i32)
-        };
+        let decoder =
+            unsafe { opus_sys::opus_decoder_create(sample_rate, channels, &mut error as *mut i32) };
 
         if error != opus_sys::OPUS_OK as i32 || decoder.is_null() {
             return Err(anyhow::anyhow!(
@@ -94,7 +94,10 @@ impl OpusDecoderWrapper {
         };
 
         if decoded_samples < 0 {
-            return Err(anyhow::anyhow!("Decoding failed: error {}", decoded_samples));
+            return Err(anyhow::anyhow!(
+                "Decoding failed: error {}",
+                decoded_samples
+            ));
         }
 
         Ok((decoded_samples as usize) * 2)

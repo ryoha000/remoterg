@@ -207,7 +207,9 @@ mod tests {
         let first_frame = &frames[0];
         let last_frame = &frames[frames.len() - 1];
         // windows_timespan は100ナノ秒単位なので、ミリ秒に変換
-        let delta_hns = last_frame.windows_timespan.saturating_sub(first_frame.windows_timespan);
+        let delta_hns = last_frame
+            .windows_timespan
+            .saturating_sub(first_frame.windows_timespan);
         let actual_duration_ms = delta_hns / 10_000;
         let actual_duration_sec = actual_duration_ms as f32 / 1000.0;
         let avg_fps = if actual_duration_sec > 0.0 {

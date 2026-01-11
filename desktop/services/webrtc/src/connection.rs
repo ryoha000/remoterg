@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use core_types::{
-    AudioEncoderFactory, AudioFrame, DataChannelMessage, SignalingResponse, VideoCodec, VideoEncoderFactory,
+    AudioEncoderFactory, AudioFrame, DataChannelMessage, SignalingResponse, VideoCodec,
+    VideoEncoderFactory,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -324,9 +325,7 @@ pub async fn handle_set_offer(
                     } else if out.kind == "audio" {
                         info!(
                             "audio sender stats: ssrc={} bytes_sent={} packets_sent={}",
-                            out.ssrc,
-                            out.bytes_sent,
-                            out.packets_sent,
+                            out.ssrc, out.bytes_sent, out.packets_sent,
                         );
                         audio_logged = true;
                     }

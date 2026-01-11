@@ -50,12 +50,8 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         // 複数の可能なパスを探索（libyuv-sys と同じパターン）
-        let base_paths: Vec<Vec<&str>> = vec![
-            vec![],
-            vec!["build"],
-            vec!["lib"],
-            vec!["lib", "opus"],
-        ];
+        let base_paths: Vec<Vec<&str>> =
+            vec![vec![], vec!["build"], vec!["lib"], vec!["lib", "opus"]];
 
         let build_types: Vec<Option<&str>> = vec![
             Some("Release"),

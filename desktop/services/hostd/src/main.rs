@@ -7,15 +7,15 @@ use tokio::sync::mpsc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use capture;
-use capturemock;
 use audio_capture;
 use audio_capture_mock;
+use audio_encoder::OpusEncoderFactory;
+use capture;
+use capturemock;
 use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
     SignalingResponse, VideoCodec, VideoEncoderFactory,
 };
-use audio_encoder::OpusEncoderFactory;
 #[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
 use input::InputService;

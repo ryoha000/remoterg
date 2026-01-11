@@ -414,7 +414,10 @@ impl AudioCaptureService {
                 "  Format: {}Hz, {} ch, {} bits",
                 sample_rate, channels, bits_per_sample
             );
-            return Err(anyhow::anyhow!("Audio client initialization failed: {:?}", e));
+            return Err(anyhow::anyhow!(
+                "Audio client initialization failed: {:?}",
+                e
+            ));
         }
 
         info!("Audio client initialized successfully");

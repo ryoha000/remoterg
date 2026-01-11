@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use core_types::{EncodeResult, VideoEncoderFactory};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -5,7 +6,6 @@ use std::time::Instant;
 use tracing::{error, info, span, Level};
 use webrtc_rs::media::Sample;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
-use bytes::Bytes;
 
 /// Video trackとエンコーダーの状態
 pub struct VideoTrackState {
@@ -50,7 +50,11 @@ pub async fn process_encode_result(
             *frame_count += 1;
             let elapsed = last_frame_log.elapsed();
             if elapsed.as_secs_f32() >= 5.0 {
-                info!("Video frames sent: {} (last {}s)", *frame_count, elapsed.as_secs());
+                info!(
+                    "Video frames sent: {} (last {}s)",
+                    *frame_count,
+                    elapsed.as_secs()
+                );
                 *frame_count = 0;
                 *last_frame_log = Instant::now();
             }
@@ -71,4 +75,3 @@ pub fn handle_keyframe_request(
     keyframe_requested.store(true, Ordering::Relaxed);
     track_state.keyframe_sent = false;
 }
-

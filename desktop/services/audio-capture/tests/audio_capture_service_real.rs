@@ -9,8 +9,6 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::mpsc;
     use tokio::time::timeout;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
 
     static INIT_TRACING: Once = Once::new();
 
@@ -22,12 +20,6 @@ mod tests {
                 .with_test_writer()
                 .init();
         });
-    }
-
-    /// テスト用のデスクトップウィンドウのHWNDを取得
-    /// デスクトップウィンドウは常に存在するため、テストに適している
-    unsafe fn get_desktop_window() -> HWND {
-        GetDesktopWindow()
     }
 
     /// 音声フレームをWAVファイルとして保存
@@ -130,11 +122,7 @@ mod tests {
         let rms = (sum_squares / total_samples as f64).sqrt();
 
         // RMSをデシベル（dB）に変換
-        let rms_db = if rms > 0.0 {
-            20.0 * rms.log10()
-        } else {
-            -96.0
-        } as f32;
+        let rms_db = if rms > 0.0 { 20.0 * rms.log10() } else { -96.0 } as f32;
 
         println!("音声レベル分析:");
         println!("  RMS: {:.6}", rms);

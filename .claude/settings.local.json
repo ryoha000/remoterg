@@ -31,7 +31,8 @@
       "Bash(cargo metadata:*)",
       "Bash(tee:*)",
       "Bash(ffprobe:*)",
-      "Bash(cargo search:*)"
+      "Bash(cargo search:*)",
+      "Bash(cargo fmt:*)"
     ]
   }
 }

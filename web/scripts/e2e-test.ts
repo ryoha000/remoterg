@@ -78,7 +78,7 @@ async function startHostd(): Promise<ChildProcess> {
   console.log("[e2e] Starting hostd...");
   const servicesDir = path.resolve(__dirname, "../../desktop/services");
 
-  const hostdProcess = spawn("task", ["hostd"], {
+  const hostdProcess = spawn("task", ["hostd:mock"], {
     cwd: servicesDir,
     stdio: "pipe",
     shell: true,

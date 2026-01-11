@@ -60,6 +60,9 @@ async fn test_audio_capture_mock_basic() -> Result<()> {
     let service = AudioCaptureService::new(frame_tx, command_rx);
     let service_handle = tokio::spawn(async move { service.run().await });
 
+    // WAVファイル読み込み完了を待つ（最大5秒）
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
     // 録音開始
     command_tx
         .send(AudioCaptureMessage::Start { hwnd: 12345 })
@@ -94,10 +97,10 @@ async fn test_audio_capture_mock_basic() -> Result<()> {
     assert_eq!(first_frame.samples.len(), 960); // 480 * 2
 
     // 約200フレーム（2秒 / 10ms = 200）受信できることを確認
-    // Windows のタイマー解像度の制限により、実際には約15.6ms間隔になる（約128フレーム/2秒）
+    // タイマー解像度を1msに設定したため、約200フレーム期待
     assert!(
-        frames.len() >= 100,
-        "Should receive at least 100 frames in 2 seconds (got {})",
+        frames.len() >= 180,
+        "Should receive at least 180 frames in 2 seconds (got {})",
         frames.len()
     );
 
@@ -132,6 +135,9 @@ async fn test_audio_capture_mock_loop() -> Result<()> {
     let service = AudioCaptureService::new(frame_tx, command_rx);
     let _service_handle = tokio::spawn(async move { service.run().await });
 
+    // WAVファイル読み込み完了を待つ（最大5秒）
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
     command_tx
         .send(AudioCaptureMessage::Start { hwnd: 12345 })
         .await
@@ -156,10 +162,10 @@ async fn test_audio_capture_mock_loop() -> Result<()> {
     println!("Collected {} frames in 5 seconds", frames.len());
 
     // 約500フレーム受信できることを確認
-    // Windows のタイマー解像度の制限により、実際には約15.6ms間隔になる（約320フレーム/5秒）
+    // タイマー解像度を1msに設定したため、約500フレーム期待
     assert!(
-        frames.len() >= 250,
-        "Should receive at least 250 frames in 5 seconds (got {})",
+        frames.len() >= 450,
+        "Should receive at least 450 frames in 5 seconds (got {})",
         frames.len()
     );
 

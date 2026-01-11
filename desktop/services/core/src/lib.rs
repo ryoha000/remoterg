@@ -224,6 +224,7 @@ pub enum DataChannelMessage {
     Key { key: String, down: bool },
     MouseWheel { delta: i32 },
     ScreenshotRequest,
+    Ping { timestamp: u64 },
 }
 
 /// Capture 実装の共通トレイト

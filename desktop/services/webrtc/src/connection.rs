@@ -153,6 +153,17 @@ pub async fn handle_set_offer(
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_include_loopback_candidate(true);
 
+    // ICE timeout設定: デフォルト5秒では短すぎるため延長
+    // - disconnected_timeout: 5秒 → 20秒（ネットワーク活動なしでDisconnected判定される時間）
+    // - failed_timeout: 25秒 → 40秒（Disconnected後にFailed判定される時間）
+    // - keepalive_interval: 2秒（メディアがない場合に定期的なkeepaliveトラフィック送信）
+    // Keepalive実装により3秒ごとにトラフィックが発生するため、安全マージンを確保
+    setting_engine.set_ice_timeouts(
+        Some(Duration::from_secs(20)), // disconnected_timeout: 15秒 → 20秒
+        Some(Duration::from_secs(40)), // failed_timeout: 30秒 → 40秒
+        Some(Duration::from_secs(2)),  // keepalive_interval: 変更なし
+    );
+
     let api = APIBuilder::new()
         .with_media_engine(m)
         .with_setting_engine(setting_engine)
@@ -319,8 +330,18 @@ pub async fn handle_set_offer(
                         if let Ok(text) = String::from_utf8(msg.data.to_vec()) {
                             match serde_json::from_str::<DataChannelMessage>(&text) {
                                 Ok(parsed) => {
-                                    if let Err(e) = dc_tx_on_msg.send(parsed).await {
-                                        warn!("Failed to forward data channel message: {}", e);
+                                    // Pingメッセージの場合はログ出力のみ
+                                    match &parsed {
+                                        DataChannelMessage::Ping { timestamp } => {
+                                            debug!("Received keepalive ping from client (timestamp: {})", timestamp);
+                                            // Pingメッセージは処理不要（受信だけで十分）
+                                        }
+                                        _ => {
+                                            // その他のメッセージは従来通りinputサービスに転送
+                                            if let Err(e) = dc_tx_on_msg.send(parsed).await {
+                                                warn!("Failed to forward data channel message: {}", e);
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => {

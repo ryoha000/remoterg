@@ -48,6 +48,10 @@ impl InputService {
                 info!("Screenshot requested");
                 // 後で実装
             }
+            DataChannelMessage::Ping { timestamp } => {
+                debug!("Ping received: timestamp={}", timestamp);
+                // Pingメッセージは接続の生存確認用なので、特に処理は不要
+            }
         }
         Ok(())
     }

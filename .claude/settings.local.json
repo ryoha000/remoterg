@@ -29,7 +29,9 @@
       "Bash(pnpm exec tsc:*)",
       "Bash(pnpm tsc:*)",
       "Bash(cargo metadata:*)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "Bash(ffprobe:*)",
+      "Bash(cargo search:*)"
     ]
   }
 }

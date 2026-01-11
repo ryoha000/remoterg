@@ -13,9 +13,9 @@ members = [
   "audio-capture",
   "audio-capture-mock",
   "audio-encoder",
+  "audio-encoder/opus-sys",
   "audio-stream",
   "video-stream",
-  "opus-sys",
 ]
 
 resolver = "2"

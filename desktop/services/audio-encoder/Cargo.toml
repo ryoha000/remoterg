@@ -8,7 +8,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 core-types = { path = "../core" }
-opus-sys = { path = "../opus-sys" }
+opus-sys = { path = "./opus-sys" }
 bytes = "1.0"
 
 [dev-dependencies]

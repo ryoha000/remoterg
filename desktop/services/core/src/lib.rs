@@ -268,3 +268,10 @@ pub trait AudioEncoderFactory: Send + Sync {
     /// 音声フレームを送信するチャンネルを返す
     fn setup(&self) -> (Sender<AudioFrame>, UnboundedReceiver<AudioEncodeResult>);
 }
+
+/// ビデオストリームサービスへの制御メッセージ
+#[derive(Debug, Clone)]
+pub enum VideoStreamMessage {
+    /// キーフレーム要求 (PLI/FIR RTCP feedback)
+    RequestKeyframe,
+}

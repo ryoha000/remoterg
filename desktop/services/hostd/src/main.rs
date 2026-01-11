@@ -15,12 +15,13 @@ use capture;
 use capturemock;
 use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
-    SignalingResponse, VideoCodec, VideoEncoderFactory,
+    SignalingResponse, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
 };
 #[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
 use input::InputService;
 use signaling::SignalingClient;
+use video_stream::VideoStreamService;
 use webrtc::WebRtcService;
 
 #[derive(Parser, Debug)]
@@ -112,6 +113,16 @@ async fn main() -> Result<()> {
     // 音声チャンネル作成
     let (audio_capture_cmd_tx, audio_capture_cmd_rx) = mpsc::channel::<AudioCaptureMessage>(10);
 
+    // ビデオストリームメッセージチャネル（キーフレーム要求など）
+    let (video_stream_msg_tx, video_stream_msg_rx) = mpsc::channel::<VideoStreamMessage>(10);
+
+    // ビデオトラック情報を受け渡すためのワンショットチャネル
+    let (video_track_tx, video_track_rx) = tokio::sync::oneshot::channel::<(
+        Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
+        Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
+        Arc<std::sync::atomic::AtomicBool>, // connection_ready
+    )>();
+
     // 音声トラック情報を受け渡すためのワンショットチャネル
     let (audio_track_tx, audio_track_rx) = tokio::sync::oneshot::channel::<(
         Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
@@ -134,7 +145,13 @@ async fn main() -> Result<()> {
     // 音声フレーム用のチャンネルを作成
     let (audio_frame_tx, audio_frame_rx) = mpsc::channel::<AudioFrame>(100);
 
-    // 音声エンコーダーファクトリを作成（WebRtcServiceに渡すのみ）
+    // デフォルトのビデオエンコーダーを選択
+    let default_video_encoder = encoder_factories
+        .get(&VideoCodec::H264)
+        .expect("H264 encoder must be available")
+        .clone();
+
+    // 音声エンコーダーファクトリを作成
     let audio_encoder_factory = Arc::new(OpusEncoderFactory::new());
 
     // サービス作成
@@ -154,13 +171,22 @@ async fn main() -> Result<()> {
             audio_capture_cmd_rx,
         ))
     };
-    let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
+    // VideoStreamService を作成
+    let video_stream_service = VideoStreamService::new(
         frame_rx,
+        default_video_encoder,
+        video_stream_msg_rx,
+    );
+
+    // WebRtcService を作成（エンコーダーファクトリと frame_rx を削除）
+    let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
         signaling_response_tx,
         data_channel_tx,
-        encoder_factories,
+        Some(video_track_tx),
+        Some(video_stream_msg_tx.clone()),
         Some(audio_track_tx),
     );
+
     let audio_stream_service = AudioStreamService::new(audio_frame_rx, audio_encoder_factory);
     let input_service = InputService::new(data_channel_rx);
     let signaling_client = SignalingClient::new(
@@ -198,6 +224,20 @@ async fn main() -> Result<()> {
     let input_handle = tokio::spawn(async move { input_service.run().await });
     let signaling_handle = tokio::spawn(async move { signaling_client.run().await });
 
+    // VideoStreamService起動タスク（ビデオトラック受信後に起動）
+    let video_stream_handle = tokio::spawn(async move {
+        match video_track_rx.await {
+            Ok((track, sender, connection_ready)) => {
+                info!("Received video track, starting VideoStreamService");
+                video_stream_service.run(track, sender, connection_ready).await
+            }
+            Err(_) => {
+                info!("Video track channel closed without sending");
+                Ok(())
+            }
+        }
+    });
+
     // AudioStreamService起動タスク（音声トラック受信後に起動）
     let audio_stream_handle = tokio::spawn(async move {
         match audio_track_rx.await {
@@ -212,7 +252,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    // WebRTC は OpenH264 の非 Send 型を含むため spawn せず現在のタスクで実行する
+    // WebRTC は非 Send 型を含むため spawn せず現在のタスクで実行する
     let webrtc_fut = webrtc_service.run();
     pin!(webrtc_fut);
 
@@ -230,6 +270,11 @@ async fn main() -> Result<()> {
             Ok(Ok(())) => info!("AudioCaptureService finished"),
             Ok(Err(e)) => tracing::error!("AudioCaptureService error: {}", e),
             Err(e) => tracing::error!("AudioCaptureService task panicked: {}", e),
+        },
+        result = video_stream_handle => match result {
+            Ok(Ok(())) => info!("VideoStreamService finished"),
+            Ok(Err(e)) => tracing::error!("VideoStreamService error: {}", e),
+            Err(e) => tracing::error!("VideoStreamService task panicked: {}", e),
         },
         result = audio_stream_handle => match result {
             Ok(Ok(())) => info!("AudioStreamService finished"),

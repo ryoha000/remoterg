@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use core_types::{DataChannelMessage, SignalingResponse, VideoCodec, VideoEncoderFactory};
+use core_types::{DataChannelMessage, SignalingResponse, VideoCodec, VideoStreamMessage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,8 +25,6 @@ use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc_rs::stats::StatsReportType;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_rs::track::track_local::TrackLocal;
-
-use crate::track_writer::VideoTrackState;
 
 /// m-line情報
 #[derive(Clone)]
@@ -123,9 +121,8 @@ pub fn codec_to_mime_type(codec: VideoCodec) -> String {
 /// SetOfferメッセージの処理結果
 pub struct SetOfferResult {
     pub peer_connection: Arc<RTCPeerConnection>,
-    pub video_track_state: VideoTrackState,
-    pub encode_job_slot: Arc<core_types::EncodeJobSlot>,
-    pub encode_result_rx: tokio::sync::mpsc::UnboundedReceiver<core_types::EncodeResult>,
+    pub video_track: Arc<TrackLocalStaticSample>,
+    pub video_sender: Arc<RTCRtpSender>,
     pub audio_track: Option<Arc<TrackLocalStaticSample>>,
     pub audio_sender: Option<Arc<RTCRtpSender>>,
 }
@@ -133,15 +130,17 @@ pub struct SetOfferResult {
 /// SetOfferメッセージを処理
 pub async fn handle_set_offer(
     sdp: String,
-    _codec: Option<VideoCodec>,
-    encoder_factory: Arc<dyn VideoEncoderFactory>,
-    selected_codec: VideoCodec,
+    codec: Option<VideoCodec>,
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     connection_ready: Arc<AtomicBool>,
-    keyframe_tx: mpsc::UnboundedSender<()>,
+    video_stream_msg_tx: mpsc::Sender<VideoStreamMessage>,
 ) -> Result<SetOfferResult> {
     info!("SetOffer received, generating answer");
+
+    // video codec を選択（デフォルトは H264）
+    let selected_codec = codec.unwrap_or(VideoCodec::H264);
+    info!("Using video codec: {:?}", selected_codec);
 
     // webrtc-rsのAPIを初期化
     let mut m = MediaEngine::default();
@@ -180,9 +179,8 @@ pub async fn handle_set_offer(
         .await
         .context("Failed to set remote description")?;
 
-    // Video trackを作成して追加（encoderが提供するコーデックに合わせる）
+    // Video trackを作成して追加
     let mime_type = codec_to_mime_type(selected_codec);
-    info!("Using video codec: {:?}", selected_codec);
 
     let video_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
@@ -227,8 +225,8 @@ pub async fn handle_set_offer(
     audio_track = Some(audio_track_local);
     audio_sender = Some(audio_sender_local);
 
-    // RTCP 受信ループを開始し、PLI/FIR を受けたらキーフレーム再送を要求
-    let keyframe_tx_rtcp = keyframe_tx.clone();
+    // RTCP 受信ループを開始し、PLI/FIR を受けたら VideoStreamService にキーフレーム要求を送信
+    let video_stream_msg_tx_rtcp = video_stream_msg_tx.clone();
     let sender_for_rtcp = sender.clone();
     tokio::spawn(async move {
         loop {
@@ -242,7 +240,9 @@ pub async fn handle_set_offer(
                             || pkt.as_any().downcast_ref::<FullIntraRequest>().is_some()
                         {
                             debug!("RTCP feedback (PLI/FIR) received, requesting keyframe");
-                            let _ = keyframe_tx_rtcp.send(());
+                            let _ = video_stream_msg_tx_rtcp
+                                .send(VideoStreamMessage::RequestKeyframe)
+                                .await;
                         }
                     }
                 }
@@ -302,19 +302,6 @@ pub async fn handle_set_offer(
         }
     });
 
-    // エンコードワーカーを起動
-    let (encode_job_slot, encode_result_rx) = encoder_factory.setup();
-
-    // SPS/PPSの送出はLocalDescription設定後、最初のフレーム処理時に実行
-    // 初期値はfalseに設定（交渉完了後に送信）
-    // 解像度は最初のフレームが来たときに設定される
-    let video_track_state = VideoTrackState {
-        track: video_track,
-        width: 0,
-        height: 0,
-        keyframe_sent: false,
-        encoder_factory: encoder_factory.clone(),
-    };
 
     // DataChannelハンドラを設定
     let dc_tx = data_channel_tx.clone();
@@ -453,10 +440,10 @@ pub async fn handle_set_offer(
     // PeerConnection状態の監視
     let pc_for_state = pc.clone();
     let connection_ready_pc = connection_ready.clone();
-    let keyframe_tx_on_connect = keyframe_tx.clone();
+    let video_stream_msg_tx_on_connect = video_stream_msg_tx.clone();
     pc_for_state.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         let connection_ready_pc = connection_ready_pc.clone();
-        let keyframe_tx_on_connect = keyframe_tx_on_connect.clone();
+        let video_stream_msg_tx_on_connect = video_stream_msg_tx_on_connect.clone();
         Box::pin(async move {
             match state {
                 RTCPeerConnectionState::New => {
@@ -470,7 +457,9 @@ pub async fn handle_set_offer(
                     info!("PeerConnection state: Connected - Media stream should be active");
                     connection_ready_pc.store(true, Ordering::Relaxed);
                     // 接続確立時に即座にキーフレーム送出を要求
-                    let _ = keyframe_tx_on_connect.send(());
+                    let _ = video_stream_msg_tx_on_connect
+                        .send(VideoStreamMessage::RequestKeyframe)
+                        .await;
                 }
                 RTCPeerConnectionState::Disconnected => {
                     warn!("PeerConnection state: Disconnected - Connection lost");
@@ -542,9 +531,8 @@ pub async fn handle_set_offer(
 
     Ok(SetOfferResult {
         peer_connection: pc,
-        video_track_state,
-        encode_job_slot,
-        encode_result_rx,
+        video_track,
+        video_sender: sender,
         audio_track,
         audio_sender,
     })

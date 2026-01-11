@@ -1,30 +1,30 @@
 mod connection;
-mod frame_handler;
-mod track_writer;
 
-use anyhow::{bail, Result};
-use core_types::{EncodeResult, VideoCodec, VideoEncoderFactory};
-use std::collections::HashMap;
+use anyhow::Result;
+use core_types::{VideoStreamMessage};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use webrtc_rs::peer_connection::RTCPeerConnection;
 
-use core_types::{DataChannelMessage, Frame, SignalingResponse, WebRtcMessage};
+use core_types::{DataChannelMessage, SignalingResponse, WebRtcMessage};
 
 use connection::{handle_add_ice_candidate, handle_set_offer};
-use frame_handler::{log_performance_stats, process_frame, FrameStats};
-use track_writer::{handle_keyframe_request, process_encode_result, VideoTrackState};
 
 /// WebRTCサービス
 pub struct WebRtcService {
-    frame_rx: mpsc::Receiver<Frame>,
     message_rx: mpsc::Receiver<WebRtcMessage>,
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
-    encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
+    video_track_tx: Option<
+        tokio::sync::oneshot::Sender<(
+            Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
+            Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
+            Arc<AtomicBool>, // connection_ready
+        )>,
+    >,
+    video_stream_msg_tx: Option<mpsc::Sender<VideoStreamMessage>>,
     audio_track_tx: Option<
         tokio::sync::oneshot::Sender<(
             Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
@@ -35,10 +35,16 @@ pub struct WebRtcService {
 
 impl WebRtcService {
     pub fn new(
-        frame_rx: mpsc::Receiver<Frame>,
         signaling_tx: mpsc::Sender<SignalingResponse>,
         data_channel_tx: mpsc::Sender<DataChannelMessage>,
-        encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
+        video_track_tx: Option<
+            tokio::sync::oneshot::Sender<(
+                Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
+                Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
+                Arc<AtomicBool>,
+            )>,
+        >,
+        video_stream_msg_tx: Option<mpsc::Sender<VideoStreamMessage>>,
         audio_track_tx: Option<
             tokio::sync::oneshot::Sender<(
                 Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
@@ -49,135 +55,27 @@ impl WebRtcService {
         let (message_tx, message_rx) = mpsc::channel(100);
         (
             Self {
-                frame_rx,
                 message_rx,
                 signaling_tx,
                 data_channel_tx,
-                encoder_factories,
+                video_track_tx,
+                video_stream_msg_tx,
                 audio_track_tx,
             },
             message_tx,
         )
     }
 
-    fn select_encoder_factory(
-        &self,
-        requested: Option<VideoCodec>,
-    ) -> Result<(Arc<dyn VideoEncoderFactory>, VideoCodec)> {
-        if let Some(codec) = requested {
-            if let Some(factory) = self.encoder_factories.get(&codec) {
-                return Ok((factory.clone(), codec));
-            } else {
-                bail!(
-                    "要求されたコーデックはビルドで有効化されていません: {:?}",
-                    codec
-                );
-            }
-        }
-
-        for codec in [VideoCodec::H264] {
-            if let Some(factory) = self.encoder_factories.get(&codec) {
-                return Ok((factory.clone(), codec));
-            }
-        }
-
-        bail!("利用可能なエンコーダが存在しません（feature未有効）");
-    }
-
     pub async fn run(mut self) -> Result<()> {
         info!("WebRtcService started");
 
-        // PLI/FIR などの RTCP フィードバックに応じてキーフレーム再送を行うための通知チャネル
-        let (keyframe_tx, mut keyframe_rx) = mpsc::unbounded_channel::<()>();
         // ICE/DTLS が接続完了したかを共有するフラグ（接続前は送出しない）
         let connection_ready = Arc::new(AtomicBool::new(false));
 
         let mut peer_connection: Option<Arc<RTCPeerConnection>> = None;
-        let mut video_track_state: Option<VideoTrackState> = None;
-        let mut encode_job_slot: Option<Arc<core_types::EncodeJobSlot>> = None;
-        let mut encode_result_rx: Option<tokio::sync::mpsc::UnboundedReceiver<EncodeResult>> = None;
-
-        let mut frame_count: u64 = 0;
-        let mut last_frame_ts: Option<u64> = None;
-        let mut last_frame_log = Instant::now();
-        let mut frame_stats = FrameStats::new();
-        // キーフレーム要求フラグ（PLI/FIR受信時に設定）
-        let keyframe_requested = Arc::new(AtomicBool::new(false));
 
         loop {
             tokio::select! {
-                // フレーム受信
-                frame = self.frame_rx.recv() => {
-                    match frame {
-                        Some(frame) => {
-                            let pipeline_start = Instant::now();
-
-                            // 解像度変更を検出した場合はencoderを再生成
-                            let resolution_changed = process_frame(
-                                frame,
-                                video_track_state.as_mut(),
-                                encode_job_slot.as_ref(),
-                                &connection_ready,
-                                &keyframe_requested,
-                                &mut last_frame_ts,
-                                &mut frame_stats,
-                                pipeline_start,
-                            );
-
-                            if resolution_changed.is_some() {
-                                // 既存のencoderワーカーを停止（シャットダウンしてからドロップ）
-                                if let Some(old_slot) = encode_job_slot.as_ref() {
-                                    old_slot.shutdown();
-                                }
-                                drop(encode_job_slot.take());
-                                drop(encode_result_rx.take());
-
-                                // 新しいencoderワーカーを起動
-                                if let Some(ref track_state) = video_track_state {
-                                    let (job_slot, res_rx) = track_state.encoder_factory.setup();
-                                    encode_job_slot = Some(job_slot);
-                                    encode_result_rx = Some(res_rx);
-                                }
-                            }
-
-                            // パフォーマンス統計を定期的に出力
-                            log_performance_stats(&mut frame_stats);
-                        }
-                        None => {
-                            debug!("Frame channel closed");
-                            break;
-                        }
-                    }
-                }
-                // エンコード結果受信（ワーカー -> メイン）
-                encoded = async {
-                    if let Some(rx) = encode_result_rx.as_mut() {
-                        rx.recv().await
-                    } else {
-                        None
-                    }
-                } => {
-                    if let Some(result) = encoded {
-                        if let Some(ref mut track_state) = video_track_state {
-                            process_encode_result(
-                                result,
-                                track_state,
-                                &mut frame_count,
-                                &mut last_frame_log,
-                            ).await;
-                        } else {
-                            debug!("Received encoded frame but video track is not ready");
-                        }
-                    }
-                }
-                // PLI/FIR によるキーフレーム再送要求
-                keyframe_req = keyframe_rx.recv() => {
-                    if keyframe_req.is_some() {
-                        if let Some(ref mut track_state) = video_track_state {
-                            handle_keyframe_request(track_state, &keyframe_requested);
-                        }
-                    }
-                }
                 // メッセージ受信
                 msg = self.message_rx.recv() => {
                     match msg {
@@ -187,14 +85,7 @@ impl WebRtcService {
                             if peer_connection.is_some() {
                                 info!("Cleaning up existing PeerConnection before creating new one");
 
-                                // 1. 既存のエンコーダリソースをクリーンアップ
-                                if let Some(old_slot) = encode_job_slot.as_ref() {
-                                    old_slot.shutdown();
-                                }
-                                drop(encode_job_slot.take());
-                                drop(encode_result_rx.take());
-
-                                // 2. 既存のPeerConnectionをクリーンアップ
+                                // 既存のPeerConnectionをクリーンアップ
                                 if let Some(old_pc) = peer_connection.take() {
                                     if let Err(e) = old_pc.close().await {
                                         warn!("Failed to close existing PeerConnection: {}", e);
@@ -203,43 +94,38 @@ impl WebRtcService {
                                     }
                                 }
 
-                                // 3. video_track_stateをクリア
-                                video_track_state = None;
-
-                                // 4. connection_readyフラグをリセット
+                                // connection_readyフラグをリセット
                                 connection_ready.store(false, std::sync::atomic::Ordering::Relaxed);
                             }
 
-                            let (encoder_factory, selected_codec) =
-                                match self.select_encoder_factory(codec) {
-                                    Ok(res) => res,
-                                    Err(e) => {
-                                        warn!("{}", e);
-                                        let _ = self
-                                            .signaling_tx
-                                            .send(SignalingResponse::Error {
-                                                message: e.to_string(),
-                                            })
-                                            .await;
-                                        continue;
-                                    }
-                                };
+                            // video_stream_msg_tx を取得（None の場合は後続処理をスキップ）
+                            let video_stream_msg_tx = match self.video_stream_msg_tx.clone() {
+                                Some(tx) => tx,
+                                None => {
+                                    warn!("video_stream_msg_tx is None, skipping SetOffer");
+                                    continue;
+                                }
+                            };
 
                             match handle_set_offer(
                                 sdp,
                                 codec,
-                                encoder_factory.clone(),
-                                selected_codec,
                                 self.signaling_tx.clone(),
                                 self.data_channel_tx.clone(),
                                 connection_ready.clone(),
-                                keyframe_tx.clone(),
+                                video_stream_msg_tx,
                             ).await {
                                 Ok(result) => {
-                                    peer_connection = Some(result.peer_connection);
-                                    video_track_state = Some(result.video_track_state);
-                                    encode_job_slot = Some(result.encode_job_slot);
-                                    encode_result_rx = Some(result.encode_result_rx);
+                                    peer_connection = Some(result.peer_connection.clone());
+
+                                    // ビデオトラック情報をVideoStreamServiceに送信
+                                    if let Some(tx) = self.video_track_tx.take() {
+                                        if tx.send((result.video_track, result.video_sender, connection_ready.clone())).is_ok() {
+                                            info!("Video track sent to VideoStreamService");
+                                        } else {
+                                            warn!("Failed to send video track: receiver dropped");
+                                        }
+                                    }
 
                                     // 音声トラックをAudioStreamServiceに送信
                                     if let Some(tx) = self.audio_track_tx.take() {

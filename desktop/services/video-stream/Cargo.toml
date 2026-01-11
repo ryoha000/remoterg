@@ -1,0 +1,12 @@
+[package]
+name = "video-stream"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+core-types = { path = "../core" }
+webrtc-rs = { package = "webrtc", version = "0.14" }
+bytes = "1.0"

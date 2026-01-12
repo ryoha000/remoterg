@@ -276,13 +276,6 @@ pub async fn handle_set_offer(
         }
     });
 
-    // RTCP をドレインするループ（NACK 等を確実に処理）
-    let sender_for_rtcp_drain = sender.clone();
-    tokio::spawn(async move {
-        let mut rtcp_buf = vec![0u8; 1500];
-        while let Ok((_, _)) = sender_for_rtcp_drain.read(&mut rtcp_buf).await {}
-    });
-
     // DataChannelハンドラを設定
     let dc_tx = data_channel_tx.clone();
     pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {

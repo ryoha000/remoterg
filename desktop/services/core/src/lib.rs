@@ -199,6 +199,7 @@ pub enum WebRtcMessage {
         candidate: String,
         sdp_mid: Option<String>,
         sdp_mline_index: Option<u16>,
+        username_fragment: Option<String>,
     },
 }
 
@@ -215,7 +216,9 @@ pub enum SignalingResponse {
         candidate: String,
         sdp_mid: Option<String>,
         sdp_mline_index: Option<u16>,
+        username_fragment: Option<String>,
     },
+    IceCandidateComplete,
 }
 
 /// DataChannel経由でやり取りするメッセージ

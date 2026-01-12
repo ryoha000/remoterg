@@ -1,7 +1,7 @@
 mod connection;
 
 use anyhow::Result;
-use core_types::{VideoStreamMessage};
+use core_types::VideoStreamMessage;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -149,13 +149,14 @@ impl WebRtcService {
                                 }
                             }
                         }
-                        Some(WebRtcMessage::AddIceCandidate { candidate, sdp_mid, sdp_mline_index }) => {
+                        Some(WebRtcMessage::AddIceCandidate { candidate, sdp_mid, sdp_mline_index, username_fragment }) => {
                             if let Some(ref pc) = peer_connection {
                                 if let Err(e) = handle_add_ice_candidate(
                                     pc,
                                     candidate,
                                     sdp_mid,
                                     sdp_mline_index,
+                                    username_fragment,
                                 ).await {
                                     warn!("Failed to add ICE candidate: {}", e);
                                 }

@@ -35,6 +35,10 @@ pub struct MLineInfo {
 }
 
 /// Answer SDPからm-line情報を解析
+///
+/// 注意: この関数はICE candidate送信では使用しない。
+/// ICE candidateのsdp_mid/sdp_mline_indexはRTCIceCandidate::to_json()から取得する。
+#[allow(dead_code)]
 pub fn parse_answer_m_lines(answer_sdp: &str) -> Vec<MLineInfo> {
     let mut m_lines = Vec::new();
     let lines: Vec<&str> = answer_sdp.lines().collect();
@@ -72,6 +76,10 @@ pub fn parse_answer_m_lines(answer_sdp: &str) -> Vec<MLineInfo> {
 }
 
 /// RTCIceCandidateから完全なSDP candidate文字列を生成
+///
+/// 注意: この関数はICE candidate送信では使用しない。
+/// ICE candidate送信にはRTCIceCandidate::to_json()を使用する。
+#[allow(dead_code)]
 pub fn format_ice_candidate(candidate: &RTCIceCandidate) -> String {
     // webrtc-rsのRTCIceCandidateから完全なSDP candidate文字列を生成
     // フォーマット: candidate:<foundation> <component> <protocol> <priority> <address> <port> typ <type> [raddr <raddr>] [rport <rport>] [generation <generation>]
@@ -373,54 +381,57 @@ pub async fn handle_set_offer(
         .context("Failed to create answer")?;
     info!("Answer SDP generated:\n{}", answer.sdp);
 
-    // Answer SDPからm-line情報を解析（ICEハンドラ設定に使用）
-    let m_lines = parse_answer_m_lines(&answer.sdp);
-    info!("Answer SDP parsed: {} m-lines", m_lines.len());
-
     // ICE candidateのイベントハンドラを LocalDescription 設定前に登録して、
     // 初期ホスト候補を取りこぼさないようにする
     let signaling_tx_ice = signaling_tx.clone();
-    let answer_m_lines = m_lines.clone();
     pc.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
         let signaling_tx = signaling_tx_ice.clone();
-        let m_lines = answer_m_lines.clone();
         Box::pin(async move {
-            if let Some(candidate) = candidate {
-                // RTCIceCandidateから完全なSDP candidate文字列を生成
-                let candidate_str = format_ice_candidate(&candidate);
+            match candidate {
+                Some(candidate) => {
+                    // RTCIceCandidate::to_json()を使用してRTCIceCandidateInitを取得
+                    // これにより、candidate文字列、sdp_mid、sdp_mline_index、username_fragmentを
+                    // 仕様準拠の形式で取得できる
+                    match candidate.to_json() {
+                        Ok(candidate_init) => {
+                            info!(
+                                "ICE candidate: {} (mid: {:?}, mline_index: {:?}, username_fragment: {:?})",
+                                candidate_init.candidate,
+                                candidate_init.sdp_mid,
+                                candidate_init.sdp_mline_index,
+                                candidate_init.username_fragment
+                            );
 
-                // candidateのcomponentからm-lineを特定
-                // component 1 = RTP, component 2 = RTCP
-                // BUNDLEにより全メディアが同じトランスポートを共有するため、
-                // 最初のm-lineを使用
-                let sdp_mid = if candidate.component == 1 {
-                    m_lines.first().and_then(|m| m.mid.clone())
-                } else {
-                    None
-                };
-
-                let sdp_mline_index = if candidate.component == 1 {
-                    m_lines.first().map(|m| m.index as u16)
-                } else {
-                    None
-                };
-
-                info!(
-                    "ICE candidate: {} (mid: {:?}, mline_index: {:?})",
-                    candidate_str, sdp_mid, sdp_mline_index
-                );
-
-                if let Err(e) = signaling_tx
-                    .send(SignalingResponse::IceCandidate {
-                        candidate: candidate_str,
-                        sdp_mid,
-                        sdp_mline_index,
-                    })
-                    .await
-                {
-                    warn!("Failed to send ICE candidate: {}", e);
-                } else {
-                    debug!("ICE candidate sent to signaling service");
+                            if let Err(e) = signaling_tx
+                                .send(SignalingResponse::IceCandidate {
+                                    candidate: candidate_init.candidate,
+                                    sdp_mid: candidate_init.sdp_mid,
+                                    sdp_mline_index: candidate_init.sdp_mline_index,
+                                    username_fragment: candidate_init.username_fragment,
+                                })
+                                .await
+                            {
+                                warn!("Failed to send ICE candidate: {}", e);
+                            } else {
+                                debug!("ICE candidate sent to signaling service");
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to convert ICE candidate to JSON: {}", e);
+                        }
+                    }
+                }
+                None => {
+                    // ICE gathering完了通知
+                    info!("ICE candidate gathering complete");
+                    if let Err(e) = signaling_tx
+                        .send(SignalingResponse::IceCandidateComplete)
+                        .await
+                    {
+                        warn!("Failed to send ICE candidate complete: {}", e);
+                    } else {
+                        debug!("ICE candidate complete sent to signaling service");
+                    }
                 }
             }
         })
@@ -621,13 +632,14 @@ pub async fn handle_add_ice_candidate(
     candidate: String,
     sdp_mid: Option<String>,
     sdp_mline_index: Option<u16>,
+    username_fragment: Option<String>,
 ) -> Result<()> {
     debug!("AddIceCandidate received");
     let ice_candidate = RTCIceCandidateInit {
         candidate,
         sdp_mid,
         sdp_mline_index,
-        username_fragment: None,
+        username_fragment,
     };
     peer_connection
         .add_ice_candidate(ice_candidate)

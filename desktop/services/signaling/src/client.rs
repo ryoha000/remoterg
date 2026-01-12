@@ -40,6 +40,8 @@ pub enum SignalingMessage {
         sdp_mid: Option<String>,
         sdp_mline_index: Option<u16>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        username_fragment: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         negotiation_id: Option<String>,
@@ -170,13 +172,21 @@ impl SignalingClient {
                         candidate,
                         sdp_mid,
                         sdp_mline_index,
+                        username_fragment,
                     } => SignalingMessage::IceCandidate {
                         candidate,
                         sdp_mid,
                         sdp_mline_index,
+                        username_fragment,
                         session_id: Some(session_id_clone.clone()),
                         negotiation_id: Some("default".to_string()),
                     },
+                    SignalingResponse::IceCandidateComplete => {
+                        // ICE gathering完了通知はクライアント側で処理する必要がある場合に送信
+                        // 現時点ではログ出力のみ（必要に応じてメッセージ送信を実装）
+                        debug!("ICE candidate gathering complete");
+                        continue; // メッセージ送信をスキップ
+                    }
                     SignalingResponse::Error { message } => SignalingMessage::Error { message },
                 };
 
@@ -217,6 +227,7 @@ impl SignalingClient {
                                 candidate,
                                 sdp_mid,
                                 sdp_mline_index,
+                                username_fragment,
                                 ..
                             }) => {
                                 debug!("ICE candidate received, forwarding to WebRTC service");
@@ -225,6 +236,7 @@ impl SignalingClient {
                                         candidate,
                                         sdp_mid,
                                         sdp_mline_index,
+                                        username_fragment,
                                     })
                                     .await
                                 {

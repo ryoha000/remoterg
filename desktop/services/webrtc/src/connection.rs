@@ -442,17 +442,6 @@ pub async fn handle_set_offer(
         .await
         .context("Failed to set local description")?;
 
-    // 念のため送信開始を明示的にトリガー（start_rtp_senders 依存の補完）
-    // すでに送信開始済みの場合は ErrRTPSenderSendAlreadyCalled になるので debug ログのみ
-    let sender_for_start = sender.clone();
-    tokio::spawn(async move {
-        let params = sender_for_start.get_parameters().await;
-        match sender_for_start.send(&params).await {
-            Ok(_) => info!("Video RTCRtpSender::send() invoked explicitly"),
-            Err(e) => debug!("Video RTCRtpSender::send() explicit call returned: {}", e),
-        }
-    });
-
     // Answerをシグナリングサービスに送信
     if let Err(e) = signaling_tx
         .send(SignalingResponse::Answer { sdp: answer.sdp })

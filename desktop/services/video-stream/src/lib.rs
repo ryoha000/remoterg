@@ -44,6 +44,16 @@ impl VideoStreamService {
     ) -> Result<()> {
         info!("VideoStreamService started");
 
+        // 送信開始には明示的にトリガーする必要がある
+        let sender_for_start = video_sender.clone();
+        tokio::spawn(async move {
+            let params = sender_for_start.get_parameters().await;
+            match sender_for_start.send(&params).await {
+                Ok(_) => info!("Video RTCRtpSender::send() invoked explicitly"),
+                Err(e) => warn!("Video RTCRtpSender::send() explicit call returned: {}", e),
+            }
+        });
+
         // エンコーダーをセットアップ
         let (encode_job_slot, mut encode_result_rx) = self.video_encoder_factory.setup();
 

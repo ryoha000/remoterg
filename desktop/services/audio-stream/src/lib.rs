@@ -36,6 +36,16 @@ impl AudioStreamService {
     ) -> Result<()> {
         info!("AudioStreamService started");
 
+        // 送信開始には明示的にトリガーする必要がある
+        let sender_for_start = audio_sender.clone();
+        tokio::spawn(async move {
+            let params = sender_for_start.get_parameters().await;
+            match sender_for_start.send(&params).await {
+                Ok(_) => info!("Audio RTCRtpSender::send() invoked explicitly"),
+                Err(e) => warn!("Audio RTCRtpSender::send() explicit call returned: {}", e),
+            }
+        });
+
         // エンコーダーをセットアップ
         let (audio_encoder_tx, mut audio_result_rx) = self.audio_encoder_factory.setup();
 

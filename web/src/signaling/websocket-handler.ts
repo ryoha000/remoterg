@@ -2,7 +2,7 @@
  * WebSocket処理の純粋関数
  */
 
-import type { Role, SessionState } from "./types";
+import type { Role, SessionState, WsAttachmentV1 } from "./types";
 import { updateConnection, removeConnection } from "./session-state";
 import { handleMessage } from "./message-handler";
 import {
@@ -51,6 +51,10 @@ export function setupWebSocketHandlers(
 
 /**
  * WebSocketアップグレード処理
+ *
+ * @param sessionId - Durable Object ID（ctx.id.toString()）を指定すること
+ *                    この値は state.sessionId と一致し、attachment に保存される
+ *                    WebSocket Hibernation 復帰時の接続復元で使用される
  */
 export function handleWebSocketUpgrade(
   _request: Request,
@@ -58,7 +62,6 @@ export function handleWebSocketUpgrade(
   sessionId: string,
   ctx: DurableObjectState,
   state: SessionState,
-  getState: () => SessionState,
   updateState: (newState: SessionState) => void
 ): Response {
   console.log("handleWebSocketUpgrade", role, sessionId);
@@ -72,6 +75,19 @@ export function handleWebSocketUpgrade(
   // 接続を受け入れる
   ctx.acceptWebSocket(server);
   console.log("acceptWebSocket", role);
+
+  // WebSocket Hibernation 対応: attachment に role と session_id を永続化
+  // session_id は必ず state.sessionId（= DO id）を使用し、復帰時の restoreConnections() で
+  // attachment.session_id === state.sessionId の一致検証が行われる
+  const attachment: WsAttachmentV1 = {
+    v: 1,
+    role,
+    session_id: sessionId,
+  };
+  server.serializeAttachment(attachment);
+  console.log(
+    `[SignalingSession] Serialized attachment for ${role}, session_id=${sessionId}`
+  );
 
   // 注意: setupWebSocketHandlers は不要
   // Cloudflare Durable Objectsでは、acceptWebSocket()後に

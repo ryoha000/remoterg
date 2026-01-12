@@ -2,7 +2,7 @@
  * セッション状態管理の純粋関数
  */
 
-import type { Role, SessionState, WebSocketWithRole } from "./types";
+import type { Role, SessionState, WsAttachmentV1 } from "./types";
 
 /**
  * 初期セッション状態を作成
@@ -42,8 +42,8 @@ export function updateConnection(
     newState.viewerRole = role;
   }
 
-  // WebSocketにrole情報を保存
-  (ws as WebSocketWithRole).__role = role;
+  // 注意: role 情報は serializeAttachment() で永続化されるため、
+  // ここでは __role プロパティを設定しない（WebSocket Hibernation 対応）
 
   return newState;
 }
@@ -70,19 +70,34 @@ export function removeConnection(
 
 /**
  * WebSocketからroleを取得
+ * WebSocket Hibernation 対応: attachment から role を取得する（参照一致に依存しない）
  */
 export function getRoleFromWebSocket(
-  state: SessionState,
+  _state: SessionState,
   ws: WebSocket
 ): Role | null {
-  if (ws === state.hostWs) {
-    return "host";
+  try {
+    const attachment = ws.deserializeAttachment() as WsAttachmentV1 | null;
+    
+    if (!attachment) {
+      return null;
+    }
+    
+    // v1 スキーマの検証
+    if (attachment.v !== 1) {
+      return null;
+    }
+    
+    // role の検証
+    if (attachment.role !== "host" && attachment.role !== "viewer") {
+      return null;
+    }
+    
+    return attachment.role;
+  } catch (error) {
+    console.error("[SignalingSession] Failed to deserialize attachment:", error);
+    return null;
   }
-  if (ws === state.viewerWs) {
-    return "viewer";
-  }
-  // フォールバック: __roleプロパティを確認
-  return (ws as WebSocketWithRole).__role || null;
 }
 
 /**

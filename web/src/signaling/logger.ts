@@ -223,16 +223,18 @@ export function logWebSocketErrorMethod(role: Role | null, error: unknown): void
 
 /**
  * roleが見つからない場合のエラーログを出力
+ * WebSocket Hibernation 対応: attachment 欠損/不正を明示
  */
 export function logRoleNotFound(
   hostWsMatch: boolean,
   viewerWsMatch: boolean
 ): void {
   console.error(
-    "[SignalingSession] webSocketMessage: role not found for WebSocket"
+    "[SignalingSession] webSocketMessage: role not found for WebSocket (attachment missing/invalid)"
   );
   console.error(
-    `[SignalingSession] hostWs: ${hostWsMatch}, viewerWs: ${viewerWsMatch}`
+    `[SignalingSession] This indicates attachment deserialization failed or attachment is invalid. ` +
+    `hostWs match: ${hostWsMatch}, viewerWs match: ${viewerWsMatch}`
   );
 }
 

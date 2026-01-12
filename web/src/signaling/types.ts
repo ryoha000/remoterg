@@ -28,6 +28,12 @@ export interface EnrichedMessage extends SignalingMessage {
   negotiation_id: string;
 }
 
-export interface WebSocketWithRole extends WebSocket {
-  __role?: Role;
-}
+/**
+ * WebSocket attachment スキーマ（v1）
+ * WebSocket Hibernation 対応のため、role と session_id を永続化
+ */
+export type WsAttachmentV1 = {
+  v: 1;
+  role: "host" | "viewer";
+  session_id: string;
+};

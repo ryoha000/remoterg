@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { SessionState } from "./types";
+import type { SessionState, WsAttachmentV1 } from "./types";
 import {
   createSessionState,
   getRoleFromWebSocket,
@@ -25,13 +25,124 @@ export class SignalingSession extends DurableObject {
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
-    this.state = createSessionState(ctx.id.toString(), 3600);
+    const sessionId = ctx.id.toString();
+    this.state = createSessionState(sessionId, 3600);
+
+    // WebSocket Hibernation 対応: 接続中の WebSocket を復元
+    this.restoreConnections(sessionId);
+  }
+
+  /**
+   * WebSocket Hibernation 復帰時に接続を復元
+   * constructor が再実行されるため、getWebSockets() で接続を列挙し、
+   * deserializeAttachment() から role を取得して state を再構築する
+   */
+  private restoreConnections(sessionId: string): void {
+    const websockets = this.ctx.getWebSockets();
+    const totalConnections = websockets.length;
+
+    console.log(
+      `[SignalingSession] Restoring connections after hibernation: total=${totalConnections}, session_id=${sessionId}`
+    );
+
+    let hostWs: WebSocket | null = null;
+    let viewerWs: WebSocket | null = null;
+    let invalidAttachmentCount = 0;
+    let duplicateHostCount = 0;
+    let duplicateViewerCount = 0;
+
+    for (const ws of websockets) {
+      try {
+        const attachment = ws.deserializeAttachment() as WsAttachmentV1 | null;
+
+        // attachment が無い、または不正な場合は close
+        if (!attachment || attachment.v !== 1) {
+          console.warn(
+            `[SignalingSession] Invalid attachment detected, closing WebSocket. attachment=${JSON.stringify(
+              attachment
+            )}`
+          );
+          ws.close(1000, "Invalid attachment");
+          invalidAttachmentCount++;
+          continue;
+        }
+
+        // session_id が一致しない場合は close（誤転送防止）
+        if (attachment.session_id !== sessionId) {
+          console.warn(
+            `[SignalingSession] Session ID mismatch, closing WebSocket. expected=${sessionId}, got=${attachment.session_id}`
+          );
+          ws.close(1000, "Session ID mismatch");
+          invalidAttachmentCount++;
+          continue;
+        }
+
+        // role が不正な場合は close
+        if (attachment.role !== "host" && attachment.role !== "viewer") {
+          console.warn(
+            `[SignalingSession] Invalid role in attachment, closing WebSocket. role=${attachment.role}`
+          );
+          ws.close(1000, "Invalid role");
+          invalidAttachmentCount++;
+          continue;
+        }
+
+        // 同一 role が複数存在した場合は最新1本のみを残し、残りは close
+        if (attachment.role === "host") {
+          if (hostWs) {
+            console.warn(
+              `[SignalingSession] Duplicate host connection detected, closing older connection`
+            );
+            hostWs.close(1000, "Duplicate role connection");
+            duplicateHostCount++;
+          }
+          hostWs = ws;
+          this.state.hostRole = "host";
+        } else {
+          if (viewerWs) {
+            console.warn(
+              `[SignalingSession] Duplicate viewer connection detected, closing older connection`
+            );
+            viewerWs.close(1000, "Duplicate role connection");
+            duplicateViewerCount++;
+          }
+          viewerWs = ws;
+          this.state.viewerRole = "viewer";
+        }
+
+        console.log(
+          `[SignalingSession] Restored ${attachment.role} connection, session_id=${attachment.session_id}`
+        );
+      } catch (error) {
+        console.error(
+          `[SignalingSession] Error during connection restoration:`,
+          error
+        );
+        ws.close(1000, "Restoration error");
+        invalidAttachmentCount++;
+      }
+    }
+
+    // state を更新
+    this.state.hostWs = hostWs;
+    this.state.viewerWs = viewerWs;
+
+    // 復元結果をログ出力
+    console.log(
+      `[SignalingSession] Connection restoration completed: ` +
+        `host=${hostWs ? "restored" : "none"}, ` +
+        `viewer=${viewerWs ? "restored" : "none"}, ` +
+        `invalid_attachment=${invalidAttachmentCount}, ` +
+        `duplicate_host=${duplicateHostCount}, ` +
+        `duplicate_viewer=${duplicateViewerCount}`
+    );
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const role = url.searchParams.get("role");
-    const sessionId = url.searchParams.get("session_id") || "fixed";
+    // 注意: query param の session_id は Durable Object へのルーティング用途に限定
+    // DO 内部では this.state.sessionId（= ctx.id.toString()）を唯一の正として使用する
 
     if (!validateRole(role)) {
       return new Response(
@@ -42,13 +153,14 @@ export class SignalingSession extends DurableObject {
 
     // WebSocket upgrade
     if (request.headers.get("Upgrade") === "websocket") {
+      // session_id は必ず state.sessionId（= DO id）を使用
+      // attachment に保存される session_id は DO id と一致する必要がある
       return handleWebSocketUpgrade(
         request,
         role,
-        sessionId,
+        this.state.sessionId,
         this.ctx,
         this.state,
-        () => this.state,
         (newState) => {
           this.state = newState;
         }
@@ -66,7 +178,10 @@ export class SignalingSession extends DurableObject {
     const role = getRoleFromWebSocket(this.state, ws);
 
     if (!role) {
+      // attachment から role を取得できなかった場合（attachment 欠損/不正）
       logRoleNotFound(ws === this.state.hostWs, ws === this.state.viewerWs);
+      // プロトコル破綻防止のため、サーバ側から close
+      ws.close(1000, "Role not found: invalid or missing attachment");
       return;
     }
 

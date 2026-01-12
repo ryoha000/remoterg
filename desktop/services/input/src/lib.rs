@@ -52,6 +52,10 @@ impl InputService {
                 debug!("Ping received: timestamp={}", timestamp);
                 // Pingメッセージは接続の生存確認用なので、特に処理は不要
             }
+            DataChannelMessage::Pong { timestamp } => {
+                debug!("Pong received: timestamp={}", timestamp);
+                // Pongメッセージは接続の生存確認用なので、特に処理は不要
+            }
         }
         Ok(())
     }

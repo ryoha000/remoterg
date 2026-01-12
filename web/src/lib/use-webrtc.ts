@@ -277,7 +277,11 @@ export function useWebRTC(options: WebRTCOptions) {
     addLog("PeerConnectionを作成...");
 
     const pc = new RTCPeerConnection({
-      iceServers: [],
+      iceServers: [
+        {
+          urls: ["stun:stun.l.google.com:19302"],
+        },
+      ],
     });
     pcRef.current = pc;
 
@@ -435,6 +439,37 @@ export function useWebRTC(options: WebRTCOptions) {
     dataChannel.onclose = () => {
       addLog("DataChannelが閉じられました", "info");
       stopKeepalive();
+    };
+    dataChannel.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.Ping) {
+          // サーバーからのPingを受信したらPongを返信
+          const pongMessage = {
+            Pong: {
+              timestamp: message.Ping.timestamp,
+            },
+          };
+          if (
+            dataChannelRef.current &&
+            dataChannelRef.current.readyState === "open"
+          ) {
+            dataChannelRef.current.send(JSON.stringify(pongMessage));
+            addLog(
+              `Keepalive ping受信、pong返信 (timestamp: ${message.Ping.timestamp})`,
+              "debug"
+            );
+          }
+        } else if (message.Pong) {
+          // サーバーからのPongを受信
+          addLog(
+            `Keepalive pong受信 (timestamp: ${message.Pong.timestamp})`,
+            "debug"
+          );
+        }
+      } catch (error) {
+        // JSONパースエラーは無視（その他のメッセージの可能性があるため）
+      }
     };
 
     // Offerを作成して送信

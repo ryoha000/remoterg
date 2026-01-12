@@ -13,6 +13,7 @@ use webrtc_rs::data_channel::data_channel_message::DataChannelMessage as RTCData
 use webrtc_rs::data_channel::RTCDataChannel;
 use webrtc_rs::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc_rs::ice_transport::ice_candidate::RTCIceCandidateInit;
+use webrtc_rs::ice_transport::ice_server::RTCIceServer;
 use webrtc_rs::interceptor::registry::Registry;
 use webrtc_rs::peer_connection::configuration::RTCConfiguration;
 use webrtc_rs::peer_connection::peer_connection_state::RTCPeerConnectionState;
@@ -22,7 +23,6 @@ use webrtc_rs::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
 use webrtc_rs::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
 use webrtc_rs::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
-use webrtc_rs::stats::StatsReportType;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_rs::track::track_local::TrackLocal;
 
@@ -178,9 +178,12 @@ pub async fn handle_set_offer(
         .with_interceptor_registry(registry)
         .build();
 
-    // ICE設定（ホストオンリー）
+    // ICE設定（GoogleのSTUNサーバーを使用）
     let config = RTCConfiguration {
-        ice_servers: vec![],
+        ice_servers: vec![RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".to_string()],
+            ..Default::default()
+        }],
         ..Default::default()
     };
 
@@ -280,47 +283,6 @@ pub async fn handle_set_offer(
         while let Ok((_, _)) = sender_for_rtcp_drain.read(&mut rtcp_buf).await {}
     });
 
-    // 送信統計 状態を定期ログ（5秒間隔）
-    let pc_for_log = pc.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-
-            // sender/get_stats 相当の情報（OutboundRTP）を PeerConnection 経由で確認
-            let stats = pc_for_log.get_stats().await;
-            let mut video_logged = false;
-            let mut audio_logged = false;
-            for report in stats.reports.values() {
-                if let StatsReportType::OutboundRTP(out) = report {
-                    if out.kind == "video" {
-                        info!(
-                            "video sender stats: ssrc={} bytes_sent={} packets_sent={} nack={} pli={:?} fir={:?}",
-                            out.ssrc,
-                            out.bytes_sent,
-                            out.packets_sent,
-                            out.nack_count,
-                            out.pli_count,
-                            out.fir_count,
-                        );
-                        video_logged = true;
-                    } else if out.kind == "audio" {
-                        info!(
-                            "audio sender stats: ssrc={} bytes_sent={} packets_sent={}",
-                            out.ssrc, out.bytes_sent, out.packets_sent,
-                        );
-                        audio_logged = true;
-                    }
-                }
-            }
-            if !video_logged {
-                info!("video sender stats: outbound RTP not found in get_stats");
-            }
-            if !audio_logged {
-                debug!("audio sender stats: outbound RTP not found in get_stats");
-            }
-        }
-    });
-
     // DataChannelハンドラを設定
     let dc_tx = data_channel_tx.clone();
     pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
@@ -331,18 +293,31 @@ pub async fn handle_set_offer(
             info!("DataChannel opened: {}", label_str);
 
             let dc_tx_on_msg = dc_tx.clone();
+            let dc_for_pong = dc.clone();
             dc.on_message(Box::new(move |msg: RTCDataChannelMessage| {
                 let dc_tx_on_msg = dc_tx_on_msg.clone();
+                let dc_for_pong = dc_for_pong.clone();
                 Box::pin(async move {
                     if msg.is_string {
                         if let Ok(text) = String::from_utf8(msg.data.to_vec()) {
                             match serde_json::from_str::<DataChannelMessage>(&text) {
                                 Ok(parsed) => {
-                                    // Pingメッセージの場合はログ出力のみ
                                     match &parsed {
                                         DataChannelMessage::Ping { timestamp } => {
                                             debug!("Received keepalive ping from client (timestamp: {})", timestamp);
-                                            // Pingメッセージは処理不要（受信だけで十分）
+                                            // Pingを受信したらPongを返信
+                                            let pong_msg = DataChannelMessage::Pong { timestamp: *timestamp };
+                                            if let Ok(pong_json) = serde_json::to_string(&pong_msg) {
+                                                if let Err(e) = dc_for_pong.send_text(pong_json).await {
+                                                    warn!("Failed to send pong: {}", e);
+                                                } else {
+                                                    debug!("Sent pong response (timestamp: {})", timestamp);
+                                                }
+                                            }
+                                        }
+                                        DataChannelMessage::Pong { timestamp } => {
+                                            debug!("Received keepalive pong from client (timestamp: {})", timestamp);
+                                            // Pongメッセージは処理不要（受信だけで十分）
                                         }
                                         _ => {
                                             // その他のメッセージは従来通りinputサービスに転送
@@ -365,10 +340,44 @@ pub async fn handle_set_offer(
                 })
             }));
 
+            // サーバー側から定期的にPingを送信するタスク
+            let dc_for_ping = dc.clone();
+            let ping_task_closed = Arc::new(AtomicBool::new(false));
+            let ping_task_closed_clone = ping_task_closed.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(3));
+                loop {
+                    interval.tick().await;
+                    // DataChannelが閉じられたかチェック
+                    if ping_task_closed_clone.load(Ordering::Relaxed) {
+                        debug!("DataChannel closed, stopping ping task");
+                        break;
+                    }
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
+                    let ping_msg = DataChannelMessage::Ping { timestamp };
+                    if let Ok(ping_json) = serde_json::to_string(&ping_msg) {
+                        match dc_for_ping.send_text(ping_json).await {
+                            Ok(_) => {
+                                debug!("Sent keepalive ping to client (timestamp: {})", timestamp);
+                            }
+                            Err(e) => {
+                                warn!("Failed to send ping: {}", e);
+                                break; // 送信失敗時はループを終了
+                            }
+                        }
+                    }
+                }
+            });
+            let ping_task_closed_for_close = ping_task_closed.clone();
             dc.on_close(Box::new(move || {
                 let label_str = label_str.clone();
+                let ping_task_closed_for_close = ping_task_closed_for_close.clone();
                 Box::pin(async move {
                     info!("DataChannel closed: {}", label_str);
+                    ping_task_closed_for_close.store(true, Ordering::Relaxed);
                 })
             }));
         })

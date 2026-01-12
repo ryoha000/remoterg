@@ -228,6 +228,7 @@ pub enum DataChannelMessage {
     MouseWheel { delta: i32 },
     ScreenshotRequest,
     Ping { timestamp: u64 },
+    Pong { timestamp: u64 },
 }
 
 /// Capture 実装の共通トレイト

@@ -26,55 +26,6 @@ use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_rs::track::track_local::TrackLocal;
 
-/// m-line情報
-#[derive(Clone)]
-pub struct MLineInfo {
-    pub mid: Option<String>,
-    pub index: usize,
-    pub media_type: String,
-}
-
-/// Answer SDPからm-line情報を解析
-///
-/// 注意: この関数はICE candidate送信では使用しない。
-/// ICE candidateのsdp_mid/sdp_mline_indexはRTCIceCandidate::to_json()から取得する。
-#[allow(dead_code)]
-pub fn parse_answer_m_lines(answer_sdp: &str) -> Vec<MLineInfo> {
-    let mut m_lines = Vec::new();
-    let lines: Vec<&str> = answer_sdp.lines().collect();
-    let mut m_line_index = 0;
-
-    for (i, line) in lines.iter().enumerate() {
-        if line.starts_with("m=") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if !parts.is_empty() {
-                let media_type = parts[0].trim_start_matches("m=").to_string();
-
-                // このm-lineのmidを探す（次のm=または終端まで）
-                let mut mid = None;
-                for next_line in lines.iter().skip(i + 1) {
-                    if next_line.starts_with("m=") {
-                        break; // 次のm-lineに到達
-                    }
-                    if next_line.starts_with("a=mid:") {
-                        mid = Some(next_line.trim_start_matches("a=mid:").to_string());
-                        break;
-                    }
-                }
-
-                m_lines.push(MLineInfo {
-                    mid,
-                    index: m_line_index,
-                    media_type,
-                });
-                m_line_index += 1;
-            }
-        }
-    }
-
-    m_lines
-}
-
 /// RTCIceCandidateから完全なSDP candidate文字列を生成
 ///
 /// 注意: この関数はICE candidate送信では使用しない。

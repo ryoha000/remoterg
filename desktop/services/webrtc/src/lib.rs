@@ -129,12 +129,10 @@ impl WebRtcService {
 
                                     // 音声トラックをAudioStreamServiceに送信
                                     if let Some(tx) = self.audio_track_tx.take() {
-                                        if let (Some(track), Some(sender)) = (result.audio_track, result.audio_sender) {
-                                            if tx.send((track, sender)).is_ok() {
-                                                info!("Audio track sent to AudioStreamService");
-                                            } else {
-                                                warn!("Failed to send audio track: receiver dropped");
-                                            }
+                                        if tx.send((result.audio_track, result.audio_sender)).is_ok() {
+                                            info!("Audio track sent to AudioStreamService");
+                                        } else {
+                                            warn!("Failed to send audio track: receiver dropped");
                                         }
                                     }
                                 }

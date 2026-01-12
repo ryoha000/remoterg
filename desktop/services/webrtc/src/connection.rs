@@ -82,8 +82,8 @@ pub struct SetOfferResult {
     pub peer_connection: Arc<RTCPeerConnection>,
     pub video_track: Arc<TrackLocalStaticSample>,
     pub video_sender: Arc<RTCRtpSender>,
-    pub audio_track: Option<Arc<TrackLocalStaticSample>>,
-    pub audio_sender: Option<Arc<RTCRtpSender>>,
+    pub audio_track: Arc<TrackLocalStaticSample>,
+    pub audio_sender: Arc<RTCRtpSender>,
 }
 
 /// SetOfferメッセージを処理
@@ -172,13 +172,9 @@ pub async fn handle_set_offer(
 
     info!("Video track added to peer connection");
 
-    // 音声トラックを追加（オプション）
-    let mut audio_track: Option<Arc<TrackLocalStaticSample>> = None;
-    let mut audio_sender: Option<Arc<RTCRtpSender>> = None;
-
-    // 音声トラックを常に作成（AudioStreamServiceで使用）
+    // 音声トラックを追加
     info!("Adding audio track with Opus codec");
-    let audio_track_local = Arc::new(TrackLocalStaticSample::new(
+    let audio_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_OPUS.to_string(),
             ..Default::default()
@@ -187,16 +183,12 @@ pub async fn handle_set_offer(
         "stream".to_string(),
     ));
 
-    let audio_sender_local: Arc<RTCRtpSender> = pc
-        .add_track(audio_track_local.clone() as Arc<dyn TrackLocal + Send + Sync>)
+    let audio_sender: Arc<RTCRtpSender> = pc
+        .add_track(audio_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
         .await
         .context("Failed to add audio track")?;
 
     info!("Audio track added to peer connection");
-
-    // 音声トラックとsenderを保持（AudioStreamServiceに渡すため）
-    audio_track = Some(audio_track_local);
-    audio_sender = Some(audio_sender_local);
 
     // RTCP 受信ループを開始し、PLI/FIR を受けたら VideoStreamService にキーフレーム要求を送信
     let video_stream_msg_tx_rtcp = video_stream_msg_tx.clone();

@@ -2,7 +2,7 @@
 #[cfg(windows)]
 mod tests {
     use anyhow::{Context, Result};
-    use capture::CaptureService;
+    use video_capture::CaptureService;
     use core_types::{CaptureBackend, CaptureMessage};
     use std::path::PathBuf;
     use std::time::Duration;

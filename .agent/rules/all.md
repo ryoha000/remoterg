@@ -20,7 +20,7 @@ RemoteRG is a remote play application for visual novels that streams a Windows g
 cargo build --release                    # Build
 cargo run --bin hostd                    # Run with defaults
 cargo run --bin hostd -- --port 8080 --log-level debug  # Run with options
-cargo run --bin hostd --features mock    # Run with dummy frames (testing)
+cargo run --bin hostd -- mock    # Run with dummy frames (testing)
 cargo check                              # Verify compilation
 cargo test                               # Run tests
 cargo bench --package encoder            # Benchmark encoder
@@ -113,4 +113,3 @@ Browser ──WebSocket──> Cloudflare Worker/DO ──WebSocket──> hostd
 ## Documentation
 
 - `SPEC.md` - Product specification (Japanese)
-- `NOTE.md` - Implementation notes (Japanese)

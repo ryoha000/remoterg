@@ -4,7 +4,6 @@ trigger: always_on
 
 返答は日本語で行うこと
 plan や walkthrough は日本語で書くこと
-task e2e は実行に時間がかかるため、実行する際は適当にそのログをファイルに書き出しコードの変更がない場合にログを確認したいときはそのログファイルを参照してください
 
 ## Project Overview
 

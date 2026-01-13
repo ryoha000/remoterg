@@ -95,8 +95,8 @@ pub async fn run_frame_router(
         // ICE/DTLS 接続完了まで映像送出を保留
         if !connection_ready.load(Ordering::Relaxed) {
             stats.frames_dropped_not_ready += 1;
-            if stats.frames_dropped_not_ready == 1 || stats.frames_dropped_not_ready % 10 == 0 {
-                info!(
+            if stats.frames_dropped_not_ready == 1 || stats.frames_dropped_not_ready % 100 == 0 {
+                warn!(
                     "Connection not ready yet, dropped {} frames (connection_ready: false)",
                     stats.frames_dropped_not_ready
                 );

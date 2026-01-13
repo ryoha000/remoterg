@@ -201,6 +201,12 @@ pub enum WebRtcMessage {
         sdp_mline_index: Option<u16>,
         username_fragment: Option<String>,
     },
+    /// ICE Restartをトリガー
+    TriggerIceRestart,
+    /// ICE RestartのAnswerを受信
+    SetAnswerForRestart {
+        sdp: String,
+    },
 }
 
 /// シグナリングサービスへの応答メッセージ
@@ -219,6 +225,10 @@ pub enum SignalingResponse {
         username_fragment: Option<String>,
     },
     IceCandidateComplete,
+    /// ICE Restartのための新しいOffer
+    OfferForRestart {
+        sdp: String,
+    },
 }
 
 /// DataChannel経由でやり取りするメッセージ

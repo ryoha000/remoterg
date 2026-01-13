@@ -66,7 +66,44 @@ impl WebRtcService {
         )
     }
 
-    pub async fn run(mut self) -> Result<()> {
+    /// ICE Restartを実行
+    async fn execute_ice_restart(
+        &self,
+        peer_connection: &Arc<RTCPeerConnection>,
+    ) -> Result<()> {
+        use anyhow::Context;
+
+        info!("Executing ICE Restart...");
+
+        // 1. restart_ice()を呼び出し（新しいICE credentialsを生成）
+        peer_connection.restart_ice().await
+            .context("Failed to restart ICE")?;
+
+        // 2. 新しいOfferを生成
+        let offer = peer_connection
+            .create_offer(None)
+            .await
+            .context("Failed to create offer for ICE restart")?;
+
+        info!("ICE Restart offer generated:\n{}", offer.sdp);
+
+        // 3. LocalDescriptionとして設定
+        peer_connection
+            .set_local_description(offer.clone())
+            .await
+            .context("Failed to set local description for ICE restart")?;
+
+        // 4. シグナリングサービスに送信
+        self.signaling_tx
+            .send(SignalingResponse::OfferForRestart { sdp: offer.sdp })
+            .await
+            .context("Failed to send offer for ICE restart")?;
+
+        info!("ICE Restart offer sent to signaling service");
+        Ok(())
+    }
+
+    pub async fn run(mut self, webrtc_msg_tx: mpsc::Sender<WebRtcMessage>) -> Result<()> {
         info!("WebRtcService started");
 
         // ICE/DTLS が接続完了したかを共有するフラグ（接続前は送出しない）
@@ -114,6 +151,7 @@ impl WebRtcService {
                                 self.data_channel_tx.clone(),
                                 connection_ready.clone(),
                                 video_stream_msg_tx,
+                                webrtc_msg_tx.clone(),
                             ).await {
                                 Ok(result) => {
                                     peer_connection = Some(result.peer_connection.clone());
@@ -160,6 +198,45 @@ impl WebRtcService {
                                 }
                             } else {
                                 warn!("Received ICE candidate but no peer connection exists");
+                            }
+                        }
+                        Some(WebRtcMessage::TriggerIceRestart) => {
+                            if let Some(ref pc) = peer_connection {
+                                info!("Received TriggerIceRestart message");
+                                if let Err(e) = self.execute_ice_restart(pc).await {
+                                    warn!("Failed to execute ICE restart: {}", e);
+                                    let _ = self
+                                        .signaling_tx
+                                        .send(SignalingResponse::Error {
+                                            message: format!("ICE Restart failed: {}", e),
+                                        })
+                                        .await;
+                                }
+                            } else {
+                                warn!("Cannot restart ICE: no peer connection exists");
+                            }
+                        }
+                        Some(WebRtcMessage::SetAnswerForRestart { sdp }) => {
+                            if let Some(ref pc) = peer_connection {
+                                info!("Received Answer for ICE restart");
+                                match webrtc_rs::peer_connection::sdp::session_description::RTCSessionDescription::answer(sdp) {
+                                    Ok(answer) => {
+                                        match pc.set_remote_description(answer).await {
+                                            Ok(_) => {
+                                                info!("ICE Restart completed successfully");
+                                                // connection_readyフラグは、ICE状態変更ハンドラで自動的にtrueに設定される
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to set remote description for ICE restart: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to parse answer SDP for ICE restart: {}", e);
+                                    }
+                                }
+                            } else {
+                                warn!("Cannot set answer for ICE restart: no peer connection exists");
                             }
                         }
                         None => {

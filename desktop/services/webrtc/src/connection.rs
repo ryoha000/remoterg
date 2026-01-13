@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use core_types::{DataChannelMessage, SignalingResponse, VideoCodec, VideoStreamMessage};
+use core_types::{DataChannelMessage, SignalingResponse, VideoCodec, VideoStreamMessage, WebRtcMessage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,6 +94,7 @@ pub async fn handle_set_offer(
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     connection_ready: Arc<AtomicBool>,
     video_stream_msg_tx: mpsc::Sender<VideoStreamMessage>,
+    webrtc_msg_tx: mpsc::Sender<WebRtcMessage>,
 ) -> Result<SetOfferResult> {
     info!("SetOffer received, generating answer");
 
@@ -112,15 +113,20 @@ pub async fn handle_set_offer(
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_include_loopback_candidate(true);
 
-    // ICE timeout設定: デフォルト5秒では短すぎるため延長
-    // - disconnected_timeout: 5秒 → 20秒（ネットワーク活動なしでDisconnected判定される時間）
-    // - failed_timeout: 25秒 → 40秒（Disconnected後にFailed判定される時間）
+    // ICE timeout設定: webrtc-rsの既知の問題に対応するため大幅に延長
+    // - disconnected_timeout: 5秒 → 90秒（ネットワーク活動なしでDisconnected判定される時間）
+    // - failed_timeout: 25秒 → 180秒（Disconnected後にFailed判定される時間）
     // - keepalive_interval: 2秒（メディアがない場合に定期的なkeepaliveトラフィック送信）
-    // Keepalive実装により3秒ごとにトラフィックが発生するため、安全マージンを確保
+    //
+    // 背景: webrtc-rs (Pion WebRTC) では、メディアストリーム使用時にRTPパケット送信で
+    // lastSentが更新されるため、ICE keepaliveが送信されない既知の問題がある。
+    // (https://github.com/pion/webrtc/issues/2061, https://github.com/pion/webrtc/issues/331)
+    // タイムアウト値を大幅に延長することで、disconnected遷移を防ぐ。
+    // 実際のネットワーク障害は、RTCP・Data Channel Ping/Pongで検出可能。
     setting_engine.set_ice_timeouts(
-        Some(Duration::from_secs(20)), // disconnected_timeout: 15秒 → 20秒
-        Some(Duration::from_secs(40)), // failed_timeout: 30秒 → 40秒
-        Some(Duration::from_secs(2)),  // keepalive_interval: 変更なし
+        Some(Duration::from_secs(90)),  // disconnected_timeout: 20秒 → 90秒
+        Some(Duration::from_secs(180)), // failed_timeout: 40秒 → 180秒
+        Some(Duration::from_secs(2)),   // keepalive_interval: 変更なし
     );
 
     let api = APIBuilder::new()
@@ -460,11 +466,13 @@ pub async fn handle_set_offer(
     let pc_for_ice = pc.clone();
     let connection_ready_ice = connection_ready.clone();
     let video_stream_msg_tx_ice = video_stream_msg_tx.clone();
+    let webrtc_msg_tx_ice = webrtc_msg_tx.clone();
     // 猶予期間中のフラグ（猶予期間中にConnectedに戻った場合、タイマーを無効化するため）
     let grace_period_active = Arc::new(AtomicBool::new(false));
     pc_for_ice.on_ice_connection_state_change(Box::new(move |state| {
         let connection_ready_ice = connection_ready_ice.clone();
         let video_stream_msg_tx_ice = video_stream_msg_tx_ice.clone();
+        let webrtc_msg_tx_ice = webrtc_msg_tx_ice.clone();
         let grace_period_active = grace_period_active.clone();
         Box::pin(async move {
             match state {
@@ -512,20 +520,28 @@ pub async fn handle_set_offer(
                     warn!("ICE connection state: Disconnected - ICE connection lost");
                     let was_ready = connection_ready_ice.load(Ordering::Relaxed);
                     if was_ready {
-                        // 猶予期間を設定（5秒）
+                        // 猶予期間を設定（15秒）
                         grace_period_active.store(true, Ordering::Relaxed);
                         let connection_ready_grace = connection_ready_ice.clone();
                         let grace_period_active_grace = grace_period_active.clone();
+                        let webrtc_msg_tx_grace = webrtc_msg_tx_ice.clone();
                         tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            tokio::time::sleep(Duration::from_secs(15)).await;
                             // 猶予期間が終了した時、まだ猶予期間中（Connectedに戻っていない）なら
-                            // connection_readyをfalseにする
+                            // connection_readyをfalseにしてICE Restartをトリガー
                             if grace_period_active_grace.load(Ordering::Relaxed) {
                                 connection_ready_grace.store(false, Ordering::Relaxed);
-                                warn!("connection_ready flag set to false (ICE Disconnected - grace period expired)");
+                                warn!("ICE disconnected for 15s, triggering ICE Restart");
+
+                                // WebRtcServiceにICE Restart要求を送信
+                                if let Err(e) = webrtc_msg_tx_grace.send(WebRtcMessage::TriggerIceRestart).await {
+                                    warn!("Failed to send TriggerIceRestart message: {}", e);
+                                } else {
+                                    info!("TriggerIceRestart message sent to WebRtcService");
+                                }
                             }
                         });
-                        warn!("ICE connection disconnected, starting 5-second grace period");
+                        warn!("ICE connection disconnected, starting 15-second grace period");
                     } else {
                         // 既にready=falseの場合は即座にfalseのまま
                         connection_ready_ice.store(false, Ordering::Relaxed);

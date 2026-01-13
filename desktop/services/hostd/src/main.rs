@@ -187,6 +187,9 @@ async fn main() -> Result<()> {
         Some(audio_track_tx),
     );
 
+    // WebRtcService::run() に渡すために webrtc_msg_tx をクローン
+    let webrtc_msg_tx_for_run = webrtc_msg_tx.clone();
+
     let audio_stream_service = AudioStreamService::new(audio_frame_rx, audio_encoder_factory);
     let input_service = InputService::new(data_channel_rx);
     let signaling_client = SignalingClient::new(
@@ -253,7 +256,7 @@ async fn main() -> Result<()> {
     });
 
     // WebRTC は非 Send 型を含むため spawn せず現在のタスクで実行する
-    let webrtc_fut = webrtc_service.run();
+    let webrtc_fut = webrtc_service.run(webrtc_msg_tx_for_run);
     pin!(webrtc_fut);
 
     tokio::select! {

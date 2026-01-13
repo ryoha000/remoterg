@@ -169,6 +169,38 @@ export function useWebRTC(options: WebRTCOptions) {
             } catch (error) {
               addLog(`ICE candidate追加エラー: ${error}`, "error");
             }
+          } else if (message.type === "offerForRestart") {
+            try {
+              addLog("ICE Restart Offer受信", "info");
+              if (pcRef.current) {
+                // 1. RemoteDescriptionとして設定
+                await pcRef.current.setRemoteDescription({
+                  type: "offer",
+                  sdp: message.sdp,
+                });
+                addLog("ICE Restart Offer設定完了", "success");
+
+                // 2. 新しいAnswerを生成
+                const answer = await pcRef.current.createAnswer();
+                await pcRef.current.setLocalDescription(answer);
+                addLog("ICE Restart Answer生成完了", "success");
+
+                // 3. Answerをホストに送信
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(
+                    JSON.stringify({
+                      type: "answerForRestart",
+                      sdp: answer.sdp,
+                      session_id: sessionId,
+                      negotiation_id: "default",
+                    })
+                  );
+                  addLog("ICE Restart Answer送信完了", "success");
+                }
+              }
+            } catch (error) {
+              addLog(`ICE Restart処理エラー: ${error}`, "error");
+            }
           }
         } catch (error) {
           addLog(`メッセージ処理エラー: ${error}`, "error");

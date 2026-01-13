@@ -46,6 +46,22 @@ pub enum SignalingMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         negotiation_id: Option<String>,
     },
+    #[serde(rename = "offerForRestart")]
+    OfferForRestart {
+        sdp: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        negotiation_id: Option<String>,
+    },
+    #[serde(rename = "answerForRestart")]
+    AnswerForRestart {
+        sdp: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        negotiation_id: Option<String>,
+    },
 }
 
 /// シグナリングクライアント（WebSocketクライアント）
@@ -188,6 +204,14 @@ impl SignalingClient {
                         continue; // メッセージ送信をスキップ
                     }
                     SignalingResponse::Error { message } => SignalingMessage::Error { message },
+                    SignalingResponse::OfferForRestart { sdp } => {
+                        info!("Sending ICE Restart offer to client");
+                        SignalingMessage::OfferForRestart {
+                            sdp,
+                            session_id: Some(session_id_clone.clone()),
+                            negotiation_id: Some("default".to_string()),
+                        }
+                    }
                 };
 
                 if let Ok(json) = serde_json::to_string(&message) {
@@ -248,6 +272,18 @@ impl SignalingClient {
                             }
                             Ok(SignalingMessage::Answer { .. }) => {
                                 warn!("Received Answer message as host (unexpected)");
+                            }
+                            Ok(SignalingMessage::AnswerForRestart { sdp, .. }) => {
+                                info!("Answer for ICE Restart received, forwarding to WebRTC service");
+                                if let Err(e) = webrtc_tx_recv
+                                    .send(WebRtcMessage::SetAnswerForRestart { sdp })
+                                    .await
+                                {
+                                    error!("Failed to send answer for restart to WebRTC service: {}", e);
+                                }
+                            }
+                            Ok(SignalingMessage::OfferForRestart { .. }) => {
+                                warn!("Received OfferForRestart message as host (unexpected)");
                             }
                             Err(e) => {
                                 error!("Failed to parse message: {}", e);

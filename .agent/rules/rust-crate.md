@@ -1,0 +1,11 @@
+---
+trigger: glob
+globs: desktop/services/**
+---
+
+基本方針: サービス間の直接依存を禁止し、hostdのみが各サービスを組み立てる。共有型はcore-typesクレートに集約。
+依存方向: core-typesは何にも依存しない。各サービス（capture, webrtc, input, signaling, encoder）はcore-typesにのみ下向き依存を持ち、サービス同士では依存しない。hostdのみが各サービスを依存先として持つ。
+共有エンティティ: フレーム（Frame）、シグナリング入出力（WebRtcMessage/SignalingResponse）、DataChannelメッセージ（DataChannelMessage）など、サービス間で共有するプロトコル/DTOはdesktop/services/core/src/lib.rsに定義する。
+組み立て場所: チャンネル生成やサービス初期化（Capture/WebRTC/Input/Signaling/Encoder工場注入）はすべてhostdで行う。サービス内部から他サービスを直接生成・参照しない。
+エンコーダ: 映像エンコードは独立クレートencoderに置き、webrtcはencoder経由で実装を差し替える。hostdが利用するエンコーダファクトリを選択・注入する（feature: h264/vp9）。
+新規型追加: サービス間で共有する型を新設/変更する場合は、まずcore-typesに追加し、サービス側はcore-types経由で参照する。

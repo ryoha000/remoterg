@@ -1,5 +1,5 @@
 [package]
-name = "capture"
+name = "video-capture"
 version.workspace = true
 edition.workspace = true
 
@@ -19,5 +19,5 @@ criterion = { version = "0.5", features = ["html_reports"] }
 image = "0.25"
 
 [[bench]]
-name = "capture_bench"
+name = "video_capture_bench"
 harness = false

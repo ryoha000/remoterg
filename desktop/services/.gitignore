@@ -1,4 +1,4 @@
 /target/**
-capture/tests/artifacts/**
+video-capture/tests/artifacts/**
 tests/artifacts/**
 *.local

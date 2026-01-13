@@ -1,5 +1,5 @@
 [package]
-name = "capturemock"
+name = "video-capture-mock"
 version.workspace = true
 edition.workspace = true
 

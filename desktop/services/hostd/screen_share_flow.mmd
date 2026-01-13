@@ -1,5 +1,5 @@
 flowchart TB
-    subgraph CaptureLoop[CaptureService ループ]
+    subgraph VideoCaptureLoop[VideoCaptureService ループ]
         direction TB
         CL1[windows-capture<br/>コールバック待機] --> CL2[on_frame_arrived<br/>フレーム到着]
         CL2 --> CL3[FrameBuffer取得<br/>RGBAデータ読み取り]

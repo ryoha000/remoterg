@@ -2,7 +2,6 @@
 #[cfg(windows)]
 mod tests {
     use anyhow::{Context, Result};
-    use capture::CaptureService;
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
     use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
     use std::path::PathBuf;
@@ -10,6 +9,7 @@ mod tests {
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc as tokio_mpsc;
     use tokio::time::timeout;
+    use video_capture::CaptureService;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
 

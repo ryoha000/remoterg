@@ -3,8 +3,8 @@
 members = [
   "core",
   "encoder",
-  "capture",
-  "capturemock",
+  "video-capture",
+  "video-capture-mock",
   "signaling",
   "webrtc",
   "input",

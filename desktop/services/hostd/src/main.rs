@@ -11,8 +11,6 @@ use audio_capture;
 use audio_capture_mock;
 use audio_encoder::OpusEncoderFactory;
 use audio_stream::AudioStreamService;
-use capture;
-use capturemock;
 use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
     SignalingResponse, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
@@ -21,6 +19,8 @@ use core_types::{
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
 use input::InputService;
 use signaling::SignalingClient;
+use video_capture;
+use video_capture_mock;
 use video_stream::VideoStreamService;
 use webrtc::WebRtcService;
 
@@ -50,8 +50,8 @@ struct Args {
 }
 
 enum CaptureServiceEnum {
-    Real(capture::CaptureService),
-    Mock(capturemock::CaptureService),
+    Real(video_capture::CaptureService),
+    Mock(video_capture_mock::CaptureService),
 }
 
 impl CaptureServiceEnum {
@@ -156,9 +156,12 @@ async fn main() -> Result<()> {
 
     // サービス作成
     let capture_service = if args.mock {
-        CaptureServiceEnum::Mock(capturemock::CaptureService::new(frame_tx, capture_cmd_rx))
+        CaptureServiceEnum::Mock(video_capture_mock::CaptureService::new(
+            frame_tx,
+            capture_cmd_rx,
+        ))
     } else {
-        CaptureServiceEnum::Real(capture::CaptureService::new(frame_tx, capture_cmd_rx))
+        CaptureServiceEnum::Real(video_capture::CaptureService::new(frame_tx, capture_cmd_rx))
     };
     let audio_capture_service = if args.mock {
         AudioCaptureServiceEnum::Mock(audio_capture_mock::AudioCaptureService::new(
@@ -172,11 +175,8 @@ async fn main() -> Result<()> {
         ))
     };
     // VideoStreamService を作成
-    let video_stream_service = VideoStreamService::new(
-        frame_rx,
-        default_video_encoder,
-        video_stream_msg_rx,
-    );
+    let video_stream_service =
+        VideoStreamService::new(frame_rx, default_video_encoder, video_stream_msg_rx);
 
     // WebRtcService を作成（エンコーダーファクトリと frame_rx を削除）
     let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
@@ -232,7 +232,9 @@ async fn main() -> Result<()> {
         match video_track_rx.await {
             Ok((track, sender, connection_ready)) => {
                 info!("Received video track, starting VideoStreamService");
-                video_stream_service.run(track, sender, connection_ready).await
+                video_stream_service
+                    .run(track, sender, connection_ready)
+                    .await
             }
             Err(_) => {
                 info!("Video track channel closed without sending");

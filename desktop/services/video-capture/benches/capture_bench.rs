@@ -1,7 +1,7 @@
-use capture::resize_image_impl;
 use core_types::Frame;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::sync::mpsc;
+use video_capture::resize_image_impl;
 
 /// ダミーのRGBAデータを生成する
 fn generate_rgba_data(width: u32, height: u32) -> Vec<u8> {

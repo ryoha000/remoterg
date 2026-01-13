@@ -27,6 +27,7 @@ const MAX_WAIT_TIME = 120000; // 2分
 
 let webProcess: ChildProcess | null = null;
 let hostdProcess: ChildProcess | null = null;
+let hostdConnected = false;
 
 async function waitForServer(url: string, timeout: number): Promise<void> {
   const startTime = Date.now();
@@ -39,13 +40,28 @@ async function waitForServer(url: string, timeout: number): Promise<void> {
         console.log(`[e2e] ✓ Server ready at ${url}`);
         return;
       }
-    } catch (error) {
+    } catch (_) {
       // サーバーがまだ起動していない
     }
     await new Promise((resolve) => setTimeout(resolve, checkInterval));
   }
 
   throw new Error(`Server at ${url} did not become ready within ${timeout}ms`);
+}
+
+async function waitForHostd() {
+  console.log("[e2e] Waiting for hostd to be ready (WebSocket connected)...");
+  const startTime = Date.now();
+  const timeout = 60000;
+
+  while (Date.now() - startTime < timeout) {
+    if (hostdConnected) {
+      console.log("[e2e] ✓ hostd is ready");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error("Timeout waiting for hostd WebSocket connection");
 }
 
 async function startWebServer(): Promise<ChildProcess> {
@@ -87,11 +103,17 @@ async function startHostd(): Promise<ChildProcess> {
   hostdProcess.stdout?.on("data", (data) => {
     const output = data.toString();
     console.log(`[hostd] ${output.trim()}`);
+    if (output.includes("WebSocket connected")) {
+      hostdConnected = true;
+    }
   });
 
   hostdProcess.stderr?.on("data", (data) => {
     const output = data.toString();
     console.error(`[hostd] ${output.trim()}`);
+    if (output.includes("WebSocket connected")) {
+      hostdConnected = true;
+    }
   });
 
   return hostdProcess;
@@ -129,10 +151,7 @@ async function runPlaywrightTests(): Promise<void> {
 async function cleanup() {
   console.log("[e2e] Shutting down servers...");
 
-  const killProcess = (
-    proc: ChildProcess,
-    signal: NodeJS.Signals = "SIGTERM"
-  ): Promise<void> => {
+  const killProcess = (proc: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): Promise<void> => {
     return new Promise((resolve) => {
       if (!proc || proc.killed) {
         resolve();
@@ -194,8 +213,8 @@ async function main() {
     console.log("[e2e] Waiting for servers to be ready...");
     await waitForServer(WEB_URL, MAX_WAIT_TIME);
 
-    // 少し待機してhostdが接続する時間を与える
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // hostdの待機
+    await waitForHostd();
 
     // Playwrightテストを実行
     await runPlaywrightTests();

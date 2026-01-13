@@ -26,7 +26,7 @@ export function setupWebSocketHandlers(
   server: WebSocket,
   role: Role,
   getState: () => SessionState,
-  updateState: (newState: SessionState) => void
+  updateState: (newState: SessionState) => void,
 ): void {
   logWebSocketConnection(role);
 
@@ -40,7 +40,7 @@ export function setupWebSocketHandlers(
   server.addEventListener("close", () => {
     logWebSocketClose(role);
     const currentState = getState();
-    const newState = removeConnection(currentState, role);
+    const newState = removeConnection(currentState, role, server);
     updateState(newState);
   });
 
@@ -62,7 +62,7 @@ export function handleWebSocketUpgrade(
   sessionId: string,
   ctx: DurableObjectState,
   state: SessionState,
-  updateState: (newState: SessionState) => void
+  updateState: (newState: SessionState) => void,
 ): Response {
   console.log("handleWebSocketUpgrade", role, sessionId);
   const pair = new WebSocketPair();
@@ -85,9 +85,7 @@ export function handleWebSocketUpgrade(
     session_id: sessionId,
   };
   server.serializeAttachment(attachment);
-  console.log(
-    `[SignalingSession] Serialized attachment for ${role}, session_id=${sessionId}`
-  );
+  console.log(`[SignalingSession] Serialized attachment for ${role}, session_id=${sessionId}`);
 
   // 注意: setupWebSocketHandlers は不要
   // Cloudflare Durable Objectsでは、acceptWebSocket()後に

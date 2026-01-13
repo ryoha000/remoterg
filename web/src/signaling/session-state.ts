@@ -21,11 +21,7 @@ export function createSessionState(sessionId: string, ttl: number = 3600): Sessi
 /**
  * WebSocket接続を更新
  */
-export function updateConnection(
-  state: SessionState,
-  role: Role,
-  ws: WebSocket
-): SessionState {
+export function updateConnection(state: SessionState, role: Role, ws: WebSocket): SessionState {
   const newState = { ...state };
 
   if (role === "host") {
@@ -51,18 +47,21 @@ export function updateConnection(
 /**
  * WebSocket接続を削除
  */
-export function removeConnection(
-  state: SessionState,
-  role: Role
-): SessionState {
+export function removeConnection(state: SessionState, role: Role, ws: WebSocket): SessionState {
   const newState = { ...state };
 
   if (role === "host") {
-    newState.hostWs = null;
-    newState.hostRole = null;
+    // 削除しようとしているWebSocketが現在の接続と一致する場合のみ削除
+    if (newState.hostWs === ws) {
+      newState.hostWs = null;
+      newState.hostRole = null;
+    }
   } else {
-    newState.viewerWs = null;
-    newState.viewerRole = null;
+    // 削除しようとしているWebSocketが現在の接続と一致する場合のみ削除
+    if (newState.viewerWs === ws) {
+      newState.viewerWs = null;
+      newState.viewerRole = null;
+    }
   }
 
   return newState;
@@ -72,27 +71,24 @@ export function removeConnection(
  * WebSocketからroleを取得
  * WebSocket Hibernation 対応: attachment から role を取得する（参照一致に依存しない）
  */
-export function getRoleFromWebSocket(
-  _state: SessionState,
-  ws: WebSocket
-): Role | null {
+export function getRoleFromWebSocket(_state: SessionState, ws: WebSocket): Role | null {
   try {
     const attachment = ws.deserializeAttachment() as WsAttachmentV1 | null;
-    
+
     if (!attachment) {
       return null;
     }
-    
+
     // v1 スキーマの検証
     if (attachment.v !== 1) {
       return null;
     }
-    
+
     // role の検証
     if (attachment.role !== "host" && attachment.role !== "viewer") {
       return null;
     }
-    
+
     return attachment.role;
   } catch (error) {
     console.error("[SignalingSession] Failed to deserialize attachment:", error);
@@ -103,10 +99,7 @@ export function getRoleFromWebSocket(
 /**
  * 転送先のWebSocketを取得
  */
-export function getTargetWebSocket(
-  state: SessionState,
-  fromRole: Role
-): WebSocket | null {
+export function getTargetWebSocket(state: SessionState, fromRole: Role): WebSocket | null {
   return fromRole === "host" ? state.viewerWs : state.hostWs;
 }
 
@@ -116,4 +109,3 @@ export function getTargetWebSocket(
 export function getTargetRole(fromRole: Role): Role {
   return fromRole === "host" ? "viewer" : "host";
 }
-

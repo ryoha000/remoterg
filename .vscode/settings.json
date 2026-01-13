@@ -8,5 +8,7 @@
   "files.readonlyInclude": {
     "**/routeTree.gen.ts": true
   },
-  "rust-analyzer.linkedProjects": ["desktop/services/Cargo.toml"]
+  "rust-analyzer.linkedProjects": ["desktop/services/Cargo.toml"],
+  "oxc.fmt.experimental": true,
+  "editor.defaultFormatter": "oxc.oxc-vscode"
 }

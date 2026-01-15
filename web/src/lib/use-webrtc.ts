@@ -53,6 +53,7 @@ export function useWebRTC(options: WebRTCOptions) {
   // Queue to send signals to the running Effect
   const sendKeyQueue = useRef<Queue.Queue<{ key: string; down: boolean }> | null>(null);
   const screenshotRequestQueue = useRef<Queue.Queue<void> | null>(null);
+  const debugActionQueue = useRef<Queue.Queue<"close_ws" | "close_pc"> | null>(null);
 
   // To trigger manual disconnect/reconnect (using a counter to restart the effect)
   const [connectTrigger, setConnectTrigger] = useState(0);
@@ -86,6 +87,24 @@ export function useWebRTC(options: WebRTCOptions) {
       addLog("スクリーンショットリクエスト送信");
     } else {
       addLog("DataChannelが開いていません", "error");
+    }
+  }, [addLog]);
+
+  const simulateWsClose = useCallback(() => {
+    if (debugActionQueue.current) {
+      Effect.runSync(
+        Queue.offer(debugActionQueue.current, "close_ws").pipe(Effect.catchAll(() => Effect.void)),
+      );
+      addLog("デバッグ: WebSocket切断をシミュレート");
+    }
+  }, [addLog]);
+
+  const simulatePcClose = useCallback(() => {
+    if (debugActionQueue.current) {
+      Effect.runSync(
+        Queue.offer(debugActionQueue.current, "close_pc").pipe(Effect.catchAll(() => Effect.void)),
+      );
+      addLog("デバッグ: PeerConnection切断をシミュレート");
     }
   }, [addLog]);
 
@@ -168,10 +187,12 @@ export function useWebRTC(options: WebRTCOptions) {
 
       const keyQ = yield* Queue.unbounded<{ key: string; down: boolean }>();
       const screenQ = yield* Queue.unbounded<void>();
+      const debugQ = yield* Queue.unbounded<"close_ws" | "close_pc">();
 
       yield* Effect.sync(() => {
         sendKeyQueue.current = keyQ;
         screenshotRequestQueue.current = screenQ;
+        debugActionQueue.current = debugQ;
       });
 
       // Acquire WebSocket
@@ -470,8 +491,24 @@ export function useWebRTC(options: WebRTCOptions) {
         Schedule.spaced(Duration.seconds(2)),
       );
 
+      // Debug Action Loop
+      const debugLoop = Queue.take(debugQ).pipe(
+        Effect.tap((action) =>
+          Effect.sync(() => {
+            if (action === "close_ws") {
+              addLog("DEBUG: Closing WebSocket...");
+              ws.close();
+            } else if (action === "close_pc") {
+              addLog("DEBUG: Closing PeerConnection...");
+              pc.close();
+            }
+          }),
+        ),
+        Effect.forever,
+      );
+
       yield* Effect.all(
-        [handleWsParams, handleOutgoingIceCandidates, handleDataChannel, statsLoop],
+        [handleWsParams, handleOutgoingIceCandidates, handleDataChannel, statsLoop, debugLoop],
         { concurrency: "unbounded", discard: true },
       );
     }).pipe(
@@ -501,5 +538,7 @@ export function useWebRTC(options: WebRTCOptions) {
     disconnect: manualDisconnect,
     sendKey,
     requestScreenshot,
+    simulateWsClose,
+    simulatePcClose,
   };
 }

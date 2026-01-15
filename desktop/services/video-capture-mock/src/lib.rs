@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 // グラデーションアニメーション設定
-const PREGENERATED_FRAMES: usize = 450; // 45fps × 10秒
+const PREGENERATED_FRAMES: usize = 90; // 45fps × 2秒 (起動高速化のため削減)
 
 /// HSVからRGBに変換
 /// h: 色相 (0.0-360.0)
@@ -46,12 +46,11 @@ pub struct CaptureService {
 
 impl CaptureBackend for CaptureService {
     fn new(frame_tx: CaptureFrameSender, command_rx: CaptureCommandReceiver) -> Self {
-        let config = CaptureConfig::default();
-        let precomputed_frames = Self::generate_frame_set(&config, PREGENERATED_FRAMES);
+        // 起動時のブロッキングを防ぐため、ここではフレーム生成を行わない
         Self {
             frame_tx,
             command_rx,
-            precomputed_frames,
+            precomputed_frames: Vec::new(),
         }
     }
 
@@ -66,6 +65,21 @@ impl CaptureService {
 
         let mut is_capturing = false;
         let mut config = CaptureConfig::default();
+
+        // 初回フレーム生成（バックグラウンドで実行）
+        if self.precomputed_frames.is_empty() {
+            info!("Generating initial mock frames in background...");
+            let config_clone = config.clone();
+            let frames = tokio::task::spawn_blocking(move || {
+                Self::generate_frame_set(&config_clone, PREGENERATED_FRAMES)
+            })
+            .await?;
+            self.precomputed_frames = frames;
+            info!(
+                "Initial mock frames generated ({} frames)",
+                self.precomputed_frames.len()
+            );
+        }
 
         // 事前生成済みフレームを使用
         let mut precomputed_frames = self.precomputed_frames;
@@ -97,8 +111,14 @@ impl CaptureService {
                             config.fps = fps;
                             frame_index = 0;
                             let regen_start = Instant::now();
-                            precomputed_frames =
-                                Self::generate_frame_set(&config, PREGENERATED_FRAMES);
+                            
+                            // 設定変更時もバックグラウンドで再生成
+                            let config_clone = config.clone();
+                            let new_frames = tokio::task::spawn_blocking(move || {
+                                Self::generate_frame_set(&config_clone, PREGENERATED_FRAMES)
+                            }).await?;
+                            precomputed_frames = new_frames;
+
                             info!(
                                 "Precomputed frames regenerated ({} frames) in {}ms",
                                 precomputed_frames.len(),
@@ -115,6 +135,9 @@ impl CaptureService {
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(1000 / config.fps.max(1) as u64)) => {
                     if is_capturing {
                         let frame_start = Instant::now();
+                        if precomputed_frames.is_empty() {
+                             continue;
+                        }
                         let idx = (frame_index as usize) % precomputed_frames.len();
                         let mut frame = precomputed_frames[idx].clone();
                         // 実送出時刻で windows_timespan を更新（100ナノ秒単位に変換）
@@ -191,8 +214,9 @@ impl CaptureService {
         let size = (width * height * 4) as usize;
         let mut data = vec![0u8; size];
 
-        // フレームごとの色相オフセット (0.8度/フレーム)
-        let frame_hue_offset = (frame_index as f32 / 450.0) * 360.0;
+        // フレームごとの色相オフセット (360度 / 90フレーム = 4度/フレーム)
+        // 元は 450フレームで360度だったので 0.8度/フレーム
+        let frame_hue_offset = (frame_index as f32 / PREGENERATED_FRAMES as f32) * 360.0;
 
         for y in 0..height {
             for x in 0..width {
@@ -241,9 +265,10 @@ mod tests {
             .await
             .unwrap();
 
-        // フレームが生成されるまで待つ（450フレーム生成に時間がかかるため、最大30秒待つ）
+        // フレームが生成されるまで待つ
+        // 初期生成 + 最初のフレーム送信
         let frame =
-            tokio::time::timeout(tokio::time::Duration::from_secs(30), frame_rx.recv()).await;
+            tokio::time::timeout(tokio::time::Duration::from_secs(10), frame_rx.recv()).await;
         assert!(frame.is_ok(), "Frame should be generated within timeout");
         assert!(
             frame.unwrap().is_some(),
@@ -274,8 +299,9 @@ mod tests {
         assert_eq!(frame.height, 480);
         assert_eq!(frame.data.len(), 640 * 480 * 4);
 
-        // フレーム0とフレーム225で異なることを確認（色相が180度異なる）
-        let frame2 = CaptureService::generate_gradient_frame(&config, 225);
+        // フレーム0と中間フレームで異なることを確認
+        let mid_frame = PREGENERATED_FRAMES as u64 / 2;
+        let frame2 = CaptureService::generate_gradient_frame(&config, mid_frame);
         assert_ne!(frame.data, frame2.data);
     }
 }

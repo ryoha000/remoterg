@@ -116,18 +116,18 @@ async fn main() -> Result<()> {
     // ビデオストリームメッセージチャネル（キーフレーム要求など）
     let (video_stream_msg_tx, video_stream_msg_rx) = mpsc::channel::<VideoStreamMessage>(10);
 
-    // ビデオトラック情報を受け渡すためのワンショットチャネル
-    let (video_track_tx, video_track_rx) = tokio::sync::oneshot::channel::<(
+    // ビデオトラック情報を受け渡すためのチャンネル
+    let (video_track_tx, mut video_track_rx) = mpsc::channel::<(
         Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
         Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
         Arc<std::sync::atomic::AtomicBool>, // connection_ready
-    )>();
+    )>(10);
 
-    // 音声トラック情報を受け渡すためのワンショットチャネル
-    let (audio_track_tx, audio_track_rx) = tokio::sync::oneshot::channel::<(
+    // 音声トラック情報を受け渡すためのチャンネル
+    let (audio_track_tx, mut audio_track_rx) = mpsc::channel::<(
         Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
         Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
-    )>();
+    )>(10);
 
     #[cfg(not(feature = "h264"))]
     compile_error!("h264 feature must be enabled for hostd");
@@ -227,34 +227,14 @@ async fn main() -> Result<()> {
     let input_handle = tokio::spawn(async move { input_service.run().await });
     let signaling_handle = tokio::spawn(async move { signaling_client.run().await });
 
-    // VideoStreamService起動タスク（ビデオトラック受信後に起動）
+    // VideoStreamService起動タスク
     let video_stream_handle = tokio::spawn(async move {
-        match video_track_rx.await {
-            Ok((track, sender, connection_ready)) => {
-                info!("Received video track, starting VideoStreamService");
-                video_stream_service
-                    .run(track, sender, connection_ready)
-                    .await
-            }
-            Err(_) => {
-                info!("Video track channel closed without sending");
-                Ok(())
-            }
-        }
+        video_stream_service.run(video_track_rx).await
     });
 
-    // AudioStreamService起動タスク（音声トラック受信後に起動）
+    // AudioStreamService起動タスク
     let audio_stream_handle = tokio::spawn(async move {
-        match audio_track_rx.await {
-            Ok((track, sender)) => {
-                info!("Received audio track, starting AudioStreamService");
-                audio_stream_service.run(track, sender).await
-            }
-            Err(_) => {
-                info!("Audio track channel closed without sending");
-                Ok(())
-            }
-        }
+        audio_stream_service.run(audio_track_rx).await
     });
 
     // WebRTC は非 Send 型を含むため spawn せず現在のタスクで実行する

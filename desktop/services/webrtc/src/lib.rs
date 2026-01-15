@@ -18,7 +18,7 @@ pub struct WebRtcService {
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     video_track_tx: Option<
-        tokio::sync::oneshot::Sender<(
+        mpsc::Sender<(
             Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
             Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
             Arc<AtomicBool>, // connection_ready
@@ -26,7 +26,7 @@ pub struct WebRtcService {
     >,
     video_stream_msg_tx: Option<mpsc::Sender<VideoStreamMessage>>,
     audio_track_tx: Option<
-        tokio::sync::oneshot::Sender<(
+        mpsc::Sender<(
             Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
             Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
         )>,
@@ -38,7 +38,7 @@ impl WebRtcService {
         signaling_tx: mpsc::Sender<SignalingResponse>,
         data_channel_tx: mpsc::Sender<DataChannelMessage>,
         video_track_tx: Option<
-            tokio::sync::oneshot::Sender<(
+            mpsc::Sender<(
                 Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
                 Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
                 Arc<AtomicBool>,
@@ -46,7 +46,7 @@ impl WebRtcService {
         >,
         video_stream_msg_tx: Option<mpsc::Sender<VideoStreamMessage>>,
         audio_track_tx: Option<
-            tokio::sync::oneshot::Sender<(
+            mpsc::Sender<(
                 Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
                 Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
             )>,
@@ -157,8 +157,8 @@ impl WebRtcService {
                                     peer_connection = Some(result.peer_connection.clone());
 
                                     // ビデオトラック情報をVideoStreamServiceに送信
-                                    if let Some(tx) = self.video_track_tx.take() {
-                                        if tx.send((result.video_track, result.video_sender, connection_ready.clone())).is_ok() {
+                                    if let Some(ref tx) = self.video_track_tx {
+                                        if tx.send((result.video_track, result.video_sender, connection_ready.clone())).await.is_ok() {
                                             info!("Video track sent to VideoStreamService");
                                         } else {
                                             warn!("Failed to send video track: receiver dropped");
@@ -166,8 +166,8 @@ impl WebRtcService {
                                     }
 
                                     // 音声トラックをAudioStreamServiceに送信
-                                    if let Some(tx) = self.audio_track_tx.take() {
-                                        if tx.send((result.audio_track, result.audio_sender)).is_ok() {
+                                    if let Some(ref tx) = self.audio_track_tx {
+                                        if tx.send((result.audio_track, result.audio_sender)).await.is_ok() {
                                             info!("Audio track sent to AudioStreamService");
                                         } else {
                                             warn!("Failed to send audio track: receiver dropped");

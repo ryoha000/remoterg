@@ -524,7 +524,7 @@ export function useWebRTC(options: WebRTCOptions) {
     const runner = Effect.runFork(program);
 
     return () => {
-      Effect.runSync(Fiber.interrupt(runner));
+      Effect.runFork(Fiber.interrupt(runner));
       addLog("Hook cleanup / disconnected");
     };
   }, [connectTrigger, signalUrl, sessionId, codec]);

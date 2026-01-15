@@ -31,20 +31,12 @@ impl AudioStreamService {
     /// 音声トラックとRTPSenderを受け取り、エンコード結果を書き込む
     pub async fn run(
         mut self,
-        audio_track: Arc<TrackLocalStaticSample>,
-        audio_sender: Arc<RTCRtpSender>,
+        mut track_rx: mpsc::Receiver<(
+            Arc<TrackLocalStaticSample>,
+            Arc<RTCRtpSender>,
+        )>,
     ) -> Result<()> {
         info!("AudioStreamService started");
-
-        // 送信開始には明示的にトリガーする必要がある
-        let sender_for_start = audio_sender.clone();
-        tokio::spawn(async move {
-            let params = sender_for_start.get_parameters().await;
-            match sender_for_start.send(&params).await {
-                Ok(_) => info!("Audio RTCRtpSender::send() invoked explicitly"),
-                Err(e) => warn!("Audio RTCRtpSender::send() explicit call returned: {}", e),
-            }
-        });
 
         // エンコーダーをセットアップ
         let (audio_encoder_tx, mut audio_result_rx) = self.audio_encoder_factory.setup();
@@ -59,79 +51,127 @@ impl AudioStreamService {
             }
         });
 
-        // Audio用のRTCPドレインループ
-        let audio_sender_for_rtcp = audio_sender.clone();
-        tokio::spawn(async move {
-            let mut rtcp_buf = vec![0u8; 1500];
-            while let Ok((_, _)) = audio_sender_for_rtcp.read(&mut rtcp_buf).await {}
-        });
-
         // 統計情報
         let mut audio_frame_count: u64 = 0;
         let mut audio_silent_count: u64 = 0;
         let mut last_audio_log = Instant::now();
 
-        // エンコード結果受信ループ
+        // 現在のアクティブなトラック情報
+        let mut current_audio_track: Option<Arc<TrackLocalStaticSample>> = None;
+
+        // RTCP読み込みタスクのハンドル（キャンセル用）
+        let mut rtcp_drain_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+        info!("AudioStreamService entered main loop");
+
+        // メインループ
         loop {
-            match audio_result_rx.recv().await {
-                Some(result) => {
-                    debug!(
-                        "Received audio encode result: {} bytes, silent: {}",
-                        result.encoded_data.len(),
-                        result.is_silent
-                    );
+            tokio::select! {
+                // 1. 新しいトラック情報の受信
+                new_track = track_rx.recv() => {
+                    match new_track {
+                        Some((track, sender)) => {
+                            info!("Switched to new audio track");
 
-                    use bytes::Bytes;
-                    use webrtc_rs::media::Sample;
-                    let sample = Sample {
-                        data: Bytes::from(result.encoded_data),
-                        duration: result.duration,
-                        ..Default::default()
-                    };
-
-                    match audio_track.write_sample(&sample).await {
-                        Ok(_) => {
-                            audio_frame_count += 1;
-                            if result.is_silent {
-                                audio_silent_count += 1;
+                            // 古いRTCPタスクをキャンセル
+                            if let Some(handle) = rtcp_drain_handle.take() {
+                                handle.abort();
                             }
-                            let elapsed = last_audio_log.elapsed();
-                            if elapsed.as_secs_f32() >= 5.0 {
-                                if audio_silent_count == audio_frame_count && audio_frame_count > 0
-                                {
-                                    warn!(
-                                        "Audio frames sent: {} (last {}s) - ALL FRAMES ARE SILENT! No audio detected.",
-                                        audio_frame_count,
-                                        elapsed.as_secs()
-                                    );
-                                } else {
-                                    info!(
-                                        "Audio frames sent: {} (last {}s), silent: {} ({:.1}%)",
-                                        audio_frame_count,
-                                        elapsed.as_secs(),
-                                        audio_silent_count,
-                                        (audio_silent_count as f32 / audio_frame_count as f32)
-                                            * 100.0
-                                    );
+
+                            // 新しいRTCPタスクを起動
+                            let sender_for_rtcp = sender.clone();
+                            rtcp_drain_handle = Some(tokio::spawn(async move {
+                                let mut rtcp_buf = vec![0u8; 1500];
+                                while let Ok((_, _)) = sender_for_rtcp.read(&mut rtcp_buf).await {}
+                            }));
+
+                             // 明示的な送信開始
+                            let sender_for_start = sender.clone();
+                            tokio::spawn(async move {
+                                let params = sender_for_start.get_parameters().await;
+                                if let Err(e) = sender_for_start.send(&params).await {
+                                    warn!("Audio RTCRtpSender::send() explicit call returned: {}", e);
                                 }
-                                audio_frame_count = 0;
-                                audio_silent_count = 0;
-                                last_audio_log = Instant::now();
-                            }
+                            });
+
+                            // ステート更新
+                            current_audio_track = Some(track);
                         }
-                        Err(e) => {
-                            error!("Failed to write audio sample to track: {}", e);
+                        None => {
+                            info!("Audio track channel closed");
+                            break;
                         }
                     }
                 }
-                None => {
-                    info!("Audio encode result channel closed");
-                    break;
+
+                // 2. エンコード結果の受信と送信
+                result = audio_result_rx.recv() => {
+                    match result {
+                        Some(result) => {
+                             if let Some(track) = &current_audio_track {
+                                debug!(
+                                    "Received audio encode result: {} bytes, silent: {}",
+                                    result.encoded_data.len(),
+                                    result.is_silent
+                                );
+
+                                use bytes::Bytes;
+                                use webrtc_rs::media::Sample;
+                                let sample = Sample {
+                                    data: Bytes::from(result.encoded_data),
+                                    duration: result.duration,
+                                    ..Default::default()
+                                };
+
+                                match track.write_sample(&sample).await {
+                                    Ok(_) => {
+                                        audio_frame_count += 1;
+                                        if result.is_silent {
+                                            audio_silent_count += 1;
+                                        }
+                                        let elapsed = last_audio_log.elapsed();
+                                        if elapsed.as_secs_f32() >= 5.0 {
+                                            if audio_silent_count == audio_frame_count && audio_frame_count > 0
+                                            {
+                                                warn!(
+                                                    "Audio frames sent: {} (last {}s) - ALL FRAMES ARE SILENT! No audio detected.",
+                                                    audio_frame_count,
+                                                    elapsed.as_secs()
+                                                );
+                                            } else {
+                                                info!(
+                                                    "Audio frames sent: {} (last {}s), silent: {} ({:.1}%)",
+                                                    audio_frame_count,
+                                                    elapsed.as_secs(),
+                                                    audio_silent_count,
+                                                    (audio_silent_count as f32 / audio_frame_count as f32)
+                                                        * 100.0
+                                                );
+                                            }
+                                            audio_frame_count = 0;
+                                            audio_silent_count = 0;
+                                            last_audio_log = Instant::now();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to write audio sample to track: {}", e);
+                                    }
+                                }
+                             }
+                        }
+                        None => {
+                            info!("Audio encode result channel closed");
+                            break;
+                        }
+                    }
                 }
             }
         }
 
-        // フレームルーターの終了を待つ
+        // クリーンアップ
+        if let Some(handle) = rtcp_drain_handle {
+            handle.abort();
+        }
         let _ = frame_router_handle.await;
 
         info!("AudioStreamService stopped");

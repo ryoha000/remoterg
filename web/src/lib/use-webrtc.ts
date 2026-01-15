@@ -493,17 +493,24 @@ export function useWebRTC(options: WebRTCOptions) {
 
       // Debug Action Loop
       const debugLoop = Queue.take(debugQ).pipe(
-        Effect.tap((action) =>
-          Effect.sync(() => {
-            if (action === "close_ws") {
+        Effect.flatMap((action) => {
+          if (action === "close_ws") {
+            return Effect.sync(() => {
               addLog("DEBUG: Closing WebSocket...");
               ws.close();
-            } else if (action === "close_pc") {
+            });
+          } else if (action === "close_pc") {
+            return Effect.sync(() => {
               addLog("DEBUG: Closing PeerConnection...");
               pc.close();
-            }
-          }),
-        ),
+            }).pipe(
+              Effect.flatMap(() =>
+                Effect.fail(new PeerConnectionError({ message: "Simulated PC Close" })),
+              ),
+            );
+          }
+          return Effect.void;
+        }),
         Effect.forever,
       );
 

@@ -12,6 +12,8 @@ count.txt
 .vinxi
 todos.json
 
+public/mock.mp4
+
 # Playwright
 /test-results/
 /playwright-report/

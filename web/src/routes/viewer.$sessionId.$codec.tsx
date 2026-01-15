@@ -4,18 +4,18 @@ import { useWebRTC } from "@/lib/use-webrtc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import {
   Settings,
   Maximize,
   Minimize,
-  Mic,
-  MicOff,
   LogOut,
   Signal,
   ArrowLeftIcon,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,7 +27,8 @@ function ViewerPage() {
   const { sessionId, codec } = Route.useParams();
   const [stream, setStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false); // Default to unmuted, browsers usually require interaction anyway
+  const [volume, setVolume] = useState(100);
   const [showOverlay, setShowOverlay] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
   const overlayTimerRef = useRef<number | null>(null);
@@ -39,10 +40,6 @@ function ViewerPage() {
     codec: codec as "h264" | "any",
     onTrack: (receivedStream) => {
       setStream(receivedStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = receivedStream;
-        videoRef.current.play().catch(console.error);
-      }
     },
   });
 
@@ -55,10 +52,27 @@ function ViewerPage() {
   }, []);
 
   useEffect(() => {
-    if (stream && videoRef.current) {
-      videoRef.current.srcObject = stream;
+    const videoEl = videoRef.current;
+    if (stream && videoEl) {
+      // Only assign if different to strictly avoid resetting playback
+      if (videoEl.srcObject !== stream) {
+        videoEl.srcObject = stream;
+        videoEl.play().catch((e) => {
+          if (e.name !== "AbortError") {
+            console.error("Video playback error:", e);
+          }
+        });
+      }
     }
   }, [stream]);
+
+  // Sync volume/mute with video element
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = volume / 100;
+      videoRef.current.muted = isMuted;
+    }
+  }, [volume, isMuted]);
 
   // Overlay interaction handler
   const handleInteraction = useCallback(() => {
@@ -171,20 +185,6 @@ function ViewerPage() {
               variant="ghost"
               size="icon"
               className="text-white hover:bg-white/20 rounded-full"
-              onClick={() => {
-                const newMuted = !isMuted;
-                if (videoRef.current) videoRef.current.muted = newMuted;
-                setIsMuted(newMuted);
-              }}
-              aria-label={isMuted ? "Unmute" : "Mute"}
-            >
-              {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-white hover:bg-white/20 rounded-full"
               onClick={toggleFullscreen}
               aria-label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
             >
@@ -215,7 +215,39 @@ function ViewerPage() {
                     </Badge>
                   </div>
 
-                  <div className="space-y-3">
+                  <div className="space-y-4">
+                    {/* Audio Settings */}
+                    <div className="space-y-3">
+                      <Label className="text-xs text-zinc-400">Audio</Label>
+                      <div className="flex items-center gap-3">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-zinc-400 hover:text-white"
+                          onClick={() => setIsMuted(!isMuted)}
+                        >
+                          {isMuted || volume === 0 ? (
+                            <VolumeX className="w-4 h-4" />
+                          ) : (
+                            <Volume2 className="w-4 h-4" />
+                          )}
+                        </Button>
+                        <Slider
+                          value={[isMuted ? 0 : volume]}
+                          max={100}
+                          step={1}
+                          className="flex-1"
+                          onValueChange={(vals) => {
+                            setVolume(vals[0]);
+                            if (vals[0] > 0) setIsMuted(false);
+                          }}
+                        />
+                        <span className="text-xs text-zinc-500 w-8 text-right">
+                          {isMuted ? 0 : volume}%
+                        </span>
+                      </div>
+                    </div>
+
                     <div className="flex items-center justify-between">
                       <Label className="text-xs text-zinc-400">Stats for Nerds</Label>
                       <Switch checked={showDebug} onCheckedChange={setShowDebug} />

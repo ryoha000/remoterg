@@ -1,9 +1,5 @@
----
-trigger: always_on
----
-
 返答は日本語で行うこと
-plan や walkthrough は日本語で書くこと
+plan(implementation_plan.md) や walkthrough(walkthrough.md) は日本語で書くこと
 
 ## Project Overview
 

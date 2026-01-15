@@ -1,4 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from "react";
+import { Effect, Console, Schedule, Stream, Queue, Duration, Fiber, Data } from "effect";
+import { env } from "@/env";
 
 export interface WebRTCOptions {
   signalUrl: string;
@@ -22,36 +24,16 @@ export interface WebRTCStats {
   };
 }
 
-interface RTCInboundRtpStats {
-  type: string;
-  kind?: string;
-  bytesReceived?: number;
-  framesReceived?: number;
-  packetsLost?: number;
-}
+// Errors
+class WebSocketError extends Data.TaggedError("WebSocketError")<{
+  message: string;
+  originalError?: unknown;
+}> {}
 
-interface RTCTrackStats {
-  type: string;
-  framesDecoded?: number;
-  framesDropped?: number;
-  freezeCount?: number;
-}
-
-function isRTCInboundRtpStats(report: unknown): report is RTCInboundRtpStats {
-  if (typeof report !== "object" || report === null) {
-    return false;
-  }
-  const r = report as Record<string, unknown>;
-  return r.type === "inbound-rtp";
-}
-
-function isRTCTrackStats(report: unknown): report is RTCTrackStats {
-  if (typeof report !== "object" || report === null) {
-    return false;
-  }
-  const r = report as Record<string, unknown>;
-  return r.type === "track";
-}
+class PeerConnectionError extends Data.TaggedError("PeerConnectionError")<{
+  message: string;
+  originalError?: unknown;
+}> {}
 
 export function useWebRTC(options: WebRTCOptions) {
   const {
@@ -63,553 +45,43 @@ export function useWebRTC(options: WebRTCOptions) {
     onIceConnectionStateChange,
   } = options;
 
-  const [connectionState, setConnectionState] =
-    useState<string>("disconnected");
+  const [connectionState, setConnectionState] = useState<string>("disconnected");
   const [iceConnectionState, setIceConnectionState] = useState<string>("new");
   const [stats, setStats] = useState<WebRTCStats>({});
-  const [logs, setLogs] = useState<
-    Array<{ time: string; message: string; type: string }>
-  >([]);
+  const [logs, setLogs] = useState<Array<{ time: string; message: string; type: string }>>([]);
 
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const dataChannelRef = useRef<RTCDataChannel | null>(null);
-  const statsIntervalRef = useRef<number | null>(null);
-  const keepaliveIntervalRef = useRef<number | null>(null);
-  const pendingIceCandidatesRef = useRef<Array<RTCIceCandidateInit>>([]);
-  const remoteDescSetRef = useRef<boolean>(false);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
+  // Queue to send signals to the running Effect
+  const sendKeyQueue = useRef<Queue.Queue<{ key: string; down: boolean }> | null>(null);
+  const screenshotRequestQueue = useRef<Queue.Queue<void> | null>(null);
+
+  // To trigger manual disconnect/reconnect (using a counter to restart the effect)
+  const [connectTrigger, setConnectTrigger] = useState(0);
 
   const addLog = useCallback((message: string, type: string = "info") => {
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev, { time, message, type }]);
   }, []);
 
-  const connect = useCallback(async () => {
-    try {
-      // 前回の接続のMediaStreamをクリア
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-      }
-
-      setConnectionState("connecting");
-      addLog("WebSocket接続を開始...");
-
-      // WebSocket接続
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}${signalUrl}?session_id=${sessionId}&role=viewer`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        addLog("WebSocket接続確立", "success");
-        createPeerConnection();
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          addLog(`受信: ${message.type}`);
-
-          if (message.type === "error") {
-            addLog(`サーバーエラー: ${message.message}`, "error");
-            setConnectionState("error");
-            ws.close();
-          } else if (message.type === "answer") {
-            try {
-              addLog(
-                `Answer SDP (最初の100文字): ${message.sdp.substring(
-                  0,
-                  100
-                )}...`
-              );
-              if (pcRef.current) {
-                await pcRef.current.setRemoteDescription({
-                  type: "answer",
-                  sdp: message.sdp,
-                });
-                remoteDescSetRef.current = true;
-                addLog("Answerを設定", "success");
-
-                // Answer適用後に滞留ICE候補をまとめて適用
-                while (pendingIceCandidatesRef.current.length > 0) {
-                  const candidate = pendingIceCandidatesRef.current.shift();
-                  if (candidate && pcRef.current) {
-                    try {
-                      await pcRef.current.addIceCandidate(candidate);
-                      addLog("ICE candidate追加（バッファから）", "success");
-                    } catch (error) {
-                      addLog(
-                        `ICE candidate追加エラー（バッファ）: ${error}`,
-                        "error"
-                      );
-                    }
-                  }
-                }
-              }
-            } catch (error) {
-              addLog(`Answer設定エラー: ${error}`, "error");
-            }
-          } else if (message.type === "ice_candidate") {
-            try {
-              const candidateInit: RTCIceCandidateInit = {
-                candidate: message.candidate,
-                sdpMid: message.sdp_mid,
-                sdpMLineIndex: message.sdp_mline_index,
-              };
-
-              if (!remoteDescSetRef.current) {
-                pendingIceCandidatesRef.current.push(candidateInit);
-                addLog("ICE candidateをバッファに保存（Answer待ち）", "info");
-              } else if (pcRef.current) {
-                await pcRef.current.addIceCandidate(candidateInit);
-                addLog("ICE candidate追加", "success");
-              }
-            } catch (error) {
-              addLog(`ICE candidate追加エラー: ${error}`, "error");
-            }
-          } else if (message.type === "offerForRestart") {
-            try {
-              addLog("ICE Restart Offer受信", "info");
-              if (pcRef.current) {
-                // 1. RemoteDescriptionとして設定
-                await pcRef.current.setRemoteDescription({
-                  type: "offer",
-                  sdp: message.sdp,
-                });
-                addLog("ICE Restart Offer設定完了", "success");
-
-                // 2. 新しいAnswerを生成
-                const answer = await pcRef.current.createAnswer();
-                await pcRef.current.setLocalDescription(answer);
-                addLog("ICE Restart Answer生成完了", "success");
-
-                // 3. Answerをホストに送信
-                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                  wsRef.current.send(
-                    JSON.stringify({
-                      type: "answerForRestart",
-                      sdp: answer.sdp,
-                      session_id: sessionId,
-                      negotiation_id: "default",
-                    })
-                  );
-                  addLog("ICE Restart Answer送信完了", "success");
-                }
-              }
-            } catch (error) {
-              addLog(`ICE Restart処理エラー: ${error}`, "error");
-            }
-          }
-        } catch (error) {
-          addLog(`メッセージ処理エラー: ${error}`, "error");
-        }
-      };
-
-      ws.onerror = (error) => {
-        addLog(`WebSocketエラー: ${error}`, "error");
-        setConnectionState("error");
-      };
-
-      ws.onclose = () => {
-        addLog("WebSocket接続が閉じられました", "error");
-        setConnectionState("disconnected");
-      };
-    } catch (error) {
-      addLog(`接続エラー: ${error}`, "error");
-      setConnectionState("error");
-    }
-  }, [signalUrl, sessionId, addLog]);
-
-  const startKeepalive = useCallback(() => {
-    if (keepaliveIntervalRef.current !== null) return;
-
-    keepaliveIntervalRef.current = window.setInterval(() => {
-      if (
-        dataChannelRef.current &&
-        dataChannelRef.current.readyState === "open"
-      ) {
-        const pingMessage = {
-          Ping: {
-            timestamp: Date.now(),
-          },
-        };
-        try {
-          dataChannelRef.current.send(JSON.stringify(pingMessage));
-          addLog("Keepalive ping送信", "debug");
-        } catch (error) {
-          addLog(`Keepalive送信エラー: ${error}`, "error");
-        }
-      }
-    }, 3000); // 3秒ごと
-
-    addLog("Keepaliveタイマー開始 (3秒間隔)", "success");
-  }, [addLog]);
-
-  const stopKeepalive = useCallback(() => {
-    if (keepaliveIntervalRef.current !== null) {
-      clearInterval(keepaliveIntervalRef.current);
-      keepaliveIntervalRef.current = null;
-      addLog("Keepaliveタイマー停止");
-    }
-  }, [addLog]);
-
-  const startStatsLogging = useCallback(() => {
-    if (!pcRef.current || statsIntervalRef.current !== null) return;
-
-    const receiver = pcRef.current
-      .getReceivers()
-      .find((r) => r.track?.kind === "video");
-    if (!receiver) {
-      addLog("stats: videoレシーバーが見つかりませんでした");
-      return;
-    }
-
-    statsIntervalRef.current = window.setInterval(async () => {
-      try {
-        const reports = await receiver.getStats();
-        let inboundStats: WebRTCStats["inbound"] = undefined;
-        let trackStats: WebRTCStats["track"] = undefined;
-
-        reports.forEach((report) => {
-          if (isRTCInboundRtpStats(report) && report.kind === "video") {
-            inboundStats = {
-              bytesReceived: report.bytesReceived,
-              framesReceived: report.framesReceived,
-              packetsLost: report.packetsLost,
-            };
-          } else if (isRTCTrackStats(report)) {
-            trackStats = {
-              framesDecoded: report.framesDecoded,
-              framesDropped: report.framesDropped,
-              freezeCount: report.freezeCount,
-            };
-          }
-        });
-
-        setStats({
-          inbound: inboundStats,
-          track: trackStats,
-        });
-      } catch (err) {
-        addLog(`stats取得エラー: ${err}`, "error");
-      }
-    }, 2000);
-  }, [addLog]);
-
-  const stopStatsLogging = useCallback(() => {
-    if (statsIntervalRef.current !== null) {
-      clearInterval(statsIntervalRef.current);
-      statsIntervalRef.current = null;
-    }
-  }, []);
-
-  const createPeerConnection = useCallback(() => {
-    addLog("PeerConnectionを作成...");
-
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        {
-          urls: ["stun:stun.l.google.com:19302"],
-        },
-      ],
-    });
-    pcRef.current = pc;
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        if (!wsRef.current) {
-          addLog("ICE candidate: WebSocket参照がnullです", "error");
-          return;
-        }
-
-        const wsState = wsRef.current.readyState;
-        if (wsState === WebSocket.OPEN) {
-          try {
-            const iceMessage = {
-              type: "ice_candidate",
-              candidate: event.candidate.candidate,
-              sdp_mid: event.candidate.sdpMid,
-              sdp_mline_index: event.candidate.sdpMLineIndex,
-            };
-            wsRef.current.send(JSON.stringify(iceMessage));
-            addLog(
-              `ICE candidate送信: ${event.candidate.candidate.substring(
-                0,
-                50
-              )}...`
-            );
-          } catch (sendError) {
-            addLog(`ICE candidate送信エラー: ${sendError}`, "error");
-            console.error("ICE candidate送信エラー詳細:", sendError);
-          }
-        } else {
-          addLog(
-            `ICE candidate: WebSocketがOPEN状態ではありません (state: ${wsState})`,
-            "error"
-          );
-        }
-      }
-    };
-
-    pc.ontrack = async (event) => {
-      addLog(
-        `ストリームを受信 (tracks=${
-          event.streams?.[0]?.getTracks().length ?? 0
-        })`,
-        "success"
-      );
-      if (event.track) {
-        addLog(
-          `トラック情報 kind=${event.track.kind} id=${event.track.id} readyState=${event.track.readyState}`
-        );
-      }
-
-      // MediaStreamを再利用して、すべてのトラックを1つのストリームに集約
-      if (!mediaStreamRef.current) {
-        mediaStreamRef.current = new MediaStream();
-        addLog("新しいMediaStreamを作成", "success");
-      }
-
-      // 受信したトラックを既存のストリームに追加
-      if (event.track) {
-        mediaStreamRef.current.addTrack(event.track);
-        addLog(
-          `トラックを追加: kind=${event.track.kind}, total tracks=${
-            mediaStreamRef.current.getTracks().length
-          }`,
-          "success"
-        );
-
-        // ストリームが更新されたことをコールバックで通知
-        onTrack?.(mediaStreamRef.current);
-      }
-    };
-
-    pc.onconnectionstatechange = () => {
-      const state = pc.connectionState;
-      addLog(`接続状態: ${state}`);
-      setConnectionState(state);
-      onConnectionStateChange?.(state);
-
-      if (state === "failed" || state === "closed") {
-        stopStatsLogging();
-        stopKeepalive();
-      } else if (state === "connected") {
-        startStatsLogging();
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      const iceState = pc.iceConnectionState;
-      addLog(`ICE接続状態: ${iceState}`);
-      setIceConnectionState(iceState);
-      onIceConnectionStateChange?.(iceState);
-
-      if (iceState === "connected" || iceState === "completed") {
-        startStatsLogging();
-      } else if (iceState === "failed" || iceState === "disconnected") {
-        stopStatsLogging();
-        stopKeepalive();
-      }
-    };
-
-    pc.onicegatheringstatechange = () => {
-      addLog(`ICE収集状態: ${pc.iceGatheringState}`);
-    };
-
-    pc.onsignalingstatechange = () => {
-      addLog(`シグナリング状態: ${pc.signalingState}`);
-    };
-
-    // Video受信用のtransceiverを追加（recvonly）
-    const videoTransceiver = pc.addTransceiver("video", {
-      direction: "recvonly",
-    });
-    addLog("Video recvonly transceiverを追加", "success");
-
-    // Audio受信用のtransceiverを追加（recvonly）
-    pc.addTransceiver("audio", { direction: "recvonly" });
-    addLog("Audio recvonly transceiverを追加", "success");
-
-    // codec指定
-    if (codec === "h264") {
-      try {
-        const capabilities = RTCRtpSender.getCapabilities("video");
-        const codecs = (capabilities?.codecs ?? []).filter(
-          (c) =>
-            c.mimeType === "video/H264" &&
-            (c.sdpFmtpLine ?? "").includes("packetization-mode=1")
-        );
-        if (
-          codecs.length > 0 &&
-          typeof videoTransceiver.setCodecPreferences === "function"
-        ) {
-          videoTransceiver.setCodecPreferences(codecs);
-          addLog(
-            `H.264 codec preferenceを適用 (${codecs.length}件)`,
-            "success"
-          );
-        }
-      } catch (error) {
-        addLog(`codec preference設定エラー: ${error}`, "error");
-      }
-    }
-
-    // DataChannelを作成
-    const dataChannel = pc.createDataChannel("input", { ordered: true });
-    dataChannelRef.current = dataChannel;
-    dataChannel.onopen = () => {
-      addLog("DataChannelが開きました", "success");
-      startKeepalive();
-    };
-    dataChannel.onerror = (error) => {
-      addLog(`DataChannelエラー: ${error}`, "error");
-      stopKeepalive();
-    };
-    dataChannel.onclose = () => {
-      addLog("DataChannelが閉じられました", "info");
-      stopKeepalive();
-    };
-    dataChannel.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.Ping) {
-          // サーバーからのPingを受信したらPongを返信
-          const pongMessage = {
-            Pong: {
-              timestamp: message.Ping.timestamp,
-            },
-          };
-          if (
-            dataChannelRef.current &&
-            dataChannelRef.current.readyState === "open"
-          ) {
-            dataChannelRef.current.send(JSON.stringify(pongMessage));
-            addLog(
-              `Keepalive ping受信、pong返信 (timestamp: ${message.Ping.timestamp})`,
-              "debug"
-            );
-          }
-        } else if (message.Pong) {
-          // サーバーからのPongを受信
-          addLog(
-            `Keepalive pong受信 (timestamp: ${message.Pong.timestamp})`,
-            "debug"
-          );
-        }
-      } catch (error) {
-        // JSONパースエラーは無視（その他のメッセージの可能性があるため）
-      }
-    };
-
-    // Offerを作成して送信
-    pc.createOffer()
-      .then(async (offer) => {
-        try {
-          await pc.setLocalDescription(offer);
-          addLog("Offerを作成しました", "success");
-          addLog(
-            `Offer SDP (最初の100文字): ${offer.sdp?.substring(0, 100)}...`
-          );
-
-          // WebSocket状態を確認
-          if (!wsRef.current) {
-            addLog("WebSocket参照がnullです。Offerを送信できません。", "error");
-            return;
-          }
-
-          const wsState = wsRef.current.readyState;
-          const wsStateText =
-            wsState === WebSocket.CONNECTING
-              ? "CONNECTING"
-              : wsState === WebSocket.OPEN
-              ? "OPEN"
-              : wsState === WebSocket.CLOSING
-              ? "CLOSING"
-              : wsState === WebSocket.CLOSED
-              ? "CLOSED"
-              : "UNKNOWN";
-
-          addLog(`WebSocket状態確認: ${wsStateText} (${wsState})`);
-
-          if (wsState === WebSocket.OPEN) {
-            try {
-              const offerMessage = {
-                type: "offer",
-                sdp: offer.sdp,
-                codec: codec,
-              };
-              wsRef.current.send(JSON.stringify(offerMessage));
-              addLog("OfferをWebSocketで送信しました", "success");
-              addLog(
-                `送信メッセージ: type=${offerMessage.type}, codec=${
-                  offerMessage.codec
-                }, sdp_length=${offer.sdp?.length ?? 0}`
-              );
-            } catch (sendError) {
-              addLog(`Offer送信エラー: ${sendError}`, "error");
-              console.error("Offer送信エラー詳細:", sendError);
-            }
-          } else {
-            addLog(
-              `WebSocketがOPEN状態ではありません (${wsStateText})。Offerを送信できません。`,
-              "error"
-            );
-          }
-        } catch (error) {
-          addLog(`LocalDescription設定エラー: ${error}`, "error");
-          console.error("LocalDescription設定エラー詳細:", error);
-        }
-      })
-      .catch((error) => {
-        addLog(`Offer作成エラー: ${error}`, "error");
-        console.error("Offer作成エラー詳細:", error);
-      });
-  }, [
-    codec,
-    addLog,
-    onTrack,
-    onConnectionStateChange,
-    onIceConnectionStateChange,
-    startKeepalive,
-    stopKeepalive,
-    startStatsLogging,
-    stopStatsLogging,
-  ]);
-
   const sendKey = useCallback(
     (key: string, down: boolean = true) => {
-      if (
-        dataChannelRef.current &&
-        dataChannelRef.current.readyState === "open"
-      ) {
-        dataChannelRef.current.send(
-          JSON.stringify({
-            Key: {
-              key: key,
-              down: down,
-            },
-          })
+      if (sendKeyQueue.current) {
+        Effect.runSync(
+          Queue.offer(sendKeyQueue.current, { key, down }).pipe(Effect.catchAll(() => Effect.void)),
         );
         addLog(`キー送信: ${key} (down: ${down})`);
       } else {
         addLog("DataChannelが開いていません", "error");
       }
     },
-    [addLog]
+    [addLog],
   );
 
   const requestScreenshot = useCallback(() => {
-    if (
-      dataChannelRef.current &&
-      dataChannelRef.current.readyState === "open"
-    ) {
-      dataChannelRef.current.send(
-        JSON.stringify({
-          ScreenshotRequest: null,
-        })
+    if (screenshotRequestQueue.current) {
+      Effect.runSync(
+        Queue.offer(screenshotRequestQueue.current, void 0).pipe(
+          Effect.catchAll(() => Effect.void),
+        ),
       );
       addLog("スクリーンショットリクエスト送信");
     } else {
@@ -617,31 +89,408 @@ export function useWebRTC(options: WebRTCOptions) {
     }
   }, [addLog]);
 
-  const disconnect = useCallback(() => {
-    stopStatsLogging();
-    stopKeepalive();
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    // MediaStreamをクリア
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-    setConnectionState("disconnected");
-    addLog("接続を切断しました");
-  }, [stopStatsLogging, stopKeepalive, addLog]);
+  const connect = useCallback(() => {
+    setConnectTrigger((c) => c + 1);
+  }, []);
+
+  const manualDisconnect = useCallback(() => {
+    // Logic assumes triggering '0' stops the effect if we guard against it.
+    // But actually, simpler is to just let the cleanup function handle it and we simply unmount the effect logic.
+    // If we set trigger to 0, and our effect guard says "return if 0", then it works.
+    setConnectTrigger(0);
+  }, []);
 
   useEffect(() => {
+    if (connectTrigger === 0) return;
+
+    const program = Effect.gen(function* () {
+      // --- Mock Mode Check ---
+      if (env.VITE_USE_MOCK === "true") {
+        // if (import.meta.env.VITE_USE_MOCK === "true") {
+        yield* Console.info("Mock Mode: Starting...");
+        addLog("Mock Mode: Starting sequence...", "info");
+
+        yield* Effect.sync(() => setConnectionState("connecting"));
+
+        const cleanupVideo = yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const vid = document.createElement("video");
+            vid.src = "/mock.mp4";
+            vid.loop = true;
+            vid.muted = true;
+            vid.playsInline = true;
+            vid.style.position = "absolute";
+            vid.style.top = "-9999px";
+            vid.style.left = "-9999px";
+            document.body.appendChild(vid);
+            return vid;
+          }),
+          (vid) =>
+            Effect.sync(() => {
+              vid.pause();
+              vid.remove();
+            }),
+        );
+
+        yield* Effect.promise(() => cleanupVideo.play());
+        addLog("Mock Mode: Video playing", "success");
+
+        const stream = yield* Effect.try({
+          try: () => {
+            const videoElement = cleanupVideo as any;
+            if (typeof videoElement.captureStream === "function") {
+              return videoElement.captureStream();
+            } else if (typeof videoElement.mozCaptureStream === "function") {
+              return videoElement.mozCaptureStream();
+            }
+            throw new Error("captureStream not supported");
+          },
+          catch: (e) => new PeerConnectionError({ message: String(e) }),
+        });
+
+        yield* Effect.sleep(Duration.millis(1000));
+
+        yield* Effect.sync(() => {
+          setConnectionState("connected");
+          setIceConnectionState("connected");
+          onTrack?.(stream);
+          addLog("Mock Mode: Connected", "success");
+        });
+
+        yield* Effect.never;
+      }
+
+      // --- Real WebRTC Logic ---
+      yield* Effect.sync(() => {
+        setConnectionState("connecting");
+        addLog("WebSocket接続を開始...");
+      });
+
+      const keyQ = yield* Queue.unbounded<{ key: string; down: boolean }>();
+      const screenQ = yield* Queue.unbounded<void>();
+
+      yield* Effect.sync(() => {
+        sendKeyQueue.current = keyQ;
+        screenshotRequestQueue.current = screenQ;
+      });
+
+      // Acquire WebSocket
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}${signalUrl}?session_id=${sessionId}&role=viewer`;
+
+      const ws = yield* Effect.acquireRelease(
+        Effect.async<WebSocket, WebSocketError>((resume) => {
+          const s = new WebSocket(wsUrl);
+          s.onopen = () => resume(Effect.succeed(s));
+          s.onerror = (e) =>
+            resume(Effect.fail(new WebSocketError({ message: "Open failed", originalError: e })));
+        }),
+        (ws) =>
+          Effect.sync(() => {
+            ws.close();
+            addLog("WebSocket接続が閉じられました");
+          }),
+      );
+
+      yield* Effect.sync(() => addLog("WebSocket接続確立", "success"));
+
+      // Acquire PeerConnection
+      const pc = yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const config: RTCConfiguration = {
+            iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+          };
+          return new RTCPeerConnection(config);
+        }),
+        (pc) =>
+          Effect.sync(() => {
+            pc.close();
+          }),
+      );
+      yield* Effect.sync(() => addLog("PeerConnectionを作成..."));
+
+      // Setup Transceivers
+      yield* Effect.sync(() => {
+        pc.addTransceiver("video", { direction: "recvonly" });
+        pc.addTransceiver("audio", { direction: "recvonly" });
+        if (codec === "h264") {
+          try {
+            const capabilities = RTCRtpSender.getCapabilities("video");
+            const codecs = (capabilities?.codecs ?? []).filter(
+              (c) =>
+                c.mimeType === "video/H264" &&
+                (c.sdpFmtpLine ?? "").includes("packetization-mode=1"),
+            );
+            const transceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === "video");
+            if (
+              codecs.length > 0 &&
+              transceiver &&
+              typeof transceiver.setCodecPreferences === "function"
+            ) {
+              transceiver.setCodecPreferences(codecs);
+              addLog(`H.264 codec preferenceを適用 (${codecs.length}件)`, "success");
+            }
+          } catch (e) {
+            addLog(`codec preference設定エラー: ${e}`, "error");
+          }
+        }
+      });
+
+      // Create DataChannel
+      const dc = yield* Effect.acquireRelease(
+        Effect.sync(() => pc.createDataChannel("input", { ordered: true })),
+        (dc) => Effect.sync(() => dc.close()),
+      );
+
+      // --- Event Streams ---
+
+      const wsMessages = Stream.async<string, WebSocketError>((emit) => {
+        ws.onmessage = (event) => emit.single(event.data);
+        ws.onerror = (e) =>
+          emit.fail(new WebSocketError({ message: "Runtime Error", originalError: e }));
+        ws.onclose = () => emit.fail(new WebSocketError({ message: "Closed" }));
+      });
+
+      const iceCandidates = Stream.async<RTCIceCandidate>((emit) => {
+        pc.onicecandidate = (event) => {
+          if (event.candidate) emit.single(event.candidate);
+        };
+      });
+
+      // Connection State Observers
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState;
+        Effect.runSync(
+          Effect.sync(() => {
+            addLog(`接続状態: ${state}`);
+            setConnectionState(state);
+            onConnectionStateChange?.(state);
+          }),
+        );
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        Effect.runSync(
+          Effect.sync(() => {
+            addLog(`ICE接続状態: ${state}`);
+            setIceConnectionState(state);
+            onIceConnectionStateChange?.(state);
+          }),
+        );
+      };
+
+      // Track Observer
+      let remoteStream: MediaStream | null = null;
+      pc.ontrack = (event) => {
+        Effect.runSync(
+          Effect.sync(() => {
+            addLog(
+              `ストリームを受信 (tracks=${event.streams?.[0]?.getTracks().length ?? 0})`,
+              "success",
+            );
+            if (event.track) {
+              addLog(`トラック情報 kind=${event.track.kind} id=${event.track.id}`, "success");
+              if (!remoteStream) {
+                remoteStream = new MediaStream();
+              }
+              remoteStream.addTrack(event.track);
+              onTrack?.(remoteStream);
+            }
+          }),
+        );
+      };
+
+      // --- Flows ---
+
+      // Send Offer
+      const sendOffer = Effect.gen(function* () {
+        const offer = yield* Effect.promise(() => pc.createOffer());
+        yield* Effect.promise(() => pc.setLocalDescription(offer));
+        addLog("Offerを作成・設定しました", "success");
+
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp, codec }));
+          addLog("Offerを送信しました", "success");
+        }
+      });
+
+      yield* sendOffer;
+
+      // Process Incoming Messages
+      const handleWsParams = wsMessages.pipe(
+        Stream.runForEach((data) =>
+          Effect.gen(function* () {
+            if (typeof data !== "string") return;
+            let msg: any;
+            try {
+              msg = JSON.parse(data);
+            } catch {
+              return;
+            }
+
+            addLog(`受信: ${msg.type}`);
+
+            if (msg.type === "error") {
+              addLog(`サーバーエラー: ${msg.message}`, "error");
+              yield* Effect.fail(new WebSocketError({ message: "Server reported error" }));
+            } else if (msg.type === "answer") {
+              addLog("Answer受信");
+              yield* Effect.promise(() =>
+                pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }),
+              );
+              addLog("Answer設定完了", "success");
+            } else if (msg.type === "ice_candidate") {
+              const candidate = new RTCIceCandidate({
+                candidate: msg.candidate,
+                sdpMid: msg.sdp_mid,
+                sdpMLineIndex: msg.sdp_mline_index,
+              });
+              try {
+                yield* Effect.promise(() => pc.addIceCandidate(candidate));
+                addLog("ICE candidate追加", "success");
+              } catch (e) {
+                addLog(`ICE candidate追加エラー: ${e}`, "error");
+              }
+            }
+          }),
+        ),
+      );
+
+      // Send ICE Candidates
+      const handleOutgoingIceCandidates = iceCandidates.pipe(
+        Stream.runForEach((candidate) =>
+          Effect.sync(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(
+                JSON.stringify({
+                  type: "ice_candidate",
+                  candidate: candidate.candidate,
+                  sdp_mid: candidate.sdpMid,
+                  sdp_mline_index: candidate.sdpMLineIndex,
+                }),
+              );
+              addLog("ICE candidate送信");
+            }
+          }),
+        ),
+      );
+
+      // Data Channel Logic
+      const handleDataChannel = Effect.async<void>((resume) => {
+        dc.onopen = () => {
+          addLog("DataChannel OPEN", "success");
+
+          const loops = Effect.gen(function* () {
+            const keepAlive = Effect.repeat(
+              Effect.sync(() => {
+                if (dc.readyState === "open") {
+                  dc.send(JSON.stringify({ Ping: { timestamp: Date.now() } }));
+                }
+              }),
+              Schedule.spaced(Duration.seconds(3)),
+            );
+
+            const processKeys = Queue.take(keyQ).pipe(
+              Effect.tap((item) =>
+                Effect.sync(() => {
+                  if (dc.readyState === "open") {
+                    dc.send(JSON.stringify({ Key: { key: item.key, down: item.down } }));
+                  }
+                }),
+              ),
+              Effect.forever,
+            );
+
+            const processScreens = Queue.take(screenQ).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (dc.readyState === "open") {
+                    dc.send(JSON.stringify({ ScreenshotRequest: null }));
+                  }
+                }),
+              ),
+              Effect.forever,
+            );
+
+            yield* Effect.all([keepAlive, processKeys, processScreens], {
+              concurrency: "unbounded",
+            });
+          });
+
+          Effect.runFork(loops);
+        };
+
+        dc.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.Ping) {
+              dc.send(JSON.stringify({ Pong: { timestamp: msg.Ping.timestamp } }));
+            }
+          } catch {}
+        };
+
+        dc.onclose = () => {
+          addLog("DataChannel Closed");
+          resume(Effect.void);
+        };
+        dc.onerror = (e) => {
+          addLog(`DataChannel Error: ${e}`);
+          resume(Effect.void);
+        };
+      });
+
+      // Stats Loop
+      const statsLoop = Effect.repeat(
+        Effect.promise(async () => {
+          const receiver = pc.getReceivers().find((r) => r.track?.kind === "video");
+          if (!receiver) return;
+          const reports = await receiver.getStats();
+          let inbound: WebRTCStats["inbound"];
+          let track: WebRTCStats["track"];
+
+          reports.forEach((report) => {
+            if (report.type === "inbound-rtp" && report.kind === "video") {
+              inbound = {
+                bytesReceived: report.bytesReceived,
+                framesReceived: report.framesReceived,
+                packetsLost: report.packetsLost,
+              };
+            } else if (report.type === "track" && report.kind === "video") {
+              track = {
+                framesDecoded: report.framesDecoded,
+                framesDropped: report.framesDropped,
+                freezeCount: report.freezeCount,
+              };
+            }
+          });
+
+          setStats({ inbound, track });
+        }),
+        Schedule.spaced(Duration.seconds(2)),
+      );
+
+      yield* Effect.all(
+        [handleWsParams, handleOutgoingIceCandidates, handleDataChannel, statsLoop],
+        { concurrency: "unbounded", discard: true },
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.catchAll((e) =>
+        Effect.sync(() => {
+          addLog(`Error in WebRTC Effect: ${e instanceof Error ? e.message : String(e)}`, "error");
+          setConnectionState("error");
+        }),
+      ),
+    );
+
+    const runner = Effect.runFork(program);
+
     return () => {
-      disconnect();
+      Effect.runSync(Fiber.interrupt(runner));
+      addLog("Hook cleanup / disconnected");
     };
-  }, [disconnect]);
+  }, [connectTrigger, signalUrl, sessionId, codec]);
 
   return {
     connectionState,
@@ -649,7 +498,7 @@ export function useWebRTC(options: WebRTCOptions) {
     stats,
     logs,
     connect,
-    disconnect,
+    disconnect: manualDisconnect,
     sendKey,
     requestScreenshot,
   };

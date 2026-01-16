@@ -24,6 +24,12 @@ export interface WebRTCStats {
   };
 }
 
+// Helper interface for video element with non-standard captureStream
+interface VideoElementWithCapture extends HTMLVideoElement {
+  captureStream?(): MediaStream;
+  mozCaptureStream?(): MediaStream;
+}
+
 // Errors
 class WebSocketError extends Data.TaggedError("WebSocketError")<{
   message: string;
@@ -113,19 +119,22 @@ export function useWebRTC(options: WebRTCOptions) {
   }, []);
 
   const manualDisconnect = useCallback(() => {
-    // Logic assumes triggering '0' stops the effect if we guard against it.
-    // But actually, simpler is to just let the cleanup function handle it and we simply unmount the effect logic.
-    // If we set trigger to 0, and our effect guard says "return if 0", then it works.
+    // Simply stop the effect by resetting the trigger.
+    // The cleanup function of the useEffect will handle state resets.
     setConnectTrigger(0);
   }, []);
 
   useEffect(() => {
-    if (connectTrigger === 0) return;
+    if (connectTrigger === 0) {
+      // Ensure state is reset when not connected
+      setConnectionState("disconnected");
+      setIceConnectionState("new");
+      return;
+    }
 
     const program = Effect.gen(function* () {
       // --- Mock Mode Check ---
       if (env.VITE_USE_MOCK === "true") {
-        // if (import.meta.env.VITE_USE_MOCK === "true") {
         yield* Console.info("Mock Mode: Starting...");
         addLog("Mock Mode: Starting sequence...", "info");
 
@@ -156,7 +165,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
         const stream = yield* Effect.try({
           try: () => {
-            const videoElement = cleanupVideo as any;
+            const videoElement = cleanupVideo as VideoElementWithCapture;
             if (typeof videoElement.captureStream === "function") {
               return videoElement.captureStream();
             } else if (typeof videoElement.mozCaptureStream === "function") {
@@ -343,29 +352,33 @@ export function useWebRTC(options: WebRTCOptions) {
         Stream.runForEach((data) =>
           Effect.gen(function* () {
             if (typeof data !== "string") return;
-            let msg: any;
+            let msg: unknown;
             try {
               msg = JSON.parse(data);
             } catch {
               return;
             }
 
-            addLog(`受信: ${msg.type}`);
+            if (typeof msg !== "object" || msg === null) return;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const safeMsg = msg as any;
 
-            if (msg.type === "error") {
-              addLog(`サーバーエラー: ${msg.message}`, "error");
+            addLog(`受信: ${safeMsg.type}`);
+
+            if (safeMsg.type === "error") {
+              addLog(`サーバーエラー: ${safeMsg.message}`, "error");
               yield* Effect.fail(new WebSocketError({ message: "Server reported error" }));
-            } else if (msg.type === "answer") {
+            } else if (safeMsg.type === "answer") {
               addLog("Answer受信");
               yield* Effect.promise(() =>
-                pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }),
+                pc.setRemoteDescription({ type: "answer", sdp: safeMsg.sdp }),
               );
               addLog("Answer設定完了", "success");
-            } else if (msg.type === "ice_candidate") {
+            } else if (safeMsg.type === "ice_candidate") {
               const candidate = new RTCIceCandidate({
-                candidate: msg.candidate,
-                sdpMid: msg.sdp_mid,
-                sdpMLineIndex: msg.sdp_mline_index,
+                candidate: safeMsg.candidate,
+                sdpMid: safeMsg.sdp_mid,
+                sdpMLineIndex: safeMsg.sdp_mline_index,
               });
               try {
                 yield* Effect.promise(() => pc.addIceCandidate(candidate));
@@ -398,67 +411,77 @@ export function useWebRTC(options: WebRTCOptions) {
       );
 
       // Data Channel Logic
-      const handleDataChannel = Effect.async<void>((resume) => {
-        dc.onopen = () => {
-          addLog("DataChannel OPEN", "success");
+      const handleDataChannel = Effect.gen(function* () {
+        const waitForOpen = Effect.async<void>((resume) => {
+          if (dc.readyState === "open") resume(Effect.void);
+          else dc.onopen = () => resume(Effect.void);
+        });
 
-          const loops = Effect.gen(function* () {
-            const keepAlive = Effect.repeat(
+        // Race between waiting for open and waiting for close (if closed before open)
+        const waitForCloseInitial = Effect.async<void>((resume) => {
+          if (dc.readyState === "closed") resume(Effect.void);
+          else dc.onclose = () => resume(Effect.void);
+        });
+
+        yield* Effect.race(waitForOpen, waitForCloseInitial);
+
+        if (dc.readyState !== "open") {
+          addLog("DataChannel failed to open (closed before open)", "error");
+          return;
+        }
+
+        addLog("DataChannel OPEN", "success");
+
+        const loops = Effect.gen(function* () {
+          const keepAlive = Effect.repeat(
+            Effect.sync(() => {
+              if (dc.readyState === "open") {
+                dc.send(JSON.stringify({ Ping: { timestamp: Date.now() } }));
+              }
+            }),
+            Schedule.spaced(Duration.seconds(3)),
+          );
+
+          const processKeys = Queue.take(keyQ).pipe(
+            Effect.tap((item) =>
               Effect.sync(() => {
                 if (dc.readyState === "open") {
-                  dc.send(JSON.stringify({ Ping: { timestamp: Date.now() } }));
+                  dc.send(JSON.stringify({ Key: { key: item.key, down: item.down } }));
                 }
               }),
-              Schedule.spaced(Duration.seconds(3)),
-            );
+            ),
+            Effect.forever,
+          );
 
-            const processKeys = Queue.take(keyQ).pipe(
-              Effect.tap((item) =>
-                Effect.sync(() => {
-                  if (dc.readyState === "open") {
-                    dc.send(JSON.stringify({ Key: { key: item.key, down: item.down } }));
-                  }
-                }),
-              ),
-              Effect.forever,
-            );
+          const processScreens = Queue.take(screenQ).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (dc.readyState === "open") {
+                  dc.send(JSON.stringify({ ScreenshotRequest: null }));
+                }
+              }),
+            ),
+            Effect.forever,
+          );
 
-            const processScreens = Queue.take(screenQ).pipe(
-              Effect.tap(() =>
-                Effect.sync(() => {
-                  if (dc.readyState === "open") {
-                    dc.send(JSON.stringify({ ScreenshotRequest: null }));
-                  }
-                }),
-              ),
-              Effect.forever,
-            );
-
-            yield* Effect.all([keepAlive, processKeys, processScreens], {
-              concurrency: "unbounded",
-            });
+          yield* Effect.all([keepAlive, processKeys, processScreens], {
+            concurrency: "unbounded",
           });
+        });
 
-          Effect.runFork(loops);
-        };
+        const waitForClose = Effect.async<void>((resume) => {
+          dc.onclose = () => {
+            addLog("DataChannel Closed");
+            resume(Effect.void);
+          };
+          dc.onerror = (e) => {
+            addLog(`DataChannel Error: ${e}`);
+            resume(Effect.void);
+          };
+        });
 
-        dc.onmessage = (e) => {
-          try {
-            const msg = JSON.parse(e.data);
-            if (msg.Ping) {
-              dc.send(JSON.stringify({ Pong: { timestamp: msg.Ping.timestamp } }));
-            }
-          } catch {}
-        };
-
-        dc.onclose = () => {
-          addLog("DataChannel Closed");
-          resume(Effect.void);
-        };
-        dc.onerror = (e) => {
-          addLog(`DataChannel Error: ${e}`);
-          resume(Effect.void);
-        };
+        // Run loops until closed or error
+        yield* Effect.race(loops, waitForClose);
       });
 
       // Stats Loop
@@ -533,6 +556,8 @@ export function useWebRTC(options: WebRTCOptions) {
     return () => {
       Effect.runFork(Fiber.interrupt(runner));
       addLog("Hook cleanup / disconnected");
+      setConnectionState("disconnected");
+      setIceConnectionState("new");
     };
   }, [connectTrigger, signalUrl, sessionId, codec]);
 

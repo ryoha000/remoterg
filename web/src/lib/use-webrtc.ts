@@ -326,49 +326,38 @@ export function useWebRTC(options: WebRTCOptions) {
         };
       });
 
-      // Connection State Observers
-      pc.onconnectionstatechange = () => {
-        const state = pc.connectionState;
-        Effect.runSync(
-          Effect.sync(() => {
-            addLog(`接続状態: ${state}`);
-            setConnectionState(state);
-            onConnectionStateChange?.(state);
-          }),
-        );
-      };
+      // Connection State Stream
+      const connectionStateStream = Stream.async<void>((emit) => {
+        const handler = () => {
+          void emit.single(void 0);
+        };
+        pc.addEventListener("connectionstatechange", handler);
+        return Effect.sync(() => {
+          pc.removeEventListener("connectionstatechange", handler);
+        });
+      });
 
-      pc.oniceconnectionstatechange = () => {
-        const state = pc.iceConnectionState;
-        Effect.runSync(
-          Effect.sync(() => {
-            addLog(`ICE接続状態: ${state}`);
-            setIceConnectionState(state);
-            onIceConnectionStateChange?.(state);
-          }),
-        );
-      };
+      // ICE Connection State Stream
+      const iceConnectionStateStream = Stream.async<void>((emit) => {
+        const handler = () => {
+          void emit.single(void 0);
+        };
+        pc.addEventListener("iceconnectionstatechange", handler);
+        return Effect.sync(() => {
+          pc.removeEventListener("iceconnectionstatechange", handler);
+        });
+      });
 
-      // Track Observer
-      let remoteStream: MediaStream | null = null;
-      pc.ontrack = (event) => {
-        Effect.runSync(
-          Effect.sync(() => {
-            addLog(
-              `ストリームを受信 (tracks=${event.streams?.[0]?.getTracks().length ?? 0})`,
-              "success",
-            );
-            if (event.track) {
-              addLog(`トラック情報 kind=${event.track.kind} id=${event.track.id}`, "success");
-              if (!remoteStream) {
-                remoteStream = new MediaStream();
-              }
-              remoteStream.addTrack(event.track);
-              onTrack?.(remoteStream);
-            }
-          }),
-        );
-      };
+      // Track Stream
+      const trackStream = Stream.async<RTCTrackEvent>((emit) => {
+        const handler = (event: RTCTrackEvent) => {
+          void emit.single(event);
+        };
+        pc.addEventListener("track", handler);
+        return Effect.sync(() => {
+          pc.removeEventListener("track", handler);
+        });
+      });
 
       // --- Flows ---
 
@@ -599,8 +588,62 @@ export function useWebRTC(options: WebRTCOptions) {
         Effect.forever,
       );
 
+      // Process Connection State Changes
+      const handleConnectionState = connectionStateStream.pipe(
+        Stream.runForEach(() =>
+          Effect.sync(() => {
+            const state = pc.connectionState;
+            addLog(`接続状態: ${state}`);
+            setConnectionState(state);
+            onConnectionStateChange?.(state);
+          }),
+        ),
+      );
+
+      // Process ICE Connection State Changes
+      const handleIceConnectionState = iceConnectionStateStream.pipe(
+        Stream.runForEach(() =>
+          Effect.sync(() => {
+            const state = pc.iceConnectionState;
+            addLog(`ICE接続状態: ${state}`);
+            setIceConnectionState(state);
+            onIceConnectionStateChange?.(state);
+          }),
+        ),
+      );
+
+      // Process Incoming Tracks
+      let remoteStream: MediaStream | null = null;
+      const handleTracks = trackStream.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            addLog(
+              `ストリームを受信 (tracks=${event.streams?.[0]?.getTracks().length ?? 0})`,
+              "success",
+            );
+            if (event.track) {
+              addLog(`トラック情報 kind=${event.track.kind} id=${event.track.id}`, "success");
+              if (!remoteStream) {
+                remoteStream = new MediaStream();
+              }
+              remoteStream.addTrack(event.track);
+              onTrack?.(remoteStream);
+            }
+          }),
+        ),
+      );
+
       yield* Effect.all(
-        [handleWsParams, handleOutgoingIceCandidates, handleDataChannel, statsLoop, debugLoop],
+        [
+          handleWsParams,
+          handleOutgoingIceCandidates,
+          handleDataChannel,
+          statsLoop,
+          debugLoop,
+          handleConnectionState,
+          handleIceConnectionState,
+          handleTracks,
+        ],
         { concurrency: "unbounded", discard: true },
       );
     }).pipe(

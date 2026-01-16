@@ -2,7 +2,7 @@
  * セッション状態管理の純粋関数
  */
 
-import type { Role, SessionState, WsAttachmentV1 } from "./types";
+import type { Role, SessionState } from "./types";
 
 /**
  * 初期セッション状態を作成
@@ -67,28 +67,19 @@ export function removeConnection(state: SessionState, role: Role, ws: WebSocket)
   return newState;
 }
 
+import * as v from "valibot";
+import { WsAttachmentV1Schema } from "./types";
+
 /**
  * WebSocketからroleを取得
  * WebSocket Hibernation 対応: attachment から role を取得する（参照一致に依存しない）
  */
 export function getRoleFromWebSocket(_state: SessionState, ws: WebSocket): Role | null {
   try {
-    const attachment = ws.deserializeAttachment() as WsAttachmentV1 | null;
+    const rawAttachment = ws.deserializeAttachment();
+    if (!rawAttachment) return null;
 
-    if (!attachment) {
-      return null;
-    }
-
-    // v1 スキーマの検証
-    if (attachment.v !== 1) {
-      return null;
-    }
-
-    // role の検証
-    if (attachment.role !== "host" && attachment.role !== "viewer") {
-      return null;
-    }
-
+    const attachment = v.parse(WsAttachmentV1Schema, rawAttachment);
     return attachment.role;
   } catch (error) {
     console.error("[SignalingSession] Failed to deserialize attachment:", error);

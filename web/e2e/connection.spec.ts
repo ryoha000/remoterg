@@ -60,8 +60,8 @@ test("WebRTC connection test", async ({ page }) => {
 
   // 音声トラックが存在することを確認
   const audioTrackExists = await videoElement.evaluate((video: HTMLVideoElement) => {
-    const stream = video.srcObject as MediaStream | null;
-    if (!stream) return false;
+    const stream = video.srcObject;
+    if (!(stream instanceof MediaStream)) return false;
     const audioTracks = stream.getAudioTracks();
     return audioTracks.length > 0;
   });

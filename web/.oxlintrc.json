@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "unicorn", "jsx-a11y", "oxc"],
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2024": true
+  },
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn",
+    "pedantic": "off",
+    "style": "off"
+  },
+  "rules": {
+    "react/jsx-key": "error",
+    "react/jsx-no-duplicate-props": "error",
+    "react/jsx-no-target-blank": "warn",
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn",
+    "typescript/no-explicit-any": "off",
+    "typescript/no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "unicorn/filename-case": ["warn", { "case": "kebabCase" }],
+    "unicorn/no-array-reverse": "off",
+    "no-console": "off",
+    "react/react-in-jsx-scope": "off",
+    "typescript/restrict-template-expressions": ["warn", { "allowNever": true }]
+  },
+  "ignorePatterns": [
+    "node_modules/**",
+    "dist/**",
+    ".vinxi/**",
+    ".output/**",
+    ".tanstack/**",
+    "routeTree.gen.ts"
+  ]
+}

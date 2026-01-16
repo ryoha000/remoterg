@@ -21,7 +21,7 @@ function getWebSocketStateText(state: number): string {
 export function logMessageReceived(
   fromRole: Role,
   message: SignalingMessage,
-  sessionId: string
+  sessionId: string,
 ): void {
   const messageType = message.type || "unknown";
   let messageDetails = `type=${messageType}`;
@@ -39,21 +39,17 @@ export function logMessageReceived(
   }
 
   console.log(
-    `[SignalingSession] Received message from ${fromRole}: ${messageDetails}, session_id=${sessionId}`
+    `[SignalingSession] Received message from ${fromRole}: ${messageDetails}, session_id=${sessionId}`,
   );
 }
 
 /**
  * WebSocket状態ログを出力
  */
-export function logWebSocketState(
-  targetRole: Role,
-  state: number,
-  _messageType: string
-): void {
+export function logWebSocketState(targetRole: Role, state: number, _messageType: string): void {
   const stateText = getWebSocketStateText(state);
   console.log(
-    `[SignalingSession] Target WebSocket (${targetRole}) state: ${stateText} (${state}), OPEN=${WebSocket.OPEN}`
+    `[SignalingSession] Target WebSocket (${targetRole}) state: ${stateText} (${state}), OPEN=${WebSocket.OPEN}`,
   );
 }
 
@@ -64,10 +60,10 @@ export function logMessageForwarded(
   fromRole: Role,
   toRole: Role,
   messageType: string,
-  messageSize: number
+  messageSize: number,
 ): void {
   console.log(
-    `[SignalingSession] Successfully forwarded ${messageType} from ${fromRole} to ${toRole} (message_size=${messageSize} bytes)`
+    `[SignalingSession] Successfully forwarded ${messageType} from ${fromRole} to ${toRole} (message_size=${messageSize} bytes)`,
   );
 }
 
@@ -77,14 +73,11 @@ export function logMessageForwarded(
 export function logMessageForwardError(
   targetRole: Role,
   messageType: string,
-  error: unknown
+  error: unknown,
 ): void {
+  console.error(`[SignalingSession] Failed to send message to ${targetRole}:`, error);
   console.error(
-    `[SignalingSession] Failed to send message to ${targetRole}:`,
-    error
-  );
-  console.error(
-    `[SignalingSession] Error details - messageType: ${messageType}, targetRole: ${targetRole}, error: ${error}`
+    `[SignalingSession] Error details - messageType: ${messageType}, targetRole: ${targetRole}, error: ${String(error)}`,
   );
 }
 
@@ -96,16 +89,16 @@ export function logWebSocketNotOpen(
   state: number,
   messageType: string,
   hostWsConnected: boolean,
-  viewerWsConnected: boolean
+  viewerWsConnected: boolean,
 ): void {
   const stateText = getWebSocketStateText(state);
   console.warn(
-    `[SignalingSession] Target WebSocket (${targetRole}) is not OPEN (state: ${stateText}/${state}). Message type: ${messageType}. Message will be dropped.`
+    `[SignalingSession] Target WebSocket (${targetRole}) is not OPEN (state: ${stateText}/${state}). Message type: ${messageType}. Message will be dropped.`,
   );
   console.warn(
     `[SignalingSession] Current connections - hostWs: ${
       hostWsConnected ? "connected" : "null"
-    }, viewerWs: ${viewerWsConnected ? "connected" : "null"}`
+    }, viewerWs: ${viewerWsConnected ? "connected" : "null"}`,
   );
 }
 
@@ -116,32 +109,25 @@ export function logWebSocketNull(
   targetRole: Role,
   messageType: string,
   hostWsConnected: boolean,
-  viewerWsConnected: boolean
+  viewerWsConnected: boolean,
 ): void {
   console.warn(
-    `[SignalingSession] Target WebSocket (${targetRole}) is null. Message type: ${messageType}. Message will be dropped.`
+    `[SignalingSession] Target WebSocket (${targetRole}) is null. Message type: ${messageType}. Message will be dropped.`,
   );
   console.warn(
     `[SignalingSession] Current connections - hostWs: ${
       hostWsConnected ? "connected" : "null"
-    }, viewerWs: ${viewerWsConnected ? "connected" : "null"}`
+    }, viewerWs: ${viewerWsConnected ? "connected" : "null"}`,
   );
 }
 
 /**
  * メッセージ処理エラーログを出力
  */
-export function logMessageError(
-  fromRole: Role,
-  dataLength: number,
-  error: unknown
-): void {
+export function logMessageError(fromRole: Role, dataLength: number, error: unknown): void {
+  console.error("[SignalingSession] Failed to parse or forward message:", error);
   console.error(
-    "[SignalingSession] Failed to parse or forward message:",
-    error
-  );
-  console.error(
-    `[SignalingSession] Error details - fromRole: ${fromRole}, data_length: ${dataLength}, error: ${error}`
+    `[SignalingSession] Error details - fromRole: ${fromRole}, data_length: ${dataLength}, error: ${String(error)}`,
   );
   if (error instanceof Error) {
     console.error(`[SignalingSession] Error stack: ${error.stack}`);
@@ -158,13 +144,9 @@ export function logWebSocketConnection(role: Role): void {
 /**
  * WebSocketメッセージイベントログを出力
  */
-export function logWebSocketMessageEvent(
-  role: Role,
-  dataType: string,
-  dataLength: number
-): void {
+export function logWebSocketMessageEvent(role: Role, dataType: string, dataLength: number): void {
   console.log(
-    `[SignalingSession] Message event received from ${role}, data type: ${dataType}, length: ${dataLength}`
+    `[SignalingSession] Message event received from ${role}, data type: ${dataType}, length: ${dataLength}`,
   );
 }
 
@@ -188,10 +170,10 @@ export function logWebSocketError(role: Role, error: unknown): void {
 export function logWebSocketMessageMethod(
   role: Role,
   messageType: string,
-  messageLength: number
+  messageLength: number,
 ): void {
   console.log(
-    `[SignalingSession] webSocketMessage called from ${role}, message type: ${messageType}, length: ${messageLength}`
+    `[SignalingSession] webSocketMessage called from ${role}, message type: ${messageType}, length: ${messageLength}`,
   );
 }
 
@@ -202,12 +184,12 @@ export function logWebSocketCloseMethod(
   role: Role | null,
   code: number,
   reason: string,
-  wasClean: boolean
+  wasClean: boolean,
 ): void {
   console.log(
     `[SignalingSession] webSocketClose called for ${
       role || "unknown"
-    }, code: ${code}, reason: ${reason}, wasClean: ${wasClean}`
+    }, code: ${code}, reason: ${reason}, wasClean: ${wasClean}`,
   );
 }
 
@@ -215,26 +197,20 @@ export function logWebSocketCloseMethod(
  * WebSocketエラーメソッド呼び出しログを出力
  */
 export function logWebSocketErrorMethod(role: Role | null, error: unknown): void {
-  console.error(
-    `[SignalingSession] webSocketError for ${role || "unknown"}:`,
-    error
-  );
+  console.error(`[SignalingSession] webSocketError for ${role || "unknown"}:`, error);
 }
 
 /**
  * roleが見つからない場合のエラーログを出力
  * WebSocket Hibernation 対応: attachment 欠損/不正を明示
  */
-export function logRoleNotFound(
-  hostWsMatch: boolean,
-  viewerWsMatch: boolean
-): void {
+export function logRoleNotFound(hostWsMatch: boolean, viewerWsMatch: boolean): void {
   console.error(
-    "[SignalingSession] webSocketMessage: role not found for WebSocket (attachment missing/invalid)"
+    "[SignalingSession] webSocketMessage: role not found for WebSocket (attachment missing/invalid)",
   );
   console.error(
     `[SignalingSession] This indicates attachment deserialization failed or attachment is invalid. ` +
-    `hostWs match: ${hostWsMatch}, viewerWs match: ${viewerWsMatch}`
+      `hostWs match: ${hostWsMatch}, viewerWs match: ${viewerWsMatch}`,
   );
 }
 
@@ -243,7 +219,6 @@ export function logRoleNotFound(
  */
 export function logHandleMessage(fromRole: Role, dataLength: number): void {
   console.log(
-    `[SignalingSession] handleMessage called from ${fromRole}, data length: ${dataLength}`
+    `[SignalingSession] handleMessage called from ${fromRole}, data length: ${dataLength}`,
   );
 }
-

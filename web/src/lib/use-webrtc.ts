@@ -40,6 +40,27 @@ class PeerConnectionError extends Data.TaggedError("PeerConnectionError")<{
   message: string;
   originalError?: unknown;
 }> {}
+import * as v from "valibot";
+
+// Message Schemas
+const ErrorMessageSchema = v.object({
+  type: v.literal("error"),
+  message: v.string(),
+});
+
+const AnswerMessageSchema = v.object({
+  type: v.literal("answer"),
+  sdp: v.string(),
+});
+
+const IceCandidateMessageSchema = v.object({
+  type: v.literal("ice_candidate"),
+  candidate: v.string(),
+  sdp_mid: v.nullable(v.string()),
+  sdp_mline_index: v.nullable(v.number()),
+});
+
+const MessageSchema = v.union([ErrorMessageSchema, AnswerMessageSchema, IceCandidateMessageSchema]);
 
 export function useWebRTC(options: WebRTCOptions) {
   const {
@@ -211,12 +232,15 @@ export function useWebRTC(options: WebRTCOptions) {
       const ws = yield* Effect.acquireRelease(
         Effect.async<WebSocket, WebSocketError>((resume) => {
           const s = new WebSocket(wsUrl);
-          s.onopen = () => resume(Effect.succeed(s));
-          s.onerror = (e) =>
+          const onOpen = () => resume(Effect.succeed(s));
+          const onError = (e: Event) =>
             resume(Effect.fail(new WebSocketError({ message: "Open failed", originalError: e })));
+          s.addEventListener("open", onOpen);
+          s.addEventListener("error", onError);
         }),
         (ws) =>
           Effect.sync(() => {
+            // cleanup listeners not strictly necessary if ws is closed, but good practice if we were keeping it
             ws.close();
             addLog("WebSocket接続が閉じられました");
           }),
@@ -261,7 +285,7 @@ export function useWebRTC(options: WebRTCOptions) {
               addLog(`H.264 codec preferenceを適用 (${codecs.length}件)`, "success");
             }
           } catch (e) {
-            addLog(`codec preference設定エラー: ${e}`, "error");
+            addLog(`codec preference設定エラー: ${String(e)}`, "error");
           }
         }
       });
@@ -275,15 +299,30 @@ export function useWebRTC(options: WebRTCOptions) {
       // --- Event Streams ---
 
       const wsMessages = Stream.async<string, WebSocketError>((emit) => {
-        ws.onmessage = (event) => emit.single(event.data);
-        ws.onerror = (e) =>
-          emit.fail(new WebSocketError({ message: "Runtime Error", originalError: e }));
-        ws.onclose = () => emit.fail(new WebSocketError({ message: "Closed" }));
+        const onMessage = (event: MessageEvent) => {
+          void emit.single(event.data);
+        };
+        const onError = (e: Event) => {
+          void emit.fail(new WebSocketError({ message: "Runtime Error", originalError: e }));
+        };
+        const onClose = () => {
+          void emit.fail(new WebSocketError({ message: "Closed" }));
+        };
+
+        ws.addEventListener("message", onMessage);
+        ws.addEventListener("error", onError);
+        ws.addEventListener("close", onClose);
+
+        return Effect.sync(() => {
+          ws.removeEventListener("message", onMessage);
+          ws.removeEventListener("error", onError);
+          ws.removeEventListener("close", onClose);
+        });
       });
 
       const iceCandidates = Stream.async<RTCIceCandidate>((emit) => {
         pc.onicecandidate = (event) => {
-          if (event.candidate) emit.single(event.candidate);
+          if (event.candidate) void emit.single(event.candidate);
         };
       });
 
@@ -360,8 +399,13 @@ export function useWebRTC(options: WebRTCOptions) {
             }
 
             if (typeof msg !== "object" || msg === null) return;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const safeMsg = msg as any;
+
+            const parseResult = v.safeParse(MessageSchema, msg);
+            if (!parseResult.success) {
+              addLog(`受信メッセージのパースエラー: ${parseResult.issues[0].message}`, "error");
+              return;
+            }
+            const safeMsg = parseResult.output;
 
             addLog(`受信: ${safeMsg.type}`);
 
@@ -384,7 +428,7 @@ export function useWebRTC(options: WebRTCOptions) {
                 yield* Effect.promise(() => pc.addIceCandidate(candidate));
                 addLog("ICE candidate追加", "success");
               } catch (e) {
-                addLog(`ICE candidate追加エラー: ${e}`, "error");
+                addLog(`ICE candidate追加エラー: ${String(e)}`, "error");
               }
             }
           }),
@@ -414,13 +458,25 @@ export function useWebRTC(options: WebRTCOptions) {
       const handleDataChannel = Effect.gen(function* () {
         const waitForOpen = Effect.async<void>((resume) => {
           if (dc.readyState === "open") resume(Effect.void);
-          else dc.onopen = () => resume(Effect.void);
+          else {
+            const handler = () => {
+              dc.removeEventListener("open", handler);
+              resume(Effect.void);
+            };
+            dc.addEventListener("open", handler);
+          }
         });
 
         // Race between waiting for open and waiting for close (if closed before open)
         const waitForCloseInitial = Effect.async<void>((resume) => {
           if (dc.readyState === "closed") resume(Effect.void);
-          else dc.onclose = () => resume(Effect.void);
+          else {
+            const handler = () => {
+              dc.removeEventListener("close", handler);
+              resume(Effect.void);
+            };
+            dc.addEventListener("close", handler);
+          }
         });
 
         yield* Effect.race(waitForOpen, waitForCloseInitial);
@@ -470,14 +526,20 @@ export function useWebRTC(options: WebRTCOptions) {
         });
 
         const waitForClose = Effect.async<void>((resume) => {
-          dc.onclose = () => {
+          const onClose = () => {
+            dc.removeEventListener("close", onClose);
+            dc.removeEventListener("error", onError);
             addLog("DataChannel Closed");
             resume(Effect.void);
           };
-          dc.onerror = (e) => {
-            addLog(`DataChannel Error: ${e}`);
+          const onError = (e: Event) => {
+            dc.removeEventListener("close", onClose);
+            dc.removeEventListener("error", onError);
+            addLog(`DataChannel Error: ${"type" in e ? e.type : "Unknown Error"}`);
             resume(Effect.void);
           };
+          dc.addEventListener("close", onClose);
+          dc.addEventListener("error", onError);
         });
 
         // Run loops until closed or error
@@ -559,7 +621,16 @@ export function useWebRTC(options: WebRTCOptions) {
       setConnectionState("disconnected");
       setIceConnectionState("new");
     };
-  }, [connectTrigger, signalUrl, sessionId, codec]);
+  }, [
+    connectTrigger,
+    signalUrl,
+    sessionId,
+    codec,
+    addLog,
+    onConnectionStateChange,
+    onIceConnectionStateChange,
+    onTrack,
+  ]);
 
   return {
     connectionState,

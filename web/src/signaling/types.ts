@@ -37,3 +37,13 @@ export type WsAttachmentV1 = {
   role: "host" | "viewer";
   session_id: string;
 };
+
+import * as v from "valibot";
+
+export const RoleSchema = v.picklist(["host", "viewer"]);
+
+export const WsAttachmentV1Schema = v.object({
+  v: v.literal(1),
+  role: RoleSchema,
+  session_id: v.string(),
+});

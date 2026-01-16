@@ -20,12 +20,32 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import * as v from "valibot";
+
+const CodecSchema = v.picklist(["h264", "any"]);
+
 export const Route = createFileRoute("/viewer/$sessionId/$codec")({
   component: ViewerPage,
 });
 
+const getStatusColor = (state: string) => {
+  switch (state) {
+    case "connected":
+      return "bg-green-500";
+    case "connecting":
+      return "bg-yellow-500";
+    case "disconnected":
+      return "bg-zinc-500";
+    case "failed":
+      return "bg-red-500";
+    default:
+      return "bg-zinc-500";
+  }
+};
+// ... (skip lines)
 function ViewerPage() {
-  const { sessionId, codec } = Route.useParams();
+  const { sessionId, codec: rawCodec } = Route.useParams();
+  const codec = v.parse(CodecSchema, rawCodec);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isMuted, setIsMuted] = useState(false); // Default to unmuted, browsers usually require interaction anyway
@@ -47,7 +67,7 @@ function ViewerPage() {
   } = useWebRTC({
     signalUrl: "/api/signal",
     sessionId,
-    codec: codec as "h264" | "any",
+    codec,
     onTrack: (receivedStream) => {
       setStream(receivedStream);
     },
@@ -59,7 +79,7 @@ function ViewerPage() {
     return () => {
       disconnect();
     };
-  }, []);
+  }, [connect, disconnect]);
 
   useEffect(() => {
     const videoEl = videoRef.current;
@@ -110,26 +130,11 @@ function ViewerPage() {
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
+      void document.documentElement.requestFullscreen();
       setIsFullscreen(true);
     } else {
-      document.exitFullscreen();
+      void document.exitFullscreen();
       setIsFullscreen(false);
-    }
-  };
-
-  const getStatusColor = (state: string) => {
-    switch (state) {
-      case "connected":
-        return "bg-green-500";
-      case "connecting":
-        return "bg-yellow-500";
-      case "disconnected":
-        return "bg-zinc-500";
-      case "failed":
-        return "bg-red-500";
-      default:
-        return "bg-zinc-500";
     }
   };
 
@@ -142,7 +147,9 @@ function ViewerPage() {
         muted={isMuted}
         playsInline
         className="absolute inset-0 w-full h-full object-contain z-0"
-      />
+      >
+        <track kind="captions" />
+      </video>
 
       {/* Disconnected State */}
       {connectionState !== "connected" && connectionState !== "connecting" && (
@@ -273,7 +280,7 @@ function ViewerPage() {
                           .slice()
                           .reverse()
                           .map((log, i) => (
-                            <div key={i} className="mb-1">
+                            <div key={`${i}-${log.time}`} className="mb-1">
                               <span className="text-zinc-500">[{log.time}]</span>{" "}
                               <span
                                 className={cn(

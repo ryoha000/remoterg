@@ -1,19 +1,25 @@
 import { useEffect, useState } from "react";
+import * as v from "valibot";
 
-type Theme = "light" | "dark" | "system";
+const ThemeSchema = v.picklist(["light", "dark", "system"]);
+type Theme = v.InferOutput<typeof ThemeSchema>;
 
 export function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window === "undefined") return "system";
-    const stored = localStorage.getItem("theme") as Theme | null;
-    return stored || "system";
+    const stored = localStorage.getItem("theme");
+    const result = v.safeParse(ThemeSchema, stored);
+    return result.success ? result.output : "system";
   });
 
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
-    const stored = localStorage.getItem("theme") as Theme | null;
-    if (stored === "dark") return "dark";
-    if (stored === "light") return "light";
+    const stored = localStorage.getItem("theme");
+    const result = v.safeParse(ThemeSchema, stored);
+    const validStored = result.success ? result.output : null;
+
+    if (validStored === "dark") return "dark";
+    if (validStored === "light") return "light";
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
 
@@ -60,4 +66,3 @@ export function useTheme() {
     resolvedTheme,
   };
 }
-

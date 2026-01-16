@@ -1,5 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import type { SessionState, WsAttachmentV1 } from "./types";
+import * as v from "valibot";
+import type { SessionState } from "./types";
+import { WsAttachmentV1Schema } from "./types";
 import { createSessionState, getRoleFromWebSocket, removeConnection } from "./session-state";
 import { handleMessage } from "./message-handler";
 import { validateRole, handleWebSocketUpgrade } from "./websocket-handler";
@@ -49,19 +51,17 @@ export class SignalingSession extends DurableObject {
 
     for (const ws of websockets) {
       try {
-        const attachment = ws.deserializeAttachment() as WsAttachmentV1 | null;
-
-        // attachment が無い、または不正な場合は close
-        if (!attachment || attachment.v !== 1) {
+        const rawAttachment = ws.deserializeAttachment();
+        if (!rawAttachment) {
           console.warn(
-            `[SignalingSession] Invalid attachment detected, closing WebSocket. attachment=${JSON.stringify(
-              attachment,
-            )}`,
+            `[SignalingSession] Invalid attachment detected (null/undefined), closing WebSocket.`,
           );
           ws.close(1000, "Invalid attachment");
           invalidAttachmentCount++;
           continue;
         }
+
+        const attachment = v.parse(WsAttachmentV1Schema, rawAttachment);
 
         // session_id が一致しない場合は close（誤転送防止）
         if (attachment.session_id !== sessionId) {
@@ -69,16 +69,6 @@ export class SignalingSession extends DurableObject {
             `[SignalingSession] Session ID mismatch, closing WebSocket. expected=${sessionId}, got=${attachment.session_id}`,
           );
           ws.close(1000, "Session ID mismatch");
-          invalidAttachmentCount++;
-          continue;
-        }
-
-        // role が不正な場合は close
-        if (attachment.role !== "host" && attachment.role !== "viewer") {
-          console.warn(
-            `[SignalingSession] Invalid role in attachment, closing WebSocket. role=${attachment.role}`,
-          );
-          ws.close(1000, "Invalid role");
           invalidAttachmentCount++;
           continue;
         }

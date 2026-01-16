@@ -21,7 +21,7 @@ function App() {
   }, []);
 
   const handleConnect = () => {
-    navigate({
+    void navigate({
       to: "/viewer/$sessionId/$codec",
       params: {
         sessionId: sessionId || "fixed",

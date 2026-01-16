@@ -31,8 +31,12 @@ export function setupWebSocketHandlers(
   logWebSocketConnection(role);
 
   server.addEventListener("message", (event) => {
-    const data = event.data as string;
-    logWebSocketMessageEvent(role, typeof event.data, event.data?.length || 0);
+    const data = event.data;
+    if (typeof data !== "string") {
+      console.warn("Received non-string message:", data);
+      return;
+    }
+    logWebSocketMessageEvent(role, typeof data, data.length);
     const currentState = getState();
     handleMessage(currentState, role, data);
   });

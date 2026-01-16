@@ -55,6 +55,10 @@ function ViewerPage() {
   const overlayTimerRef = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  const handleTrack = useCallback((receivedStream: MediaStream) => {
+    setStream(receivedStream);
+  }, []);
+
   const {
     connectionState,
     iceConnectionState,
@@ -68,9 +72,7 @@ function ViewerPage() {
     signalUrl: "/api/signal",
     sessionId,
     codec,
-    onTrack: (receivedStream) => {
-      setStream(receivedStream);
-    },
+    onTrack: handleTrack,
   });
 
   // Auto-connect on mount

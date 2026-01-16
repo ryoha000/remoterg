@@ -1,6 +1,12 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Effect, Console, Schedule, Stream, Queue, Duration, Fiber, Data } from "effect";
+import { Effect, Queue, Fiber, Stream } from "effect";
 import { env } from "@/env";
+import { makeSignaling, WebSocketError, WebRTCMessage } from "./webrtc/signaling";
+import { makeConnection, PeerConnectionError, setH264Preferences } from "./webrtc/connection";
+import { createDataChannel, runDataChannel } from "./webrtc/data-channel";
+import { runStatsLoop, WebRTCStats } from "./webrtc/stats";
+import { makeMediaStreamHandler } from "./webrtc/media";
+import { runMockMode } from "./webrtc/mock";
 
 export interface WebRTCOptions {
   signalUrl: string;
@@ -11,56 +17,7 @@ export interface WebRTCOptions {
   onIceConnectionStateChange?: (state: string) => void;
 }
 
-export interface WebRTCStats {
-  inbound?: {
-    bytesReceived?: number;
-    framesReceived?: number;
-    packetsLost?: number;
-  };
-  track?: {
-    framesDecoded?: number;
-    framesDropped?: number;
-    freezeCount?: number;
-  };
-}
-
-// Helper interface for video element with non-standard captureStream
-interface VideoElementWithCapture extends HTMLVideoElement {
-  captureStream?(): MediaStream;
-  mozCaptureStream?(): MediaStream;
-}
-
-// Errors
-class WebSocketError extends Data.TaggedError("WebSocketError")<{
-  message: string;
-  originalError?: unknown;
-}> {}
-
-class PeerConnectionError extends Data.TaggedError("PeerConnectionError")<{
-  message: string;
-  originalError?: unknown;
-}> {}
-import * as v from "valibot";
-
-// Message Schemas
-const ErrorMessageSchema = v.object({
-  type: v.literal("error"),
-  message: v.string(),
-});
-
-const AnswerMessageSchema = v.object({
-  type: v.literal("answer"),
-  sdp: v.string(),
-});
-
-const IceCandidateMessageSchema = v.object({
-  type: v.literal("ice_candidate"),
-  candidate: v.string(),
-  sdp_mid: v.nullable(v.string()),
-  sdp_mline_index: v.nullable(v.number()),
-});
-
-const MessageSchema = v.union([ErrorMessageSchema, AnswerMessageSchema, IceCandidateMessageSchema]);
+export type { WebRTCStats };
 
 export function useWebRTC(options: WebRTCOptions) {
   const {
@@ -140,14 +97,11 @@ export function useWebRTC(options: WebRTCOptions) {
   }, []);
 
   const manualDisconnect = useCallback(() => {
-    // Simply stop the effect by resetting the trigger.
-    // The cleanup function of the useEffect will handle state resets.
     setConnectTrigger(0);
   }, []);
 
   useEffect(() => {
     if (connectTrigger === 0) {
-      // Ensure state is reset when not connected
       setConnectionState("disconnected");
       setIceConnectionState("new");
       return;
@@ -156,57 +110,8 @@ export function useWebRTC(options: WebRTCOptions) {
     const program = Effect.gen(function* () {
       // --- Mock Mode Check ---
       if (env.VITE_USE_MOCK === "true") {
-        yield* Console.info("Mock Mode: Starting...");
-        addLog("Mock Mode: Starting sequence...", "info");
-
-        yield* Effect.sync(() => setConnectionState("connecting"));
-
-        const cleanupVideo = yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            const vid = document.createElement("video");
-            vid.src = "/mock.mp4";
-            vid.loop = true;
-            vid.muted = true;
-            vid.playsInline = true;
-            vid.style.position = "absolute";
-            vid.style.top = "-9999px";
-            vid.style.left = "-9999px";
-            document.body.appendChild(vid);
-            return vid;
-          }),
-          (vid) =>
-            Effect.sync(() => {
-              vid.pause();
-              vid.remove();
-            }),
-        );
-
-        yield* Effect.promise(() => cleanupVideo.play());
-        addLog("Mock Mode: Video playing", "success");
-
-        const stream = yield* Effect.try({
-          try: () => {
-            const videoElement = cleanupVideo as VideoElementWithCapture;
-            if (typeof videoElement.captureStream === "function") {
-              return videoElement.captureStream();
-            } else if (typeof videoElement.mozCaptureStream === "function") {
-              return videoElement.mozCaptureStream();
-            }
-            throw new Error("captureStream not supported");
-          },
-          catch: (e) => new PeerConnectionError({ message: String(e) }),
-        });
-
-        yield* Effect.sleep(Duration.millis(1000));
-
-        yield* Effect.sync(() => {
-          setConnectionState("connected");
-          setIceConnectionState("connected");
-          onTrack?.(stream);
-          addLog("Mock Mode: Connected", "success");
-        });
-
-        yield* Effect.never;
+        yield* runMockMode(onTrack, setConnectionState, setIceConnectionState, addLog);
+        return;
       }
 
       // --- Real WebRTC Logic ---
@@ -225,139 +130,44 @@ export function useWebRTC(options: WebRTCOptions) {
         debugActionQueue.current = debugQ;
       });
 
-      // Acquire WebSocket
+      // 1. Signaling
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}${signalUrl}?session_id=${sessionId}&role=viewer`;
 
-      const ws = yield* Effect.acquireRelease(
-        Effect.async<WebSocket, WebSocketError>((resume) => {
-          const s = new WebSocket(wsUrl);
-          const onOpen = () => resume(Effect.succeed(s));
-          const onError = (e: Event) =>
-            resume(Effect.fail(new WebSocketError({ message: "Open failed", originalError: e })));
-          s.addEventListener("open", onOpen);
-          s.addEventListener("error", onError);
-        }),
-        (ws) =>
-          Effect.sync(() => {
-            // cleanup listeners not strictly necessary if ws is closed, but good practice if we were keeping it
-            ws.close();
-            addLog("WebSocket接続が閉じられました");
-          }),
-      );
+      // Error handling for Signaling
+      const signalingEffect = makeSignaling(wsUrl);
 
+      const { ws, messages: wsMessages, send: sendWs } = yield* signalingEffect;
       yield* Effect.sync(() => addLog("WebSocket接続確立", "success"));
 
-      // Acquire PeerConnection
-      const pc = yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          const config: RTCConfiguration = {
-            iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
-          };
-          return new RTCPeerConnection(config);
-        }),
-        (pc) =>
-          Effect.sync(() => {
-            pc.close();
-          }),
-      );
+      // 2. PeerConnection
+      const config: RTCConfiguration = {
+        iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+      };
+      const {
+        pc,
+        connectionState: pcStateStream,
+        iceConnectionState: iceStateStream,
+        iceCandidates: iceCandidateStream,
+        track: trackStream,
+      } = yield* makeConnection(config);
+
       yield* Effect.sync(() => addLog("PeerConnectionを作成..."));
 
-      // Setup Transceivers
+      // 3. Setup Transceivers & Codecs
       yield* Effect.sync(() => {
         pc.addTransceiver("video", { direction: "recvonly" });
         pc.addTransceiver("audio", { direction: "recvonly" });
-        if (codec === "h264") {
-          try {
-            const capabilities = RTCRtpSender.getCapabilities("video");
-            const codecs = (capabilities?.codecs ?? []).filter(
-              (c) =>
-                c.mimeType === "video/H264" &&
-                (c.sdpFmtpLine ?? "").includes("packetization-mode=1"),
-            );
-            const transceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === "video");
-            if (
-              codecs.length > 0 &&
-              transceiver &&
-              typeof transceiver.setCodecPreferences === "function"
-            ) {
-              transceiver.setCodecPreferences(codecs);
-              addLog(`H.264 codec preferenceを適用 (${codecs.length}件)`, "success");
-            }
-          } catch (e) {
-            addLog(`codec preference設定エラー: ${String(e)}`, "error");
-          }
-        }
       });
 
-      // Create DataChannel
-      const dc = yield* Effect.acquireRelease(
-        Effect.sync(() => pc.createDataChannel("input", { ordered: true })),
-        (dc) => Effect.sync(() => dc.close()),
-      );
+      if (codec === "h264") {
+        const applied = yield* setH264Preferences(pc);
+        if (applied) addLog("H.264 codec preferenceを適用", "success");
+        else addLog("H.264 codec preference適用失敗 (or no codec found)", "warning");
+      }
 
-      // --- Event Streams ---
-
-      const wsMessages = Stream.async<string, WebSocketError>((emit) => {
-        const onMessage = (event: MessageEvent) => {
-          void emit.single(event.data);
-        };
-        const onError = (e: Event) => {
-          void emit.fail(new WebSocketError({ message: "Runtime Error", originalError: e }));
-        };
-        const onClose = () => {
-          void emit.fail(new WebSocketError({ message: "Closed" }));
-        };
-
-        ws.addEventListener("message", onMessage);
-        ws.addEventListener("error", onError);
-        ws.addEventListener("close", onClose);
-
-        return Effect.sync(() => {
-          ws.removeEventListener("message", onMessage);
-          ws.removeEventListener("error", onError);
-          ws.removeEventListener("close", onClose);
-        });
-      });
-
-      const iceCandidates = Stream.async<RTCIceCandidate>((emit) => {
-        pc.onicecandidate = (event) => {
-          if (event.candidate) void emit.single(event.candidate);
-        };
-      });
-
-      // Connection State Stream
-      const connectionStateStream = Stream.async<void>((emit) => {
-        const handler = () => {
-          void emit.single(void 0);
-        };
-        pc.addEventListener("connectionstatechange", handler);
-        return Effect.sync(() => {
-          pc.removeEventListener("connectionstatechange", handler);
-        });
-      });
-
-      // ICE Connection State Stream
-      const iceConnectionStateStream = Stream.async<void>((emit) => {
-        const handler = () => {
-          void emit.single(void 0);
-        };
-        pc.addEventListener("iceconnectionstatechange", handler);
-        return Effect.sync(() => {
-          pc.removeEventListener("iceconnectionstatechange", handler);
-        });
-      });
-
-      // Track Stream
-      const trackStream = Stream.async<RTCTrackEvent>((emit) => {
-        const handler = (event: RTCTrackEvent) => {
-          void emit.single(event);
-        };
-        pc.addEventListener("track", handler);
-        return Effect.sync(() => {
-          pc.removeEventListener("track", handler);
-        });
-      });
+      // 4. Data Channel (Creation)
+      const dc = yield* createDataChannel(pc);
 
       // --- Flows ---
 
@@ -367,206 +177,101 @@ export function useWebRTC(options: WebRTCOptions) {
         yield* Effect.promise(() => pc.setLocalDescription(offer));
         addLog("Offerを作成・設定しました", "success");
 
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp, codec }));
-          addLog("Offerを送信しました", "success");
-        }
+        yield* sendWs({ type: "offer", sdp: offer.sdp, codec });
+        addLog("Offerを送信しました", "success");
       });
 
-      yield* sendOffer;
-
-      // Process Incoming Messages
-      const handleWsParams = wsMessages.pipe(
-        Stream.runForEach((data) =>
+      // Handle Incoming Messages (Signaling)
+      // This stream needs to stay alive
+      const handleSignalingMessages = wsMessages.pipe(
+        Stream.runForEach((msg: WebRTCMessage) =>
           Effect.gen(function* () {
-            if (typeof data !== "string") return;
-            let msg: unknown;
-            try {
-              msg = JSON.parse(data);
-            } catch {
-              return;
-            }
-
-            if (typeof msg !== "object" || msg === null) return;
-
-            const parseResult = v.safeParse(MessageSchema, msg);
-            if (!parseResult.success) {
-              addLog(`受信メッセージのパースエラー: ${parseResult.issues[0].message}`, "error");
-              return;
-            }
-            const safeMsg = parseResult.output;
-
-            addLog(`受信: ${safeMsg.type}`);
-
-            if (safeMsg.type === "error") {
-              addLog(`サーバーエラー: ${safeMsg.message}`, "error");
+            addLog(`受信: ${msg.type}`);
+            if (msg.type === "error") {
+              addLog(`サーバーエラー: ${msg.message}`, "error");
               yield* Effect.fail(new WebSocketError({ message: "Server reported error" }));
-            } else if (safeMsg.type === "answer") {
+            } else if (msg.type === "answer") {
               addLog("Answer受信");
               yield* Effect.promise(() =>
-                pc.setRemoteDescription({ type: "answer", sdp: safeMsg.sdp }),
+                pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }),
               );
               addLog("Answer設定完了", "success");
-            } else if (safeMsg.type === "ice_candidate") {
+            } else if (msg.type === "ice_candidate") {
               const candidate = new RTCIceCandidate({
-                candidate: safeMsg.candidate,
-                sdpMid: safeMsg.sdp_mid,
-                sdpMLineIndex: safeMsg.sdp_mline_index,
+                candidate: msg.candidate,
+                sdpMid: msg.sdp_mid,
+                sdpMLineIndex: msg.sdp_mline_index,
               });
-              try {
-                yield* Effect.promise(() => pc.addIceCandidate(candidate));
-                addLog("ICE candidate追加", "success");
-              } catch (e) {
-                addLog(`ICE candidate追加エラー: ${String(e)}`, "error");
-              }
-            }
-          }),
-        ),
-      );
-
-      // Send ICE Candidates
-      const handleOutgoingIceCandidates = iceCandidates.pipe(
-        Stream.runForEach((candidate) =>
-          Effect.sync(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(
-                JSON.stringify({
-                  type: "ice_candidate",
-                  candidate: candidate.candidate,
-                  sdp_mid: candidate.sdpMid,
-                  sdp_mline_index: candidate.sdpMLineIndex,
-                }),
+              yield* Effect.promise(() => pc.addIceCandidate(candidate)).pipe(
+                Effect.catchAll((e) =>
+                  Effect.sync(() => addLog(`ICE Candidate Error: ${e}`, "error")),
+                ),
               );
-              addLog("ICE candidate送信");
+              addLog("ICE candidate追加", "success");
             }
           }),
         ),
       );
 
-      // Data Channel Logic
-      const handleDataChannel = Effect.gen(function* () {
-        const waitForOpen = Effect.async<void>((resume) => {
-          if (dc.readyState === "open") resume(Effect.void);
-          else {
-            const handler = () => {
-              dc.removeEventListener("open", handler);
-              resume(Effect.void);
-            };
-            dc.addEventListener("open", handler);
-          }
-        });
+      // Handle Outgoing ICE Candidates
+      const handleOutgoingIce = iceCandidateStream.pipe(
+        Stream.runForEach((candidate) =>
+          Effect.gen(function* () {
+            yield* sendWs({
+              type: "ice_candidate",
+              candidate: candidate.candidate,
+              sdp_mid: candidate.sdpMid,
+              sdp_mline_index: candidate.sdpMLineIndex,
+            });
+            addLog("ICE candidate送信");
+          }),
+        ),
+      );
 
-        // Race between waiting for open and waiting for close (if closed before open)
-        const waitForCloseInitial = Effect.async<void>((resume) => {
-          if (dc.readyState === "closed") resume(Effect.void);
-          else {
-            const handler = () => {
-              dc.removeEventListener("close", handler);
-              resume(Effect.void);
-            };
-            dc.addEventListener("close", handler);
-          }
-        });
+      // Handle Connection State
+      const handleConnectionState = pcStateStream.pipe(
+        Stream.runForEach((state) =>
+          Effect.sync(() => {
+            addLog(`接続状態: ${state}`);
+            setConnectionState(state);
+            onConnectionStateChange?.(state);
+          }),
+        ),
+      );
 
-        yield* Effect.race(waitForOpen, waitForCloseInitial);
+      const handleIceConnectionState = iceStateStream.pipe(
+        Stream.runForEach((state) =>
+          Effect.sync(() => {
+            addLog(`ICE接続状態: ${state}`);
+            setIceConnectionState(state);
+            onIceConnectionStateChange?.(state);
+          }),
+        ),
+      );
 
-        if (dc.readyState !== "open") {
-          addLog("DataChannel failed to open (closed before open)", "error");
-          return;
-        }
-
-        addLog("DataChannel OPEN", "success");
-
-        const loops = Effect.gen(function* () {
-          const keepAlive = Effect.repeat(
-            Effect.sync(() => {
-              if (dc.readyState === "open") {
-                dc.send(JSON.stringify({ Ping: { timestamp: Date.now() } }));
-              }
-            }),
-            Schedule.spaced(Duration.seconds(3)),
-          );
-
-          const processKeys = Queue.take(keyQ).pipe(
-            Effect.tap((item) =>
-              Effect.sync(() => {
-                if (dc.readyState === "open") {
-                  dc.send(JSON.stringify({ Key: { key: item.key, down: item.down } }));
-                }
-              }),
-            ),
-            Effect.forever,
-          );
-
-          const processScreens = Queue.take(screenQ).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                if (dc.readyState === "open") {
-                  dc.send(JSON.stringify({ ScreenshotRequest: null }));
-                }
-              }),
-            ),
-            Effect.forever,
-          );
-
-          yield* Effect.all([keepAlive, processKeys, processScreens], {
-            concurrency: "unbounded",
-          });
-        });
-
-        const waitForClose = Effect.async<void>((resume) => {
-          const onClose = () => {
-            dc.removeEventListener("close", onClose);
-            dc.removeEventListener("error", onError);
-            addLog("DataChannel Closed");
-            resume(Effect.void);
-          };
-          const onError = (e: Event) => {
-            dc.removeEventListener("close", onClose);
-            dc.removeEventListener("error", onError);
-            addLog(`DataChannel Error: ${"type" in e ? e.type : "Unknown Error"}`);
-            resume(Effect.void);
-          };
-          dc.addEventListener("close", onClose);
-          dc.addEventListener("error", onError);
-        });
-
-        // Run loops until closed or error
-        yield* Effect.race(loops, waitForClose);
+      // Handle Tracks
+      const handleTracks = makeMediaStreamHandler(trackStream, (stream) => {
+        addLog("ストリームを受信", "success");
+        onTrack?.(stream);
       });
 
-      // Stats Loop
-      const statsLoop = Effect.repeat(
-        Effect.promise(async () => {
-          const receiver = pc.getReceivers().find((r) => r.track?.kind === "video");
-          if (!receiver) return;
-          const reports = await receiver.getStats();
-          let inbound: WebRTCStats["inbound"];
-          let track: WebRTCStats["track"];
-
-          reports.forEach((report) => {
-            if (report.type === "inbound-rtp" && report.kind === "video") {
-              inbound = {
-                bytesReceived: report.bytesReceived,
-                framesReceived: report.framesReceived,
-                packetsLost: report.packetsLost,
-              };
-            } else if (report.type === "track" && report.kind === "video") {
-              track = {
-                framesDecoded: report.framesDecoded,
-                framesDropped: report.framesDropped,
-                freezeCount: report.freezeCount,
-              };
-            }
-          });
-
-          setStats({ inbound, track });
-        }),
-        Schedule.spaced(Duration.seconds(2)),
+      // Handle Data Channel Loop (Non-blocking / parallel)
+      const handleDataChannelLoop = runDataChannel(dc, keyQ, screenQ, () =>
+        addLog("DataChannel OPEN", "success"),
+      ).pipe(
+        // If DataChannel fails, we log it but don't necessarily kill the whole connection?
+        // But strict requirement say if it fails it might be bad.
+        // Let's log error.
+        Effect.catchAll(() => Effect.sync(() => addLog("DataChannel Error", "error"))),
       );
 
-      // Debug Action Loop
-      const debugLoop = Queue.take(debugQ).pipe(
+      // Stats Loop (Independent)
+      const handleStats = runStatsLoop(pc, setStats).pipe(
+        Effect.catchAll((e) => Effect.sync(() => console.error("Stats Error", e))),
+      );
+
+      // Debug Loop
+      const handleDebug = Queue.take(debugQ).pipe(
         Effect.flatMap((action) => {
           if (action === "close_ws") {
             return Effect.sync(() => {
@@ -588,61 +293,20 @@ export function useWebRTC(options: WebRTCOptions) {
         Effect.forever,
       );
 
-      // Process Connection State Changes
-      const handleConnectionState = connectionStateStream.pipe(
-        Stream.runForEach(() =>
-          Effect.sync(() => {
-            const state = pc.connectionState;
-            addLog(`接続状態: ${state}`);
-            setConnectionState(state);
-            onConnectionStateChange?.(state);
-          }),
-        ),
-      );
+      // Execute Sending Offer
+      yield* sendOffer;
 
-      // Process ICE Connection State Changes
-      const handleIceConnectionState = iceConnectionStateStream.pipe(
-        Stream.runForEach(() =>
-          Effect.sync(() => {
-            const state = pc.iceConnectionState;
-            addLog(`ICE接続状態: ${state}`);
-            setIceConnectionState(state);
-            onIceConnectionStateChange?.(state);
-          }),
-        ),
-      );
-
-      // Process Incoming Tracks
-      let remoteStream: MediaStream | null = null;
-      const handleTracks = trackStream.pipe(
-        Stream.runForEach((event) =>
-          Effect.sync(() => {
-            addLog(
-              `ストリームを受信 (tracks=${event.streams?.[0]?.getTracks().length ?? 0})`,
-              "success",
-            );
-            if (event.track) {
-              addLog(`トラック情報 kind=${event.track.kind} id=${event.track.id}`, "success");
-              if (!remoteStream) {
-                remoteStream = new MediaStream();
-              }
-              remoteStream.addTrack(event.track);
-              onTrack?.(remoteStream);
-            }
-          }),
-        ),
-      );
-
+      // Run all background processes
       yield* Effect.all(
         [
-          handleWsParams,
-          handleOutgoingIceCandidates,
-          handleDataChannel,
-          statsLoop,
-          debugLoop,
+          handleSignalingMessages,
+          handleOutgoingIce,
           handleConnectionState,
           handleIceConnectionState,
           handleTracks,
+          handleDataChannelLoop,
+          handleStats,
+          handleDebug,
         ],
         { concurrency: "unbounded", discard: true },
       );

@@ -3,7 +3,7 @@ use core_types::{
     CaptureBackend, CaptureCommandReceiver, CaptureConfig, CaptureFrameSender, CaptureFuture,
     CaptureMessage, Frame,
 };
-use std::sync::mpsc;
+use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{debug, error, info, span, Level};
 use windows_capture::capture::{
@@ -114,9 +114,15 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let send_span = span!(Level::DEBUG, "send_frame");
         let _send_guard = send_span.enter();
 
-        // std::sync::mpscを使って同期送信
-        if let Err(e) = self.frame_tx.send(core_frame) {
-            error!("Failed to send frame: {}", e);
+        // tokio::sync::mpscを使って非同期送信（try_sendで詰まってる場合はドロップ）
+        match self.frame_tx.try_send(core_frame) {
+            Ok(_) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                debug!("Frame dropped (channel full)");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                error!("Failed to send frame: channel closed");
+            }
         }
 
         drop(_send_guard);
@@ -166,8 +172,9 @@ impl CaptureService {
     async fn run_inner(mut self) -> Result<()> {
         info!("CaptureService (windows-capture) started");
 
-        // std::sync::mpscチャンネルを作成（キャプチャスレッドからtokioタスクへのブリッジ）
-        let (std_frame_tx, std_frame_rx) = mpsc::channel::<Frame>();
+        // tokio::sync::mpscチャンネルを作成（キャプチャスレッドからtokioタスクへのブリッジ）
+        // capacity: 1 に設定して、消費が追いつかない場合はCaptureHandler側でドロップさせる（最新フレーム優先）
+        let (bridge_tx, mut bridge_rx) = mpsc::channel::<Frame>(1);
         let tokio_frame_tx = self.frame_tx.clone();
 
         // std::sync::mpscからtokio::sync::mpscへのブリッジタスク
@@ -175,25 +182,18 @@ impl CaptureService {
         let last_frame_clone = last_frame.clone();
 
         let bridge_handle = tokio::spawn(async move {
-            loop {
-                match std_frame_rx.recv() {
-                    Ok(frame) => {
-                        // 最新フレームを保存
-                        if let Ok(mut guard) = last_frame_clone.lock() {
-                            *guard = Some(frame.clone());
-                        }
-                        
-                        if let Err(e) = tokio_frame_tx.send(frame).await {
-                            error!("Failed to forward frame to tokio channel: {}", e);
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        debug!("std_frame_rx channel closed");
-                        break;
-                    }
+            while let Some(frame) = bridge_rx.recv().await {
+                // 最新フレームを保存
+                if let Ok(mut guard) = last_frame_clone.lock() {
+                    *guard = Some(frame.clone());
+                }
+
+                if let Err(e) = tokio_frame_tx.send(frame).await {
+                    error!("Failed to forward frame to tokio channel: {}", e);
+                    break;
                 }
             }
+            debug!("bridge_rx channel closed");
         });
 
         let mut capture_control: Option<CaptureControl<CaptureHandler, anyhow::Error>> = None;
@@ -216,7 +216,7 @@ impl CaptureService {
                             }
 
                             // 新しいキャプチャセッションを開始
-                            match Self::start_capture(hwnd, &config, std_frame_tx.clone()).await {
+                            match Self::start_capture(hwnd, &config, bridge_tx.clone()).await {
                                 Ok(control) => {
                                     capture_control = Some(control);
                                     info!("Capture started successfully");
@@ -257,7 +257,7 @@ impl CaptureService {
                                     }
 
                                     // 新しい設定で再開
-                                    match Self::start_capture(hwnd_raw, &config, std_frame_tx.clone()).await {
+                                    match Self::start_capture(hwnd_raw, &config, bridge_tx.clone()).await {
                                         Ok(control) => {
                                             capture_control = Some(control);
                                             info!("Capture restarted with new config");
@@ -298,8 +298,8 @@ impl CaptureService {
             let _ = control.stop();
         }
 
-        // std_frame_txを閉じてブリッジタスクを終了させる
-        drop(std_frame_tx);
+        // bridge_txを閉じてブリッジタスクを終了させる
+        drop(bridge_tx);
         let _ = bridge_handle.await;
 
         info!("CaptureService (windows-capture) stopped");

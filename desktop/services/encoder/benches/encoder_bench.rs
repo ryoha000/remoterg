@@ -1,6 +1,7 @@
 use core_types::{EncodeJob, EncodeResult, VideoEncoderFactory};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "h264")]
@@ -191,10 +192,11 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
                     for i in 0..batch_size {
                         // タイムスタンプは 33ms 間隔で設定
                         let timestamp = (i * 33) as u64;
+                        let rgba = Arc::new(input.0[i as usize].clone());
                         let job = EncodeJob {
                             width: black_box(width),
                             height: black_box(height),
-                            rgba: black_box(input.0[i as usize].clone()),
+                            rgba: black_box(rgba),
                             timestamp: black_box(timestamp),
                             enqueue_at: black_box(Instant::now()),
                             request_keyframe: false,

@@ -4,6 +4,7 @@ mod tests {
     use crate::h264::mmf::mf::{check_mf_available, find_h264_encoder, init_media_foundation};
     use crate::h264::mmf::MediaFoundationH264EncoderFactory;
     use core_types::{EncodeJob, ShutdownError, VideoCodec, VideoEncoderFactory};
+    use std::sync::Arc;
     use std::{
         sync::Once,
         time::{Duration, Instant},
@@ -47,10 +48,11 @@ mod tests {
         timestamp: u64,
         request_keyframe: bool,
     ) -> EncodeJob {
+        let arc_rgba = Arc::new(rgba);
         EncodeJob {
             width,
             height,
-            rgba,
+            rgba: arc_rgba,
             timestamp,
             enqueue_at: Instant::now(),
             request_keyframe,

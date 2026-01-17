@@ -1,10 +1,10 @@
 use core_types::Frame;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use video_capture::resize_image_impl;
 
 /// ダミーのRGBAデータを生成する
-fn generate_rgba_data(width: u32, height: u32) -> Vec<u8> {
+fn generate_rgba_data(width: u32, height: u32) -> Arc<Vec<u8>> {
     let mut data = Vec::with_capacity((width * height * 4) as usize);
     for y in 0..height {
         for x in 0..width {
@@ -19,7 +19,7 @@ fn generate_rgba_data(width: u32, height: u32) -> Vec<u8> {
             data.push(a);
         }
     }
-    data
+    Arc::new(data)
 }
 
 fn bench_resize_image(c: &mut Criterion) {

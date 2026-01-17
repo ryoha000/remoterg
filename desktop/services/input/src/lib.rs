@@ -107,20 +107,10 @@ impl InputService {
         // Let's assume we need to swap B and R.
         let width = frame.width;
         let height = frame.height;
-        // Arc<Vec<u8>>なので、変更するにはクローンが必要
-        let mut rgba_data = (*frame.data).clone();
-
-        // BGRA -> RGBA conversion
-        for chunk in rgba_data.chunks_exact_mut(4) {
-             let b = chunk[0];
-             let r = chunk[2];
-             chunk[0] = r;
-             chunk[2] = b;
-        }
 
         let mut png_data = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
-        encoder.write_image(&rgba_data, width, height, ColorType::Rgba8.into())?;
+        encoder.write_image(&frame.data, width, height, ColorType::Rgba8.into())?;
 
         // 3. Create Metadata
         let id = Uuid::new_v4().to_string();

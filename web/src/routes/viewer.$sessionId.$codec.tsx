@@ -17,6 +17,7 @@ import {
   Volume2,
   VolumeX,
   Bug,
+  Camera,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -66,6 +67,7 @@ function ViewerPage() {
     connect,
     disconnect,
     logs,
+    requestScreenshot,
     simulateWsClose,
     simulatePcClose,
   } = useWebRTC({
@@ -208,6 +210,16 @@ function ViewerPage() {
               aria-label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
             >
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-white hover:bg-white/20 rounded-full"
+              onClick={requestScreenshot}
+              aria-label="Take Screenshot"
+            >
+              <Camera className="w-5 h-5" />
             </Button>
 
             <Popover>

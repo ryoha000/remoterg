@@ -32,11 +32,12 @@ impl Default for CaptureConfig {
 }
 
 /// Capture サービスへのメッセージ
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum CaptureMessage {
     Start { hwnd: u64 },
     Stop,
     UpdateConfig { size: CaptureSize, fps: u32 },
+    RequestFrame { tx: tokio::sync::oneshot::Sender<Frame> },
 }
 
 /// Capture サービスの実行結果 Future 型
@@ -239,6 +240,35 @@ pub enum DataChannelMessage {
     ScreenshotRequest,
     Ping { timestamp: u64 },
     Pong { timestamp: u64 },
+    // Outgoing messages (Host -> Client)
+    #[serde(rename = "SCREENSHOT_METADATA")]
+    ScreenshotMetadata {
+        payload: ScreenshotMetadataPayload,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenshotMetadataPayload {
+    pub id: String,
+    pub timestamp: u64,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+    pub size: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScreenshotChunk {
+    pub id: String,
+    pub seq: u32,
+    pub total: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub enum OutgoingDataChannelMessage {
+    Text(DataChannelMessage),
+    Binary(Vec<u8>),
 }
 
 /// Capture 実装の共通トレイト

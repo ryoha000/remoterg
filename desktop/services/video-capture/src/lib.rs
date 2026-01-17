@@ -166,14 +166,22 @@ impl CaptureService {
         info!("CaptureService (windows-capture) started");
 
         // std::sync::mpscチャンネルを作成（キャプチャスレッドからtokioタスクへのブリッジ）
-        let (std_frame_tx, std_frame_rx) = mpsc::channel();
+        let (std_frame_tx, std_frame_rx) = mpsc::channel::<Frame>();
         let tokio_frame_tx = self.frame_tx.clone();
 
         // std::sync::mpscからtokio::sync::mpscへのブリッジタスク
+        let last_frame = std::sync::Arc::new(std::sync::Mutex::new(None::<Frame>));
+        let last_frame_clone = last_frame.clone();
+
         let bridge_handle = tokio::spawn(async move {
             loop {
                 match std_frame_rx.recv() {
                     Ok(frame) => {
+                        // 最新フレームを保存
+                        if let Ok(mut guard) = last_frame_clone.lock() {
+                            *guard = Some(frame.clone());
+                        }
+                        
                         if let Err(e) = tokio_frame_tx.send(frame).await {
                             error!("Failed to forward frame to tokio channel: {}", e);
                             break;
@@ -258,6 +266,21 @@ impl CaptureService {
                                         }
                                     }
                                 }
+                            }
+                        }
+                        Some(CaptureMessage::RequestFrame { tx }) => {
+                            info!("RequestFrame received");
+                            let frame_opt = if let Ok(guard) = last_frame.lock() {
+                                guard.clone()
+                            } else {
+                                None
+                            };
+
+                            if let Some(frame) = frame_opt {
+                                let _ = tx.send(frame);
+                            } else {
+                                tracing::warn!("RequestFrame: No frame available");
+                                // 失敗してもtxはdroppedで通知されるのでOK
                             }
                         }
                         None => {

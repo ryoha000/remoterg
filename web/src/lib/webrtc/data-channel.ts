@@ -1,10 +1,26 @@
 import { Effect, Queue, Schedule, Duration } from "effect";
+import * as v from "valibot";
 
 export const createDataChannel = (pc: RTCPeerConnection, label: string = "input") =>
   Effect.acquireRelease(
     Effect.sync(() => pc.createDataChannel(label, { ordered: true })),
     (dc) => Effect.sync(() => dc.close()),
   );
+
+const ScreenshotMetadataPayloadSchema = v.object({
+  id: v.string(),
+  size: v.number(),
+  format: v.string(),
+});
+
+const IncomingMessageSchema = v.object({
+  SCREENSHOT_METADATA: v.optional(
+    v.object({
+      payload: ScreenshotMetadataPayloadSchema,
+    }),
+  ),
+  Pong: v.optional(v.unknown()),
+});
 
 export const runDataChannel = (
   dc: RTCDataChannel,
@@ -78,15 +94,83 @@ export const runDataChannel = (
     const waitForClose = Effect.async<void>((resume) => {
       const onClose = () => {
         dc.removeEventListener("close", onClose);
+        dc.removeEventListener("error", onClose);
+        dc.removeEventListener("message", onMessage);
         resume(Effect.void);
       };
+
+      // Screenshot receiving state
+      let incomingScreenshot: {
+        id: string;
+        size: number;
+        format: string;
+        received: number;
+        chunks: Uint8Array[];
+      } | null = null;
+
+      const onMessage = (event: MessageEvent) => {
+        if (typeof event.data === "string") {
+          try {
+            const raw = JSON.parse(event.data);
+            const msg = v.parse(IncomingMessageSchema, raw);
+
+            if (msg.SCREENSHOT_METADATA) {
+              const payload = msg.SCREENSHOT_METADATA.payload;
+              console.log("Screenshot metadata received:", payload);
+              incomingScreenshot = {
+                id: payload.id,
+                size: payload.size,
+                format: payload.format,
+                received: 0,
+                chunks: [],
+              };
+            } else if (msg.Pong) {
+              // Handle Pong if needed, currently debug logging elsewhere or ignored
+            }
+          } catch (e) {
+            console.error("Failed to parse data channel message:", e);
+          }
+        } else if (event.data instanceof ArrayBuffer) {
+          if (incomingScreenshot) {
+            const chunk = new Uint8Array(event.data);
+            incomingScreenshot.chunks.push(chunk);
+            incomingScreenshot.received += chunk.byteLength;
+
+            // console.log(`Received chunk: ${chunk.byteLength}, total: ${incomingScreenshot.received}/${incomingScreenshot.size}`);
+
+            if (incomingScreenshot.received >= incomingScreenshot.size) {
+              console.log("Screenshot complete, creating blob");
+              const blob = new Blob(incomingScreenshot.chunks as BlobPart[], {
+                type: `image/${incomingScreenshot.format}`,
+              });
+              const url = URL.createObjectURL(blob);
+
+              // Trigger download
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `screenshot-${incomingScreenshot.id}.${incomingScreenshot.format}`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+
+              incomingScreenshot = null;
+            }
+          } else {
+            console.warn("Received binary data without active screenshot metadata");
+          }
+        }
+      };
+
       // Close and error both terminate the loop
       dc.addEventListener("close", onClose);
       dc.addEventListener("error", onClose);
+      dc.addEventListener("message", onMessage);
 
       return Effect.sync(() => {
         dc.removeEventListener("close", onClose);
         dc.removeEventListener("error", onClose);
+        dc.removeEventListener("message", onMessage);
       });
     });
 

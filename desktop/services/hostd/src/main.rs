@@ -178,12 +178,16 @@ async fn main() -> Result<()> {
     let video_stream_service =
         VideoStreamService::new(frame_rx, default_video_encoder, video_stream_msg_rx);
 
-    // WebRtcService を作成（エンコーダーファクトリと frame_rx を削除）
+    // WebRTCサービスの起動
+    // Outgoing DataChannelメッセージ用チャネル (InputService -> WebRtcService)
+    let (outgoing_dc_tx, outgoing_dc_rx) = mpsc::channel(100);
+
     let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
         signaling_response_tx,
         data_channel_tx,
+        Some(outgoing_dc_rx), // Pass outgoing_dc_rx
         Some(video_track_tx),
-        Some(video_stream_msg_tx.clone()),
+        Some(video_stream_msg_tx.clone()), // Use clone of video_stream_msg_tx
         Some(audio_track_tx),
     );
 
@@ -191,7 +195,15 @@ async fn main() -> Result<()> {
     let webrtc_msg_tx_for_run = webrtc_msg_tx.clone();
 
     let audio_stream_service = AudioStreamService::new(audio_frame_rx, audio_encoder_factory);
-    let input_service = InputService::new(data_channel_rx);
+
+    // CaptureServiceへのコマンド送信チャネルを複製
+    let capture_cmd_tx_for_input = capture_cmd_tx.clone();
+    
+    let input_service = InputService::new(
+        data_channel_rx, 
+        capture_cmd_tx_for_input, 
+        outgoing_dc_tx // Pass outgoing_dc_tx
+    );
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,
         args.session_id,

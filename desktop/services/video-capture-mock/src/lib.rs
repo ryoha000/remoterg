@@ -125,6 +125,21 @@ impl CaptureService {
                                 regen_start.elapsed().as_millis()
                             );
                         }
+                        Some(CaptureMessage::RequestFrame { tx }) => {
+                            info!("RequestFrame (mock)");
+                             if !precomputed_frames.is_empty() {
+                                let idx = (frame_index as usize) % precomputed_frames.len();
+                                let mut frame = precomputed_frames[idx].clone();
+                                 let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap();
+                                frame.windows_timespan = now.as_nanos() as u64 / 100;
+                                let _ = tx.send(frame);
+                            } else {
+                                // No frames available yet
+                                tracing::warn!("RequestFrame (mock): No frames available");
+                            }
+                        }
                         None => {
                             debug!("Command channel closed");
                             break;

@@ -95,6 +95,7 @@ pub async fn handle_set_offer(
     connection_ready: Arc<AtomicBool>,
     video_stream_msg_tx: mpsc::Sender<VideoStreamMessage>,
     webrtc_msg_tx: mpsc::Sender<WebRtcMessage>,
+    active_data_channel: Arc<std::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
 ) -> Result<SetOfferResult> {
     info!("SetOffer received, generating answer");
 
@@ -227,12 +228,27 @@ pub async fn handle_set_offer(
 
     // DataChannelハンドラを設定
     let dc_tx = data_channel_tx.clone();
+    // active_data_channel は呼び出し元の WebRtcService.run で管理されている
+    // ここでは Clone して move closure に渡す
+    let active_dc_clone = active_data_channel.clone();
+
     pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
         let dc_tx = dc_tx.clone();
+        let active_dc_for_open = active_dc_clone.clone();
+
         Box::pin(async move {
             let label = dc.label();
             let label_str = label.to_string();
             info!("DataChannel opened: {}", label_str);
+
+            // Active Data Channelとして保存
+            if label_str == "input" { // "input" チャンネルのみを対象にする場合
+                 *active_dc_for_open.lock().unwrap() = Some(dc.clone());
+                 info!("DataChannel 'input' registered as active output channel");
+            } else {
+                // 必要なら他のチャンネルも
+                 *active_dc_for_open.lock().unwrap() = Some(dc.clone());
+            }
 
             let dc_tx_on_msg = dc_tx.clone();
             let dc_for_pong = dc.clone();
@@ -314,12 +330,16 @@ pub async fn handle_set_offer(
                 }
             });
             let ping_task_closed_for_close = ping_task_closed.clone();
+            let active_dc_for_close = active_dc_for_open.clone(); // on_data_channel 内の active_dc_for_open をもう一度 clone
             dc.on_close(Box::new(move || {
                 let label_str = label_str.clone();
                 let ping_task_closed_for_close = ping_task_closed_for_close.clone();
+                let active_dc_for_close = active_dc_for_close.clone();
                 Box::pin(async move {
                     info!("DataChannel closed: {}", label_str);
                     ping_task_closed_for_close.store(true, Ordering::Relaxed);
+                    // Close 時に active_data_channel をクリア
+                    *active_dc_for_close.lock().unwrap() = None;
                 })
             }));
         })

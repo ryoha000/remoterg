@@ -8,7 +8,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use webrtc_rs::peer_connection::RTCPeerConnection;
 
-use core_types::{DataChannelMessage, SignalingResponse, WebRtcMessage};
+use std::sync::Mutex;
+use core_types::{DataChannelMessage, OutgoingDataChannelMessage, SignalingResponse, WebRtcMessage};
 
 use connection::{handle_add_ice_candidate, handle_set_offer};
 
@@ -17,6 +18,7 @@ pub struct WebRtcService {
     message_rx: mpsc::Receiver<WebRtcMessage>,
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
+    outgoing_data_channel_rx: Option<mpsc::Receiver<OutgoingDataChannelMessage>>,
     video_track_tx: Option<
         mpsc::Sender<(
             Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
@@ -37,6 +39,7 @@ impl WebRtcService {
     pub fn new(
         signaling_tx: mpsc::Sender<SignalingResponse>,
         data_channel_tx: mpsc::Sender<DataChannelMessage>,
+        outgoing_data_channel_rx: Option<mpsc::Receiver<OutgoingDataChannelMessage>>,
         video_track_tx: Option<
             mpsc::Sender<(
                 Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
@@ -58,6 +61,7 @@ impl WebRtcService {
                 message_rx,
                 signaling_tx,
                 data_channel_tx,
+                outgoing_data_channel_rx,
                 video_track_tx,
                 video_stream_msg_tx,
                 audio_track_tx,
@@ -109,10 +113,53 @@ impl WebRtcService {
         // ICE/DTLS が接続完了したかを共有するフラグ（接続前は送出しない）
         let connection_ready = Arc::new(AtomicBool::new(false));
 
+        // アクティブなデータチャネルを保持（outgoing用）
+        let active_data_channel = Arc::new(Mutex::new(None::<Arc<webrtc_rs::data_channel::RTCDataChannel>>));
+
         let mut peer_connection: Option<Arc<RTCPeerConnection>> = None;
 
         loop {
             tokio::select! {
+                // Outgoing DataChannel messages
+                msg = async {
+                    if let Some(rx) = &mut self.outgoing_data_channel_rx {
+                         rx.recv().await
+                    } else {
+                        // If no receiver, wait forever
+                        std::future::pending::<Option<OutgoingDataChannelMessage>>().await
+                    }
+                } => {
+                    match msg {
+                        Some(outgoing_msg) => {
+                             let dc_opt = active_data_channel.lock().unwrap().clone();
+                             if let Some(dc) = dc_opt {
+                                 match outgoing_msg {
+                                     OutgoingDataChannelMessage::Text(data_msg) => {
+                                         if let Ok(json) = serde_json::to_string(&data_msg) {
+                                            if let Err(e) = dc.send_text(json).await {
+                                                warn!("Failed to send text data channel message: {}", e);
+                                            }
+                                         }
+                                     }
+                                     OutgoingDataChannelMessage::Binary(bytes) => {
+                                         use bytes::Bytes;
+                                         if let Err(e) = dc.send(&Bytes::from(bytes)).await {
+                                             warn!("Failed to send binary data channel message: {}", e);
+                                         }
+                                     }
+                                 }
+                             } else {
+                                 warn!("Cannot send data channel message: no active data channel");
+                             }
+                        }
+                        None => {
+                            debug!("Outgoing data channel closed");
+                            // Don't break loop, just stop processing outgoing
+                            self.outgoing_data_channel_rx = None;
+                        }
+                    }
+                }
+
                 // メッセージ受信
                 msg = self.message_rx.recv() => {
                     match msg {
@@ -133,6 +180,8 @@ impl WebRtcService {
 
                                 // connection_readyフラグをリセット
                                 connection_ready.store(false, std::sync::atomic::Ordering::Relaxed);
+                                // active_data_channelもリセット
+                                *active_data_channel.lock().unwrap() = None;
                             }
 
                             // video_stream_msg_tx を取得（None の場合は後続処理をスキップ）
@@ -152,6 +201,7 @@ impl WebRtcService {
                                 connection_ready.clone(),
                                 video_stream_msg_tx,
                                 webrtc_msg_tx.clone(),
+                                active_data_channel.clone(),
                             ).await {
                                 Ok(result) => {
                                     peer_connection = Some(result.peer_connection.clone());

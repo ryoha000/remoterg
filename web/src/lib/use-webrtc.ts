@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Effect, Queue, Fiber, Stream } from "effect";
+import { Effect, Queue, Fiber, Stream, Schedule } from "effect";
 import { env } from "@/env";
-import { makeSignaling, WebSocketError, WebRTCMessage } from "./webrtc/signaling";
+import { makeSignaling, WebRTCMessage, WebSocketError } from "./webrtc/signaling";
 import { makeConnection, PeerConnectionError, setH264Preferences } from "./webrtc/connection";
 import { createDataChannel, runDataChannel } from "./webrtc/data-channel";
 import { runStatsLoop, WebRTCStats } from "./webrtc/stats";
@@ -44,13 +44,13 @@ export function useWebRTC(options: WebRTCOptions) {
 
   const addLog = useCallback((message: string, type: string = "info") => {
     const time = new Date().toLocaleTimeString();
-    setLogs((prev) => [...prev, { time, message, type }]);
+    setLogs((prev) => [...prev, { time, message, type }].slice(-100));
   }, []);
 
   const sendKey = useCallback(
     (key: string, down: boolean = true) => {
       if (sendKeyQueue.current) {
-        Effect.runSync(
+        Effect.runFork(
           Queue.offer(sendKeyQueue.current, { key, down }).pipe(Effect.catchAll(() => Effect.void)),
         );
         addLog(`キー送信: ${key} (down: ${down})`);
@@ -63,7 +63,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
   const requestScreenshot = useCallback(() => {
     if (screenshotRequestQueue.current) {
-      Effect.runSync(
+      Effect.runFork(
         Queue.offer(screenshotRequestQueue.current, void 0).pipe(
           Effect.catchAll(() => Effect.void),
         ),
@@ -76,7 +76,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
   const simulateWsClose = useCallback(() => {
     if (debugActionQueue.current) {
-      Effect.runSync(
+      Effect.runFork(
         Queue.offer(debugActionQueue.current, "close_ws").pipe(Effect.catchAll(() => Effect.void)),
       );
       addLog("デバッグ: WebSocket切断をシミュレート");
@@ -85,7 +85,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
   const simulatePcClose = useCallback(() => {
     if (debugActionQueue.current) {
-      Effect.runSync(
+      Effect.runFork(
         Queue.offer(debugActionQueue.current, "close_pc").pipe(Effect.catchAll(() => Effect.void)),
       );
       addLog("デバッグ: PeerConnection切断をシミュレート");
@@ -123,12 +123,21 @@ export function useWebRTC(options: WebRTCOptions) {
       const keyQ = yield* Queue.unbounded<{ key: string; down: boolean }>();
       const screenQ = yield* Queue.unbounded<void>();
       const debugQ = yield* Queue.unbounded<"close_ws" | "close_pc">();
+      const signalingQueue = yield* Queue.unbounded<WebRTCMessage>();
 
-      yield* Effect.sync(() => {
-        sendKeyQueue.current = keyQ;
-        screenshotRequestQueue.current = screenQ;
-        debugActionQueue.current = debugQ;
-      });
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          sendKeyQueue.current = keyQ;
+          screenshotRequestQueue.current = screenQ;
+          debugActionQueue.current = debugQ;
+        }),
+        () =>
+          Effect.sync(() => {
+            sendKeyQueue.current = null;
+            screenshotRequestQueue.current = null;
+            debugActionQueue.current = null;
+          }),
+      );
 
       // 1. Signaling
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -183,14 +192,27 @@ export function useWebRTC(options: WebRTCOptions) {
 
       // Handle Incoming Messages (Signaling)
       // This stream needs to stay alive
+      // Handle Incoming Messages (Signaling) - Producer
       const handleSignalingMessages = wsMessages.pipe(
         Stream.runForEach((msg: WebRTCMessage) =>
           Effect.gen(function* () {
             addLog(`受信: ${msg.type}`);
             if (msg.type === "error") {
               addLog(`サーバーエラー: ${msg.message}`, "error");
-              yield* Effect.fail(new WebSocketError({ message: "Server reported error" }));
-            } else if (msg.type === "answer") {
+              yield* Effect.fail(new WebSocketError({ message: msg.message }));
+            } else {
+              yield* Queue.offer(signalingQueue, msg);
+            }
+          }),
+        ),
+        Effect.tapError((e) => Effect.sync(() => addLog(`Signaling Loop Error: ${e}`, "error"))),
+      );
+
+      // Handle WebRTC Signaling Operations - Consumer
+      const handleWebRTCOperations = Queue.take(signalingQueue).pipe(
+        Effect.flatMap((msg) =>
+          Effect.gen(function* () {
+            if (msg.type === "answer") {
               addLog("Answer受信");
               yield* Effect.promise(() =>
                 pc.setRemoteDescription({ type: "answer", sdp: msg.sdp }),
@@ -209,8 +231,14 @@ export function useWebRTC(options: WebRTCOptions) {
               );
               addLog("ICE candidate追加", "success");
             }
-          }),
+          }).pipe(
+            // Catch PC errors so the consumer doesn't die and kill the session
+            Effect.catchAll((e) =>
+              Effect.sync(() => addLog(`WebRTC Signaling Processing Error: ${e}`, "error")),
+            ),
+          ),
         ),
+        Effect.forever,
       );
 
       // Handle Outgoing ICE Candidates
@@ -259,14 +287,17 @@ export function useWebRTC(options: WebRTCOptions) {
       const handleDataChannelLoop = runDataChannel(dc, keyQ, screenQ, () =>
         addLog("DataChannel OPEN", "success"),
       ).pipe(
-        // If DataChannel fails, we log it but don't necessarily kill the whole connection?
-        // But strict requirement say if it fails it might be bad.
-        // Let's log error.
-        Effect.catchAll(() => Effect.sync(() => addLog("DataChannel Error", "error"))),
+        // Retry logic for DataChannel
+        Effect.retry(Schedule.fixed("1 second")),
+        Effect.tapError((e) =>
+          Effect.sync(() => addLog(`DataChannel Permanent Error: ${e}`, "error")),
+        ),
       );
 
       // Stats Loop (Independent)
       const handleStats = runStatsLoop(pc, setStats).pipe(
+        // Retry logic for Stats
+        Effect.retry(Schedule.fixed("1 second")),
         Effect.catchAll((e) => Effect.sync(() => console.error("Stats Error", e))),
       );
 
@@ -300,6 +331,7 @@ export function useWebRTC(options: WebRTCOptions) {
       yield* Effect.all(
         [
           handleSignalingMessages,
+          handleWebRTCOperations,
           handleOutgoingIce,
           handleConnectionState,
           handleIceConnectionState,

@@ -51,7 +51,7 @@ pub type CaptureCommandReceiver = Receiver<CaptureMessage>;
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub windows_timespan: u64,
 }
 
@@ -77,7 +77,7 @@ impl std::str::FromStr for VideoCodec {
 pub struct EncodeJob {
     pub width: u32,
     pub height: u32,
-    pub rgba: Vec<u8>,
+    pub rgba: Arc<Vec<u8>>,
     pub timestamp: u64,
     pub enqueue_at: Instant,
     pub request_keyframe: bool,

@@ -107,7 +107,8 @@ impl InputService {
         // Let's assume we need to swap B and R.
         let width = frame.width;
         let height = frame.height;
-        let mut rgba_data = frame.data;
+        // Arc<Vec<u8>>なので、変更するにはクローンが必要
+        let mut rgba_data = (*frame.data).clone();
 
         // BGRA -> RGBA conversion
         for chunk in rgba_data.chunks_exact_mut(4) {

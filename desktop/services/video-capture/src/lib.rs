@@ -3,7 +3,8 @@ use core_types::{
     CaptureBackend, CaptureCommandReceiver, CaptureConfig, CaptureFrameSender, CaptureFuture,
     CaptureMessage, Frame,
 };
-use tokio::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Duration;
 use tracing::{debug, error, info, span, Level};
 use windows_capture::capture::{
@@ -39,6 +40,8 @@ impl CaptureBackend for CaptureService {
 /// windows-captureのハンドラ実装
 struct CaptureHandler {
     frame_tx: mpsc::Sender<Frame>,
+    screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
+    last_captured_frame: Arc<Mutex<Option<Frame>>>,
     config: CaptureConfig,
 }
 
@@ -50,6 +53,8 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         info!("CaptureHandler::new called");
         Ok(Self {
             frame_tx: ctx.flags.frame_tx.clone(),
+            screenshot_tx: ctx.flags.screenshot_tx.clone(),
+            last_captured_frame: ctx.flags.last_captured_frame.clone(),
             config: ctx.flags.config.clone(),
         })
     }
@@ -64,7 +69,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         // FrameBufferを取得してRGBAデータを読み取る
         let frame_buffer = frame.buffer()?;
 
-        // パディングなしのバッファを取得
         // パディングなしのバッファを取得
         let mut buffer = Vec::new();
         let _ = frame_buffer.as_nopadding_buffer(&mut buffer);
@@ -96,6 +100,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             buffer
         };
 
+        // Arc化してコストなしで共有可能にする
+        let final_data = Arc::new(final_data);
+
         // core_types::Frameに変換
         // frame.timestamp() は100ナノ秒単位の TimeSpan を返す
         // TimeSpan を Duration に変換してから、100ナノ秒単位の値を取得
@@ -103,12 +110,29 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let duration: std::time::Duration = timespan.into();
         // Duration から100ナノ秒単位の値を取得（as_nanos() はナノ秒単位なので、100で割る）
         let windows_timespan = (duration.as_nanos() / 100) as u64;
+
         let core_frame = Frame {
             width: dst_width,
             height: dst_height,
-            data: final_data,
+            data: final_data.clone(),
             windows_timespan,
         };
+
+        // 最新フレームをキャッシュ（スクリーンショット用）
+        if let Ok(mut guard) = self.last_captured_frame.lock() {
+            *guard = Some(core_frame.clone());
+        }
+
+        // スクリーンショット要求があるかチェックして処理
+        // ロックを取得して確認 (try_lockで競合時はスキップ、またはlockで待機しても非同期コンテキストでないので注意)
+        // ここはキャプチャスレッドなので、lockしても一瞬ならOK
+        if let Ok(mut guard) = self.screenshot_tx.lock() {
+            if let Some(tx) = guard.take() {
+                info!("Handling screenshot request in on_frame_arrived");
+                // スクリーンショット用にデータを送信（Arcなのでコピーコストはほぼゼロ）
+                let _ = tx.send(core_frame.clone());
+            }
+        }
 
         // フレーム送信を span で計測
         let send_span = span!(Level::DEBUG, "send_frame");
@@ -124,6 +148,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 error!("Failed to send frame: channel closed");
             }
         }
+
 
         drop(_send_guard);
         drop(_frame_guard);
@@ -172,33 +197,14 @@ impl CaptureService {
     async fn run_inner(mut self) -> Result<()> {
         info!("CaptureService (windows-capture) started");
 
-        // tokio::sync::mpscチャンネルを作成（キャプチャスレッドからtokioタスクへのブリッジ）
-        // capacity: 1 に設定して、消費が追いつかない場合はCaptureHandler側でドロップさせる（最新フレーム優先）
-        let (bridge_tx, mut bridge_rx) = mpsc::channel::<Frame>(1);
-        let tokio_frame_tx = self.frame_tx.clone();
-
-        // std::sync::mpscからtokio::sync::mpscへのブリッジタスク
-        let last_frame = std::sync::Arc::new(std::sync::Mutex::new(None::<Frame>));
-        let last_frame_clone = last_frame.clone();
-
-        let bridge_handle = tokio::spawn(async move {
-            while let Some(frame) = bridge_rx.recv().await {
-                // 最新フレームを保存
-                if let Ok(mut guard) = last_frame_clone.lock() {
-                    *guard = Some(frame.clone());
-                }
-
-                if let Err(e) = tokio_frame_tx.send(frame).await {
-                    error!("Failed to forward frame to tokio channel: {}", e);
-                    break;
-                }
-            }
-            debug!("bridge_rx channel closed");
-        });
-
         let mut capture_control: Option<CaptureControl<CaptureHandler, anyhow::Error>> = None;
         let mut target_hwnd: Option<u64> = None;
         let mut config = CaptureConfig::default();
+        
+        // スクリーンショット要求を保持する共有ステート
+        let screenshot_req: Arc<Mutex<Option<oneshot::Sender<Frame>>>> = Arc::new(Mutex::new(None));
+        // 最新フレームのキャッシュ（共有）
+        let last_captured_frame: Arc<Mutex<Option<Frame>>> = Arc::new(Mutex::new(None));
 
         loop {
             tokio::select! {
@@ -216,7 +222,7 @@ impl CaptureService {
                             }
 
                             // 新しいキャプチャセッションを開始
-                            match Self::start_capture(hwnd, &config, bridge_tx.clone()).await {
+                            match Self::start_capture(hwnd, &config, self.frame_tx.clone(), screenshot_req.clone(), last_captured_frame.clone()).await {
                                 Ok(control) => {
                                     capture_control = Some(control);
                                     info!("Capture started successfully");
@@ -257,7 +263,7 @@ impl CaptureService {
                                     }
 
                                     // 新しい設定で再開
-                                    match Self::start_capture(hwnd_raw, &config, bridge_tx.clone()).await {
+                                    match Self::start_capture(hwnd_raw, &config, self.frame_tx.clone(), screenshot_req.clone(), last_captured_frame.clone()).await {
                                         Ok(control) => {
                                             capture_control = Some(control);
                                             info!("Capture restarted with new config");
@@ -271,17 +277,23 @@ impl CaptureService {
                         }
                         Some(CaptureMessage::RequestFrame { tx }) => {
                             info!("RequestFrame received");
-                            let frame_opt = if let Ok(guard) = last_frame.lock() {
+                            // まずキャッシュをチェック
+                            let cached_frame = if let Ok(guard) = last_captured_frame.lock() {
                                 guard.clone()
                             } else {
                                 None
                             };
 
-                            if let Some(frame) = frame_opt {
+                            if let Some(frame) = cached_frame {
+                                info!("Returning cached frame for screenshot");
                                 let _ = tx.send(frame);
                             } else {
-                                tracing::warn!("RequestFrame: No frame available");
-                                // 失敗してもtxはdroppedで通知されるのでOK
+                                info!("No cached frame, queuing for next frame");
+                                if let Ok(mut guard) = screenshot_req.lock() {
+                                    *guard = Some(tx);
+                                } else {
+                                    error!("Failed to lock screenshot_req mutex");
+                                }
                             }
                         }
                         None => {
@@ -298,10 +310,6 @@ impl CaptureService {
             let _ = control.stop();
         }
 
-        // bridge_txを閉じてブリッジタスクを終了させる
-        drop(bridge_tx);
-        let _ = bridge_handle.await;
-
         info!("CaptureService (windows-capture) stopped");
         Ok(())
     }
@@ -310,6 +318,8 @@ impl CaptureService {
         hwnd: u64,
         config: &CaptureConfig,
         frame_tx: mpsc::Sender<Frame>,
+        screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
+        last_captured_frame: Arc<Mutex<Option<Frame>>>,
     ) -> Result<CaptureControl<CaptureHandler, anyhow::Error>> {
         info!("start_capture called for HWND: {hwnd}");
 
@@ -340,6 +350,8 @@ impl CaptureService {
             CaptureConfigWithSender {
                 config: config.clone(),
                 frame_tx,
+                screenshot_tx,
+                last_captured_frame,
             },
         );
         info!("Settings created");
@@ -365,4 +377,7 @@ impl CaptureService {
 struct CaptureConfigWithSender {
     config: CaptureConfig,
     frame_tx: mpsc::Sender<Frame>,
+    screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
+    last_captured_frame: Arc<Mutex<Option<Frame>>>,
 }
+

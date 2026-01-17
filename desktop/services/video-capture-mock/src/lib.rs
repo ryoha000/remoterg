@@ -252,7 +252,7 @@ impl CaptureService {
         Frame {
             width,
             height,
-            data,
+            data: std::sync::Arc::new(data),
             windows_timespan: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

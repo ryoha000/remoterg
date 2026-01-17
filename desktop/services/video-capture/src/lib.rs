@@ -65,8 +65,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let frame_buffer = frame.buffer()?;
 
         // パディングなしのバッファを取得
+        // パディングなしのバッファを取得
         let mut buffer = Vec::new();
-        let rgba_data = frame_buffer.as_nopadding_buffer(&mut buffer);
+        let _ = frame_buffer.as_nopadding_buffer(&mut buffer);
 
         let src_width = frame_buffer.width();
         let src_height = frame_buffer.height();
@@ -90,9 +91,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
 
         // リサイズが必要な場合
         let final_data = if dst_width != src_width || dst_height != src_height {
-            resize_image_impl(rgba_data, src_width, src_height, dst_width, dst_height)?
+            resize_image_impl(&buffer, src_width, src_height, dst_width, dst_height)?
         } else {
-            rgba_data.to_vec()
+            buffer
         };
 
         // core_types::Frameに変換

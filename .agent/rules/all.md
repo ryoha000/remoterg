@@ -1,5 +1,6 @@
-返答は日本語で行うこと
-plan(implementation_plan.md) や walkthrough(walkthrough.md) は日本語で書くこと
+---
+trigger: always_on
+---
 
 ## Project Overview
 
@@ -105,7 +106,3 @@ Browser ──WebSocket──> Cloudflare Worker/DO ──WebSocket──> hostd
 - TanStack Start 1.132, React 19.2, Tailwind CSS 4
 - Deployed to Cloudflare Workers with Durable Objects for signaling
 - The use of the "any" type is not permitted.
-
-## Documentation
-
-- `SPEC.md` - Product specification (Japanese)

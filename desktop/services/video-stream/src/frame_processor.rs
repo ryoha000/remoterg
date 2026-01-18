@@ -64,6 +64,7 @@ pub async fn run_frame_router(
     let mut last_frame_ts: Option<u64> = None;
     let mut stats = FrameStats::new();
     let mut first_frame_received = false;
+    let mut first_job_queued = false;
 
     while let Some(frame) = frame_rx.recv().await {
         let pipeline_start = Instant::now();
@@ -163,11 +164,12 @@ pub async fn run_frame_router(
             // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
             let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);
 
-            if stats.frames_queued == 0 {
+            if !first_job_queued {
                 info!(
                     "Queueing first encode job: {}x{} (keyframe: {})",
                     frame.width, frame.height, request_keyframe
                 );
+                first_job_queued = true;
             }
 
             job_slot.set(EncodeJob {

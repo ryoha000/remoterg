@@ -5,6 +5,8 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
+use tagger::TaggerService;
+
 use core_types::{
     CaptureMessage, DataChannelMessage, Frame, OutgoingDataChannelMessage, ScreenshotMetadataPayload,
 };
@@ -14,18 +16,53 @@ pub struct InputService {
     message_rx: mpsc::Receiver<DataChannelMessage>,
     capture_cmd_tx: mpsc::Sender<CaptureMessage>,
     outgoing_dc_tx: mpsc::Sender<OutgoingDataChannelMessage>,
+    tagger_service: TaggerService,
 }
+
+const PROMPT: &str = r#"以下のJSONスキーマに従って、スクリーンショットの解析結果を出力してください。
+解析できない項目がある場合は、nullまたは空配列を返してください。
+
+### JSON Schema:
+{
+  "scene_info": {
+    "location": "文字列: 背景から推測される場所",
+    "time_of_day": "文字列: 昼、夕方、夜、不明など",
+    "atmosphere": "文字列: 場面の雰囲気（例：平穏、緊張、ロマンチック）"
+  },
+  "dialogue": {
+    "speaker": "文字列: 名前欄に表示されている名前",
+    "text": "文字列: メッセージウィンドウ内の全文（改行は \n で保持）",
+    "is_choice_active": "真偽値: 選択肢が表示されているかどうか"
+  },
+  "characters": [
+    {
+      "name": "文字列: キャラクター名",
+      "expression_tags": ["文字列: 表情を示すタグ（例：微笑、怒り、照れ）"],
+      "visual_description": "文字列: 服装やポーズの簡潔な説明",
+      "position": "文字列: 画面内の位置（左、中央、右）"
+    }
+  ],
+  "system_ui": {
+    "visible_buttons": ["文字列: セーブ、ログ、スキップ等、現在見えるUI要素"]
+  }
+}
+
+### 出力制約:
+- JSON形式のみを出力し、それ以外の説明テキストは一切含めないでください。
+"#;
 
 impl InputService {
     pub fn new(
         message_rx: mpsc::Receiver<DataChannelMessage>,
         capture_cmd_tx: mpsc::Sender<CaptureMessage>,
         outgoing_dc_tx: mpsc::Sender<OutgoingDataChannelMessage>,
+        tagger_service: TaggerService,
     ) -> Self {
         Self {
             message_rx,
             capture_cmd_tx,
             outgoing_dc_tx,
+            tagger_service,
         }
     }
 
@@ -62,6 +99,10 @@ impl InputService {
             DataChannelMessage::ScreenshotRequest => {
                 info!("Screenshot requested");
                 self.handle_screenshot_request().await?;
+            }
+            DataChannelMessage::AnalyzeRequest { prompt } => {
+                info!("Analysis requested: {}", prompt);
+                self.handle_analyze_request(prompt).await?;
             }
             DataChannelMessage::Ping { timestamp } => {
                 debug!("Ping received: timestamp={}", timestamp);
@@ -161,6 +202,69 @@ impl InputService {
 
         info!("Sent screenshot {} ({} bytes, {} chunks)", id, png_data.len(), total_chunks);
 
+        Ok(())
+    }
+
+    async fn handle_analyze_request(&self, prompt: String) -> Result<()> {
+        // 1. Get Frame
+        let (tx, rx) = oneshot::channel::<Frame>();
+        self.capture_cmd_tx
+            .send(CaptureMessage::RequestFrame { tx })
+            .await?;
+
+        let frame = match tokio::time::timeout(tokio::time::Duration::from_millis(500), rx).await {
+            Ok(Ok(frame)) => frame,
+            Ok(Err(e)) => {
+                error!("Failed to receive frame from CaptureService: {}", e);
+                return Ok(());
+            }
+            Err(_) => {
+                error!("Timeout waiting for frame from CaptureService");
+                return Ok(());
+            }
+        };
+
+        // 2. Encode to PNG (or JPEG)
+        let mut image_data = Vec::new();
+        // Use JPEG for LLM efficiency if possible, but PNG is lossless and safe.
+        // Let's stick to PNG or use JPEG if image crate supports it easily with existing deps.
+        // image 0.24 supports JpegEncoder.
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut image_data);
+        // Frame data is BGRA. We need to tell encoder it's RGBA but we must swap bytes if we want correct colors.
+        // Qwen VL might be fine with wrong colors for structure, but color questions will fail.
+        // Let's just swap properly.
+        // Correct fix: Convert BGRA to RGBA.
+        // Since Frame.data is Arc, we must clone to mutate.
+        let mut rgba_data = frame.data.to_vec();
+        for chunk in rgba_data.chunks_exact_mut(4) {
+             let b = chunk[0];
+             let r = chunk[2];
+             chunk[0] = r;
+             chunk[2] = b;
+        }
+
+        encoder.encode(&rgba_data, frame.width, frame.height, ColorType::Rgba8)?;
+
+        info!("Encoded screenshot: {} bytes", image_data.len());
+
+        // 3. Call Tagger
+        let result_text = match self.tagger_service.analyze_screenshot(&image_data, PROMPT).await {
+            Ok(text) => text,
+            Err(e) => {
+                error!("Tagger analysis failed: {}", e);
+                format!("Error: {}", e)
+            }
+        };
+
+        info!("Analysis result: {}", result_text);
+
+        // 4. Send Response
+        let response = DataChannelMessage::AnalyzeResponse { text: result_text };
+        self.outgoing_dc_tx
+            .send(OutgoingDataChannelMessage::Text(response))
+            .await?;
+
+        info!("Sent analysis response");
         Ok(())
     }
 }

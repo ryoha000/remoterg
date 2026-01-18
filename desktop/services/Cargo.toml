@@ -16,6 +16,8 @@ members = [
   "audio-encoder/opus-sys",
   "audio-stream",
   "video-stream",
+  "tagger-setup",
+  "tagger",
 ]
 
 resolver = "2"

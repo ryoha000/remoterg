@@ -23,6 +23,8 @@ use video_capture;
 use video_capture_mock;
 use video_stream::VideoStreamService;
 use webrtc::WebRtcService;
+use tagger::TaggerService;
+use tagger_setup::TaggerSetup;
 
 #[derive(Parser, Debug)]
 #[command(name = "hostd")]
@@ -47,6 +49,10 @@ struct Args {
     /// Use mock implementations for video and audio capture
     #[arg(long)]
     mock: bool,
+
+    /// Port for local LLM server (llama-server)
+    #[arg(long, default_value_t = 8081)]
+    llm_port: u16,
 }
 
 enum CaptureServiceEnum {
@@ -103,6 +109,14 @@ async fn main() -> Result<()> {
     );
     info!("Log Level: {}", args.log_level);
     info!("Capture HWND: {}", hwnd);
+    info!("LLM Port: {}", args.llm_port);
+
+    // LLM Sidecar Setup
+    let mut tagger_setup = TaggerSetup::new();
+    if let Err(e) = tagger_setup.start(args.llm_port).await {
+        tracing::warn!("Failed to start LLM sidecar: {}", e);
+    }
+    let tagger_service = TaggerService::new(args.llm_port);
 
     // チャンネル作成
     let (frame_tx, frame_rx) = mpsc::channel::<Frame>(100);
@@ -202,7 +216,8 @@ async fn main() -> Result<()> {
     let input_service = InputService::new(
         data_channel_rx, 
         capture_cmd_tx_for_input, 
-        outgoing_dc_tx // Pass outgoing_dc_tx
+        outgoing_dc_tx, // Pass outgoing_dc_tx
+        tagger_service,
     );
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,

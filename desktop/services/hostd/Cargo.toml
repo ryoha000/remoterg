@@ -20,6 +20,8 @@ signaling = { path = "../signaling" }
 webrtc = { path = "../webrtc" }
 encoder = { path = "../encoder" }
 input = { path = "../input" }
+tagger = { path = "../tagger" }
+tagger-setup = { path = "../tagger-setup" }
 core-types = { path = "../core" }
 audio-capture = { path = "../audio-capture" }
 audio-capture-mock = { path = "../audio-capture-mock" }

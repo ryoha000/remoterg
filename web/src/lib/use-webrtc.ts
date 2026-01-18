@@ -15,6 +15,7 @@ export interface WebRTCOptions {
   onTrack?: (stream: MediaStream) => void;
   onConnectionStateChange?: (state: string) => void;
   onIceConnectionStateChange?: (state: string) => void;
+  onScreenshot?: (blob: Blob, meta: { id: string; format: string; size: number }) => void;
 }
 
 export type { WebRTCStats };
@@ -27,6 +28,7 @@ export function useWebRTC(options: WebRTCOptions) {
     onTrack,
     onConnectionStateChange,
     onIceConnectionStateChange,
+    onScreenshot,
   } = options;
 
   const [connectionState, setConnectionState] = useState<string>("disconnected");
@@ -284,8 +286,15 @@ export function useWebRTC(options: WebRTCOptions) {
       });
 
       // Handle Data Channel Loop (Non-blocking / parallel)
-      const handleDataChannelLoop = runDataChannel(dc, keyQ, screenQ, () =>
-        addLog("DataChannel OPEN", "success"),
+      const handleDataChannelLoop = runDataChannel(
+        dc,
+        keyQ,
+        screenQ,
+        () => addLog("DataChannel OPEN", "success"),
+        (blob, meta) => {
+          addLog("スクリーンショット受信", "success");
+          onScreenshot?.(blob, meta);
+        },
       ).pipe(
         // Retry logic for DataChannel
         Effect.retry(Schedule.fixed("1 second")),
@@ -369,6 +378,7 @@ export function useWebRTC(options: WebRTCOptions) {
     onConnectionStateChange,
     onIceConnectionStateChange,
     onTrack,
+    onScreenshot,
   ]);
 
   return {

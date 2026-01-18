@@ -27,6 +27,7 @@ export const runDataChannel = (
   keyQ: Queue.Queue<{ key: string; down: boolean }>,
   screenQ: Queue.Queue<void>,
   onOpen: () => void,
+  onScreenshot: (blob: Blob, meta: { id: string; format: string; size: number }) => void,
 ) =>
   Effect.gen(function* () {
     const waitForOpen = Effect.async<void>((resume) => {
@@ -125,7 +126,7 @@ export const runDataChannel = (
                 chunks: [],
               };
             } else if (msg.Pong) {
-              // Handle Pong if needed, currently debug logging elsewhere or ignored
+              // Handle Pong if needed
             }
           } catch (e) {
             console.error("Failed to parse data channel message:", e);
@@ -136,23 +137,18 @@ export const runDataChannel = (
             incomingScreenshot.chunks.push(chunk);
             incomingScreenshot.received += chunk.byteLength;
 
-            // console.log(`Received chunk: ${chunk.byteLength}, total: ${incomingScreenshot.received}/${incomingScreenshot.size}`);
-
             if (incomingScreenshot.received >= incomingScreenshot.size) {
               console.log("Screenshot complete, creating blob");
               const blob = new Blob(incomingScreenshot.chunks as BlobPart[], {
                 type: `image/${incomingScreenshot.format}`,
               });
-              const url = URL.createObjectURL(blob);
 
-              // Trigger download
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = `screenshot-${incomingScreenshot.id}.${incomingScreenshot.format}`;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
+              // Notify via callback instead of direct download
+              onScreenshot(blob, {
+                id: incomingScreenshot.id,
+                format: incomingScreenshot.format,
+                size: incomingScreenshot.size,
+              });
 
               incomingScreenshot = null;
             }

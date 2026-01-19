@@ -147,7 +147,6 @@ impl VideoStreamService {
 
         // 統計情報
         let mut video_frame_count: u64 = 0;
-        let mut last_video_log = Instant::now();
         let mut first_encode_result_received = false;
         let mut last_encode_result_wait_start = Instant::now();
         let mut encode_result_timeout_warned = false;
@@ -231,19 +230,6 @@ impl VideoStreamService {
 
                                     video_frame_count += 1;
                                     last_encode_result_wait_start = Instant::now();
-
-                                    // 統計ログ（5秒ごと）
-                                    let elapsed = last_video_log.elapsed();
-                                    if elapsed.as_secs_f32() >= 5.0 {
-                                        info!(
-                                            "Video frames sent: {} (last {}s, {:.1} fps)",
-                                            video_frame_count,
-                                            elapsed.as_secs(),
-                                            video_frame_count as f32 / elapsed.as_secs_f32()
-                                        );
-                                        video_frame_count = 0;
-                                        last_video_log = Instant::now();
-                                    }
                                 } else {
                                     // 接続準備未完了ならドロップ（ログ出しすぎないよう注意）
                                     // debug!("Connection not ready, dropping video frame");

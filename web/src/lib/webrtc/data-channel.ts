@@ -19,6 +19,11 @@ const IncomingMessageSchema = v.object({
       payload: ScreenshotMetadataPayloadSchema,
     }),
   ),
+  ANALYZE_RESPONSE: v.optional(
+    v.object({
+      text: v.string(),
+    }),
+  ),
   Pong: v.optional(v.unknown()),
 });
 
@@ -26,8 +31,10 @@ export const runDataChannel = (
   dc: RTCDataChannel,
   keyQ: Queue.Queue<{ key: string; down: boolean }>,
   screenQ: Queue.Queue<void>,
+  analyzeQ: Queue.Queue<string>,
   onOpen: () => void,
   onScreenshot: (blob: Blob, meta: { id: string; format: string; size: number }) => void,
+  onAnalyzeResult: (text: string) => void,
 ) =>
   Effect.gen(function* () {
     const waitForOpen = Effect.async<void>((resume) => {
@@ -92,6 +99,18 @@ export const runDataChannel = (
       Effect.forever,
     );
 
+    const processAnalyze = Queue.take(analyzeQ).pipe(
+      Effect.tap((id) =>
+        Effect.sync(() => {
+          if (dc.readyState === "open") {
+            // Send AnalyzeRequest with ID
+            dc.send(JSON.stringify({ AnalyzeRequest: { id } }));
+          }
+        }),
+      ),
+      Effect.forever,
+    );
+
     const waitForClose = Effect.async<void>((resume) => {
       const onClose = () => {
         dc.removeEventListener("close", onClose);
@@ -125,6 +144,9 @@ export const runDataChannel = (
                 received: 0,
                 chunks: [],
               };
+            } else if (msg.ANALYZE_RESPONSE) {
+              console.log("Analysis response received");
+              onAnalyzeResult(msg.ANALYZE_RESPONSE.text);
             } else if (msg.Pong) {
               // Handle Pong if needed
             }
@@ -171,7 +193,9 @@ export const runDataChannel = (
     });
 
     yield* Effect.race(
-      Effect.all([keepAlive, processKeys, processScreens], { concurrency: "unbounded" }),
+      Effect.all([keepAlive, processKeys, processScreens, processAnalyze], {
+        concurrency: "unbounded",
+      }),
       waitForClose,
     );
   });

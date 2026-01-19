@@ -16,6 +16,7 @@ export interface WebRTCOptions {
   onConnectionStateChange?: (state: string) => void;
   onIceConnectionStateChange?: (state: string) => void;
   onScreenshot?: (blob: Blob, meta: { id: string; format: string; size: number }) => void;
+  onAnalyzeResult?: (text: string) => void;
 }
 
 export type { WebRTCStats };
@@ -29,6 +30,7 @@ export function useWebRTC(options: WebRTCOptions) {
     onConnectionStateChange,
     onIceConnectionStateChange,
     onScreenshot,
+    onAnalyzeResult,
   } = options;
 
   const [connectionState, setConnectionState] = useState<string>("disconnected");
@@ -39,6 +41,7 @@ export function useWebRTC(options: WebRTCOptions) {
   // Queue to send signals to the running Effect
   const sendKeyQueue = useRef<Queue.Queue<{ key: string; down: boolean }> | null>(null);
   const screenshotRequestQueue = useRef<Queue.Queue<void> | null>(null);
+  const analyzeRequestQueue = useRef<Queue.Queue<string> | null>(null);
   const debugActionQueue = useRef<Queue.Queue<"close_ws" | "close_pc"> | null>(null);
 
   // To trigger manual disconnect/reconnect (using a counter to restart the effect)
@@ -75,6 +78,20 @@ export function useWebRTC(options: WebRTCOptions) {
       addLog("DataChannelが開いていません", "error");
     }
   }, [addLog]);
+
+  const requestAnalyze = useCallback(
+    (id: string) => {
+      if (analyzeRequestQueue.current) {
+        Effect.runFork(
+          Queue.offer(analyzeRequestQueue.current, id).pipe(Effect.catchAll(() => Effect.void)),
+        );
+        addLog(`解析リクエスト送信: ${id}`);
+      } else {
+        addLog("DataChannelが開いていません", "error");
+      }
+    },
+    [addLog],
+  );
 
   const simulateWsClose = useCallback(() => {
     if (debugActionQueue.current) {
@@ -124,6 +141,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
       const keyQ = yield* Queue.unbounded<{ key: string; down: boolean }>();
       const screenQ = yield* Queue.unbounded<void>();
+      const analyzeQ = yield* Queue.unbounded<string>();
       const debugQ = yield* Queue.unbounded<"close_ws" | "close_pc">();
       const signalingQueue = yield* Queue.unbounded<WebRTCMessage>();
 
@@ -131,12 +149,14 @@ export function useWebRTC(options: WebRTCOptions) {
         Effect.sync(() => {
           sendKeyQueue.current = keyQ;
           screenshotRequestQueue.current = screenQ;
+          analyzeRequestQueue.current = analyzeQ;
           debugActionQueue.current = debugQ;
         }),
         () =>
           Effect.sync(() => {
             sendKeyQueue.current = null;
             screenshotRequestQueue.current = null;
+            analyzeRequestQueue.current = null;
             debugActionQueue.current = null;
           }),
       );
@@ -290,10 +310,15 @@ export function useWebRTC(options: WebRTCOptions) {
         dc,
         keyQ,
         screenQ,
+        analyzeQ,
         () => addLog("DataChannel OPEN", "success"),
         (blob, meta) => {
           addLog("スクリーンショット受信", "success");
           onScreenshot?.(blob, meta);
+        },
+        (text) => {
+          addLog("解析結果受信", "success");
+          onAnalyzeResult?.(text);
         },
       ).pipe(
         // Retry logic for DataChannel
@@ -379,6 +404,7 @@ export function useWebRTC(options: WebRTCOptions) {
     onIceConnectionStateChange,
     onTrack,
     onScreenshot,
+    onAnalyzeResult,
   ]);
 
   return {
@@ -390,6 +416,7 @@ export function useWebRTC(options: WebRTCOptions) {
     disconnect: manualDisconnect,
     sendKey,
     requestScreenshot,
+    requestAnalyze,
     simulateWsClose,
     simulatePcClose,
   };

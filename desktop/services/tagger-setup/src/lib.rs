@@ -27,6 +27,7 @@ impl TaggerSetup {
             "--port".to_string(),
             port.to_string(),
             "-fa".to_string(), // Flash Attention
+            "on".to_string(),
         ];
 
         if use_gpu {

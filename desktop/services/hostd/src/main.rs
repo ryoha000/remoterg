@@ -213,11 +213,15 @@ async fn main() -> Result<()> {
     // CaptureServiceへのコマンド送信チャネルを複製
     let capture_cmd_tx_for_input = capture_cmd_tx.clone();
     
+    // スクリーンショット保存先
+    let screenshots_dir = std::env::var("REMOTERG_SCREENSHOTS").unwrap_or_else(|_| "screenshots".to_string());
+    
     let input_service = InputService::new(
         data_channel_rx, 
         capture_cmd_tx_for_input, 
         outgoing_dc_tx, // Pass outgoing_dc_tx
         tagger_service,
+        std::path::PathBuf::from(screenshots_dir),
     );
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,

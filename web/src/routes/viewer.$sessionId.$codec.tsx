@@ -55,6 +55,12 @@ function ViewerPage() {
     [],
   );
 
+  const handleAnalyzeResult = useCallback((text: string) => {
+    console.log("Analyze result:", text);
+    // TODO: Display result in UI
+    alert(text);
+  }, []);
+
   const {
     connectionState,
     iceConnectionState,
@@ -63,6 +69,7 @@ function ViewerPage() {
     disconnect,
     logs,
     requestScreenshot,
+    requestAnalyze,
     simulateWsClose,
     simulatePcClose,
   } = useWebRTC({
@@ -71,6 +78,7 @@ function ViewerPage() {
     codec,
     onTrack: handleTrack,
     onScreenshot: handleScreenshot,
+    onAnalyzeResult: handleAnalyzeResult,
   });
 
   // Auto-connect on mount
@@ -186,7 +194,16 @@ function ViewerPage() {
         onSimulatePcClose={simulatePcClose}
       />
 
-      <GalleryModal open={galleryOpen} onOpenChange={setGalleryOpen} images={galleryImages} />
+      <GalleryModal
+        open={galleryOpen}
+        onOpenChange={setGalleryOpen}
+        images={galleryImages}
+        onRequestAnalyze={(id) => {
+          requestAnalyze(id);
+          // Feedback for user
+          console.log(`Requested analysis for ${id}`);
+        }}
+      />
     </div>
   );
 }

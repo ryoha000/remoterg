@@ -241,7 +241,7 @@ pub enum DataChannelMessage {
     Ping { timestamp: u64 },
     Pong { timestamp: u64 },
     // LLM Analysis
-    AnalyzeRequest { prompt: String },
+    AnalyzeRequest { id: String },
     // Outgoing messages (Host -> Client)
     #[serde(rename = "SCREENSHOT_METADATA")]
     ScreenshotMetadata {

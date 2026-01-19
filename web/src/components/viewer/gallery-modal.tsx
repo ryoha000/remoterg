@@ -6,7 +6,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Download, ArrowLeft, Calendar, FileType, HardDrive, X } from "lucide-react";
+import { Download, ArrowLeft, Calendar, FileType, HardDrive, X, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 export interface GalleryImage {
@@ -21,6 +21,7 @@ interface GalleryModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   images: GalleryImage[];
+  onRequestAnalyze: (id: string) => void;
 }
 
 // Format bytes to human readable string
@@ -41,7 +42,7 @@ const handleDownload = (img: GalleryImage) => {
   document.body.removeChild(a);
 };
 
-export function GalleryModal({ open, onOpenChange, images }: GalleryModalProps) {
+export function GalleryModal({ open, onOpenChange, images, onRequestAnalyze }: GalleryModalProps) {
   const [selectedImage, setSelectedImage] = useState<GalleryImage | null>(null);
 
   return (
@@ -74,15 +75,17 @@ export function GalleryModal({ open, onOpenChange, images }: GalleryModalProps) 
                 {selectedImage ? "Screenshot Details" : "Screenshot Gallery"}
               </DialogTitle>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-zinc-400 hover:text-white"
-              onClick={() => onOpenChange(false)}
-            >
-              <X className="w-4 h-4" />
-              <span className="sr-only">Close</span>
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-zinc-400 hover:text-white"
+                onClick={() => onOpenChange(false)}
+              >
+                <X className="w-4 h-4" />
+                <span className="sr-only">Close</span>
+              </Button>
+            </div>
           </div>
           <DialogDescription className="sr-only">
             {selectedImage
@@ -163,7 +166,18 @@ export function GalleryModal({ open, onOpenChange, images }: GalleryModalProps) 
                   </div>
                 </div>
 
-                <div className="mt-auto">
+                <div className="mt-auto flex flex-col gap-2">
+                  <Button
+                    className="w-full gap-2 border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
+                    variant="outline"
+                    onClick={() => {
+                      onRequestAnalyze(selectedImage.id);
+                      onOpenChange(false);
+                    }}
+                  >
+                    <Sparkles className="w-4 h-4 text-purple-400" />
+                    Ask AI
+                  </Button>
                   <Button
                     className="w-full"
                     size="lg"

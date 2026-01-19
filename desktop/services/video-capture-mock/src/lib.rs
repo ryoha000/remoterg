@@ -84,7 +84,6 @@ impl CaptureService {
         // 事前生成済みフレームを使用
         let mut precomputed_frames = self.precomputed_frames;
         let mut frame_index: u64 = 0;
-        let mut last_frame_log = Instant::now();
         loop {
             tokio::select! {
                 // コマンド受信
@@ -176,18 +175,6 @@ impl CaptureService {
                             send_dur.as_millis(),
                             total_dur.as_millis(),
                         );
-
-                        // ある程度の間隔で概要ログも出す
-                        if last_frame_log.elapsed().as_secs_f32() >= 5.0 {
-                            info!(
-                                "capture running (mock): last_frame_idx={} send={}ms total={}ms (precomputed {})",
-                                frame_index,
-                                send_dur.as_millis(),
-                                total_dur.as_millis(),
-                                precomputed_frames.len(),
-                            );
-                            last_frame_log = Instant::now();
-                        }
                     }
                 }
             }

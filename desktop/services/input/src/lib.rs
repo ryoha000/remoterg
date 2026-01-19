@@ -11,12 +11,15 @@ use core_types::{
     CaptureMessage, DataChannelMessage, Frame, OutgoingDataChannelMessage, ScreenshotMetadataPayload,
 };
 
+use std::path::PathBuf;
+
 /// 入力サービス
 pub struct InputService {
     message_rx: mpsc::Receiver<DataChannelMessage>,
     capture_cmd_tx: mpsc::Sender<CaptureMessage>,
     outgoing_dc_tx: mpsc::Sender<OutgoingDataChannelMessage>,
     tagger_service: TaggerService,
+    screenshot_dir: PathBuf,
 }
 
 const PROMPT: &str = r#"以下のJSONスキーマに従って、スクリーンショットの解析結果を出力してください。
@@ -57,12 +60,14 @@ impl InputService {
         capture_cmd_tx: mpsc::Sender<CaptureMessage>,
         outgoing_dc_tx: mpsc::Sender<OutgoingDataChannelMessage>,
         tagger_service: TaggerService,
+        screenshot_dir: PathBuf,
     ) -> Self {
         Self {
             message_rx,
             capture_cmd_tx,
             outgoing_dc_tx,
             tagger_service,
+            screenshot_dir,
         }
     }
 
@@ -100,9 +105,9 @@ impl InputService {
                 info!("Screenshot requested");
                 self.handle_screenshot_request().await?;
             }
-            DataChannelMessage::AnalyzeRequest { prompt } => {
-                info!("Analysis requested: {}", prompt);
-                self.handle_analyze_request(prompt).await?;
+            DataChannelMessage::AnalyzeRequest { id } => {
+                info!("Analysis requested for screenshot: {}", id);
+                self.handle_analyze_request(id).await?;
             }
             DataChannelMessage::Ping { timestamp } => {
                 debug!("Ping received: timestamp={}", timestamp);
@@ -161,6 +166,16 @@ impl InputService {
             .as_secs();
         let total_size = png_data.len() as u32;
 
+        // --- Save to Server ---
+        if !self.screenshot_dir.exists() {
+            tokio::fs::create_dir_all(&self.screenshot_dir).await?;
+        }
+
+        let file_path = self.screenshot_dir.join(format!("{}.png", id));
+        tokio::fs::write(&file_path, &png_data).await?;
+        info!("Saved screenshot to: {:?}", file_path);
+        // ----------------------
+
         let metadata = DataChannelMessage::ScreenshotMetadata {
             payload: ScreenshotMetadataPayload {
                 id: id.clone(),
@@ -205,50 +220,53 @@ impl InputService {
         Ok(())
     }
 
-    async fn handle_analyze_request(&self, prompt: String) -> Result<()> {
-        // 1. Get Frame
-        let (tx, rx) = oneshot::channel::<Frame>();
-        self.capture_cmd_tx
-            .send(CaptureMessage::RequestFrame { tx })
-            .await?;
+    async fn handle_analyze_request(&self, id: String) -> Result<()> {
+        let file_path = self.screenshot_dir.join(format!("{}.png", id));
+        if !file_path.exists() {
+            error!("Requested analysis for missing screenshot: {}", id);
+            // Optionally send an error response back so client stops waiting
+            return Ok(());
+        }
 
-        let frame = match tokio::time::timeout(tokio::time::Duration::from_millis(500), rx).await {
-            Ok(Ok(frame)) => frame,
-            Ok(Err(e)) => {
-                error!("Failed to receive frame from CaptureService: {}", e);
-                return Ok(());
-            }
-            Err(_) => {
-                error!("Timeout waiting for frame from CaptureService");
-                return Ok(());
+        // 1. Read file
+        let image_data = tokio::fs::read(&file_path).await?;
+        info!("Read screenshot file: {:?} ({} bytes)", file_path, image_data.len());
+
+        // 2. Resize if needed
+        let image_data_for_analysis = match image::load_from_memory(&image_data) {
+            Ok(img) => {
+                let width = img.width();
+                let height = img.height();
+                
+                if width > 512 || height > 512 {
+                    info!("Resizing image for analysis from {}x{}", width, height);
+                    let resized = img.resize(512, 512, image::imageops::FilterType::Lanczos3);
+                    
+                    let mut resized_data = Vec::new();
+                    let mut cursor = std::io::Cursor::new(&mut resized_data);
+                    
+                    match resized.write_to(&mut cursor, image::ImageOutputFormat::Png) {
+                        Ok(_) => {
+                            info!("Resized image size: {} bytes", resized_data.len());
+                            resized_data
+                        },
+                        Err(e) => {
+                            error!("Failed to encode resized image: {}", e);
+                            image_data // fallback to original
+                        }
+                    }
+                } else {
+                    image_data
+                }
+            },
+            Err(e) => {
+                error!("Failed to load image for resizing: {}", e);
+                image_data // fallback
             }
         };
 
-        // 2. Encode to PNG (or JPEG)
-        let mut image_data = Vec::new();
-        // Use JPEG for LLM efficiency if possible, but PNG is lossless and safe.
-        // Let's stick to PNG or use JPEG if image crate supports it easily with existing deps.
-        // image 0.24 supports JpegEncoder.
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut image_data);
-        // Frame data is BGRA. We need to tell encoder it's RGBA but we must swap bytes if we want correct colors.
-        // Qwen VL might be fine with wrong colors for structure, but color questions will fail.
-        // Let's just swap properly.
-        // Correct fix: Convert BGRA to RGBA.
-        // Since Frame.data is Arc, we must clone to mutate.
-        let mut rgba_data = frame.data.to_vec();
-        for chunk in rgba_data.chunks_exact_mut(4) {
-             let b = chunk[0];
-             let r = chunk[2];
-             chunk[0] = r;
-             chunk[2] = b;
-        }
-
-        encoder.encode(&rgba_data, frame.width, frame.height, ColorType::Rgba8)?;
-
-        info!("Encoded screenshot: {} bytes", image_data.len());
-
         // 3. Call Tagger
-        let result_text = match self.tagger_service.analyze_screenshot(&image_data, PROMPT).await {
+        let result_text = match self.tagger_service.analyze_screenshot(&image_data_for_analysis, PROMPT).await {
             Ok(text) => text,
             Err(e) => {
                 error!("Tagger analysis failed: {}", e);

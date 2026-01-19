@@ -286,15 +286,6 @@ impl AudioCaptureService {
 
                         frame_index += 1;
                         current_timestamp_us += (FRAME_DURATION_MS as u64) * 1000; // 10ms → 10000us
-
-                        // 定期的にログ出力（5秒ごと = 500フレーム）
-                        if frame_index % 500 == 0 {
-                            info!(
-                                "Audio capture (mock) running: frame_index={}, looped={} times",
-                                frame_index,
-                                frame_index / frames.len()
-                            );
-                        }
                     }
                 }
             }

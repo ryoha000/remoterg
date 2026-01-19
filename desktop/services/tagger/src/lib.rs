@@ -53,14 +53,17 @@ struct ResponseMessage {
 impl TaggerService {
     pub fn new(port: u16) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             base_url: format!("http://127.0.0.1:{}", port),
         }
     }
 
     pub async fn analyze_screenshot(&self, image_data: &[u8], prompt: &str) -> Result<String> {
         let base64_image = BASE64_STANDARD.encode(image_data);
-        let data_url = format!("data:image/jpeg;base64,{}", base64_image); // Assuming JPEG, but PNG works too usually. 
+        let data_url = format!("data:image/png;base64,{}", base64_image); 
         // Note: The screenshot capture service usually produces raw BGRA or RGBA. 
         // We might need to encode it to JPEG/PNG before sending to LLM if it expects an image file format.
         // Q: Does llama-server accept raw pixel data? No, usually data URLs with standard image formats.

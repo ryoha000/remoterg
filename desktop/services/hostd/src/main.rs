@@ -39,11 +39,11 @@ struct Args {
     session_id: String,
 
     /// Log level (trace, debug, info, warn, error)
-    #[arg(short, long, default_value = "info")]
+    #[arg(short, long, env = "RUST_LOG", default_value = "info")]
     log_level: String,
 
     /// Capture target window handle (HWND)
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, env = "REMOTERG_HWND", default_value_t = 0)]
     hwnd: u64,
 
     /// Use mock implementations for video and audio capture
@@ -53,6 +53,14 @@ struct Args {
     /// Port for local LLM server (llama-server)
     #[arg(long, default_value_t = 8081)]
     llm_port: u16,
+
+    /// Directory for saving screenshots
+    #[arg(long, env = "REMOTERG_SCREENSHOTS", default_value = "screenshots")]
+    screenshots_dir: String,
+
+    /// Path to the llama-server executable or directory
+    #[arg(long, env = "REMOTERG_LLAMA_SERVER_PATH")]
+    llama_server_path: Option<String>,
 }
 
 enum CaptureServiceEnum {
@@ -88,19 +96,8 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // ログ設定
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level));
+    let filter = EnvFilter::new(&args.log_level);
     tracing_subscriber::fmt().with_env_filter(filter).init();
-
-    // hwndが指定されていない場合、環境変数から読み取る
-    let hwnd = if args.hwnd == 0 {
-        std::env::var("REMOTERG_HWND")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0)
-    } else {
-        args.hwnd
-    };
 
     info!("Starting RemoteRG Host Daemon");
     info!(
@@ -108,12 +105,21 @@ async fn main() -> Result<()> {
         args.cloudflare_url, args.session_id
     );
     info!("Log Level: {}", args.log_level);
-    info!("Capture HWND: {}", hwnd);
+    info!("Capture HWND: {}", args.hwnd);
     info!("LLM Port: {}", args.llm_port);
+    info!("Screenshots Directory: {}", args.screenshots_dir);
+    if let Some(path) = &args.llama_server_path {
+        info!("LLM Server Path: {}", path);
+    }
 
     // LLM Sidecar Setup
     let mut tagger_setup = TaggerSetup::new();
-    if let Err(e) = tagger_setup.start(args.llm_port).await {
+    let llama_server_path = args.llama_server_path.as_ref().map(std::path::PathBuf::from);
+
+    if let Err(e) = tagger_setup
+        .start(args.llm_port, llama_server_path)
+        .await
+    {
         tracing::warn!("Failed to start LLM sidecar: {}", e);
     }
     let tagger_service = TaggerService::new(args.llm_port);
@@ -131,14 +137,14 @@ async fn main() -> Result<()> {
     let (video_stream_msg_tx, video_stream_msg_rx) = mpsc::channel::<VideoStreamMessage>(10);
 
     // ビデオトラック情報を受け渡すためのチャンネル
-    let (video_track_tx, mut video_track_rx) = mpsc::channel::<(
+    let (video_track_tx, video_track_rx) = mpsc::channel::<(
         Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
         Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
         Arc<std::sync::atomic::AtomicBool>, // connection_ready
     )>(10);
 
     // 音声トラック情報を受け渡すためのチャンネル
-    let (audio_track_tx, mut audio_track_rx) = mpsc::channel::<(
+    let (audio_track_tx, audio_track_rx) = mpsc::channel::<(
         Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
         Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
     )>(10);
@@ -213,15 +219,12 @@ async fn main() -> Result<()> {
     // CaptureServiceへのコマンド送信チャネルを複製
     let capture_cmd_tx_for_input = capture_cmd_tx.clone();
     
-    // スクリーンショット保存先
-    let screenshots_dir = std::env::var("REMOTERG_SCREENSHOTS").unwrap_or_else(|_| "screenshots".to_string());
-    
     let input_service = InputService::new(
         data_channel_rx, 
         capture_cmd_tx_for_input, 
         outgoing_dc_tx, // Pass outgoing_dc_tx
         tagger_service,
-        std::path::PathBuf::from(screenshots_dir),
+        std::path::PathBuf::from(args.screenshots_dir),
     );
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,
@@ -232,7 +235,7 @@ async fn main() -> Result<()> {
 
     // CaptureServiceを開始
     capture_cmd_tx
-        .send(CaptureMessage::Start { hwnd })
+        .send(CaptureMessage::Start { hwnd: args.hwnd })
         .await
         .context("Failed to start capture service")?;
     if args.mock {
@@ -243,7 +246,7 @@ async fn main() -> Result<()> {
 
     // AudioCaptureServiceを開始
     audio_capture_cmd_tx
-        .send(AudioCaptureMessage::Start { hwnd })
+        .send(AudioCaptureMessage::Start { hwnd: args.hwnd })
         .await
         .context("Failed to start audio capture service")?;
     if args.mock {

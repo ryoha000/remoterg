@@ -13,8 +13,8 @@ impl TaggerSetup {
         Self { child: None }
     }
 
-    pub async fn start(&mut self, port: u16) -> Result<()> {
-        let server_path = self.resolve_server_path()?;
+    pub async fn start(&mut self, port: u16, server_path: Option<PathBuf>) -> Result<()> {
+        let server_path = self.resolve_server_path(server_path)?;
         let model_path = self.resolve_model_path(&server_path)?;
         let mmproj_path = self.resolve_mmproj_path(&server_path)?;
         let use_gpu = self.check_gpu_availability().await;
@@ -60,10 +60,10 @@ impl TaggerSetup {
         Ok(())
     }
 
-    fn resolve_server_path(&self) -> Result<PathBuf> {
-        if let Ok(path) = std::env::var("REMOTERG_LLAMA_SERVER_PATH") {
-            debug!("Using REMOTERG_LLAMA_SERVER_PATH: {}", path);
-            return Ok(PathBuf::from(path));
+    fn resolve_server_path(&self, server_path: Option<PathBuf>) -> Result<PathBuf> {
+        if let Some(path) = server_path {
+             debug!("Using provided server path: {:?}", path);
+             return Ok(path);
         }
 
         // Fallback to executable directory

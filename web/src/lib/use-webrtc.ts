@@ -3,7 +3,7 @@ import { Effect, Queue, Fiber, Stream, Schedule } from "effect";
 import { env } from "@/env";
 import { makeSignaling, WebRTCMessage, WebSocketError } from "./webrtc/signaling";
 import { makeConnection, PeerConnectionError, setH264Preferences } from "./webrtc/connection";
-import { createDataChannel, runDataChannel } from "./webrtc/data-channel";
+import { createDataChannel, runDataChannel, type LlmConfig } from "./webrtc/data-channel";
 import { runStatsLoop, WebRTCStats } from "./webrtc/stats";
 import { makeMediaStreamHandler } from "./webrtc/media";
 import { runMockMode } from "./webrtc/mock";
@@ -16,7 +16,9 @@ export interface WebRTCOptions {
   onConnectionStateChange?: (state: string) => void;
   onIceConnectionStateChange?: (state: string) => void;
   onScreenshot?: (blob: Blob, meta: { id: string; format: string; size: number }) => void;
+
   onAnalyzeResult?: (text: string) => void;
+  onLlmConfig?: (config: LlmConfig) => void;
 }
 
 export type { WebRTCStats };
@@ -30,7 +32,9 @@ export function useWebRTC(options: WebRTCOptions) {
     onConnectionStateChange,
     onIceConnectionStateChange,
     onScreenshot,
+
     onAnalyzeResult,
+    onLlmConfig,
   } = options;
 
   const [connectionState, setConnectionState] = useState<string>("disconnected");
@@ -42,7 +46,10 @@ export function useWebRTC(options: WebRTCOptions) {
   const sendKeyQueue = useRef<Queue.Queue<{ key: string; down: boolean }> | null>(null);
   const screenshotRequestQueue = useRef<Queue.Queue<void> | null>(null);
   const analyzeRequestQueue = useRef<Queue.Queue<string> | null>(null);
+
   const debugActionQueue = useRef<Queue.Queue<"close_ws" | "close_pc"> | null>(null);
+  const getLlmConfigQueue = useRef<Queue.Queue<void> | null>(null);
+  const updateLlmConfigQueue = useRef<Queue.Queue<LlmConfig> | null>(null);
 
   // To trigger manual disconnect/reconnect (using a counter to restart the effect)
   const [connectTrigger, setConnectTrigger] = useState(0);
@@ -86,6 +93,33 @@ export function useWebRTC(options: WebRTCOptions) {
           Queue.offer(analyzeRequestQueue.current, id).pipe(Effect.catchAll(() => Effect.void)),
         );
         addLog(`解析リクエスト送信: ${id}`);
+      } else {
+        addLog("DataChannelが開いていません", "error");
+      }
+    },
+    [addLog],
+  );
+
+  const requestGetLlmConfig = useCallback(() => {
+    if (getLlmConfigQueue.current) {
+      Effect.runFork(
+        Queue.offer(getLlmConfigQueue.current, void 0).pipe(Effect.catchAll(() => Effect.void)),
+      );
+      addLog("LLM設定取得リクエスト送信");
+    } else {
+      addLog("DataChannelが開いていません", "error");
+    }
+  }, [addLog]);
+
+  const requestUpdateLlmConfig = useCallback(
+    (config: LlmConfig) => {
+      if (updateLlmConfigQueue.current) {
+        Effect.runFork(
+          Queue.offer(updateLlmConfigQueue.current, config).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
+        );
+        addLog("LLM設定更新リクエスト送信");
       } else {
         addLog("DataChannelが開いていません", "error");
       }
@@ -142,7 +176,10 @@ export function useWebRTC(options: WebRTCOptions) {
       const keyQ = yield* Queue.unbounded<{ key: string; down: boolean }>();
       const screenQ = yield* Queue.unbounded<void>();
       const analyzeQ = yield* Queue.unbounded<string>();
+
       const debugQ = yield* Queue.unbounded<"close_ws" | "close_pc">();
+      const getLlmConfigQ = yield* Queue.unbounded<void>();
+      const updateLlmConfigQ = yield* Queue.unbounded<LlmConfig>();
       const signalingQueue = yield* Queue.unbounded<WebRTCMessage>();
 
       yield* Effect.acquireRelease(
@@ -150,14 +187,20 @@ export function useWebRTC(options: WebRTCOptions) {
           sendKeyQueue.current = keyQ;
           screenshotRequestQueue.current = screenQ;
           analyzeRequestQueue.current = analyzeQ;
+
           debugActionQueue.current = debugQ;
+          getLlmConfigQueue.current = getLlmConfigQ;
+          updateLlmConfigQueue.current = updateLlmConfigQ;
         }),
         () =>
           Effect.sync(() => {
             sendKeyQueue.current = null;
             screenshotRequestQueue.current = null;
             analyzeRequestQueue.current = null;
+
             debugActionQueue.current = null;
+            getLlmConfigQueue.current = null;
+            updateLlmConfigQueue.current = null;
           }),
       );
 
@@ -320,6 +363,12 @@ export function useWebRTC(options: WebRTCOptions) {
           addLog("解析結果受信", "success");
           onAnalyzeResult?.(text);
         },
+        getLlmConfigQ,
+        updateLlmConfigQ,
+        (config) => {
+          addLog("LLM設定受信", "success");
+          onLlmConfig?.(config);
+        },
       ).pipe(
         // Retry logic for DataChannel
         Effect.retry(Schedule.fixed("1 second")),
@@ -405,6 +454,7 @@ export function useWebRTC(options: WebRTCOptions) {
     onTrack,
     onScreenshot,
     onAnalyzeResult,
+    onLlmConfig,
   ]);
 
   return {
@@ -417,6 +467,8 @@ export function useWebRTC(options: WebRTCOptions) {
     sendKey,
     requestScreenshot,
     requestAnalyze,
+    requestGetLlmConfig,
+    requestUpdateLlmConfig,
     simulateWsClose,
     simulatePcClose,
   };

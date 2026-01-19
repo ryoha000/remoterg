@@ -48,6 +48,7 @@ interface ViewerOverlayProps {
   onDisconnect: () => void;
   onRequestScreenshot: () => void;
   onOpenGallery: () => void;
+  onOpenSettings: () => void;
 
   // Debug
   showDebug: boolean;
@@ -87,6 +88,7 @@ export function ViewerOverlay({
   onDisconnect,
   onRequestScreenshot,
   onOpenGallery,
+  onOpenSettings,
   showDebug,
   onToggleDebug,
   onSimulateWsClose,
@@ -314,6 +316,16 @@ export function ViewerOverlay({
                       <Label className="text-xs text-zinc-400">Mouse Sensitivity</Label>
                       <span className="text-xs text-zinc-500">1.0</span>
                     </div>
+
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full"
+                      onClick={onOpenSettings}
+                    >
+                      <Settings className="w-4 h-4 mr-2" />
+                      LLM Config
+                    </Button>
                   </div>
 
                   <div className="pt-2 border-t border-zinc-800">

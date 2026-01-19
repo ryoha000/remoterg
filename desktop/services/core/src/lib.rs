@@ -251,7 +251,33 @@ pub enum DataChannelMessage {
     AnalyzeResponse {
         text: String,
     },
+    // LLM Config
+    GetLlmConfig,
+    UpdateLlmConfig {
+        config: LlmConfig,
+    },
+    LlmConfigResponse {
+        config: LlmConfig,
+    },
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LlmConfig {
+    pub port: u16,
+    pub model_path: Option<String>,
+    pub mmproj_path: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum TaggerCommand {
+    UpdateConfig {
+        config: LlmConfig,
+    },
+    GetConfig {
+        reply_tx: tokio::sync::oneshot::Sender<LlmConfig>,
+    },
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenshotMetadataPayload {

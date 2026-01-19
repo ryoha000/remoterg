@@ -13,6 +13,14 @@ const ScreenshotMetadataPayloadSchema = v.object({
   format: v.string(),
 });
 
+export const LlmConfigSchema = v.object({
+  port: v.number(),
+  model_path: v.nullable(v.string()),
+  mmproj_path: v.nullable(v.string()),
+});
+
+export type LlmConfig = v.InferOutput<typeof LlmConfigSchema>;
+
 const IncomingMessageSchema = v.object({
   SCREENSHOT_METADATA: v.optional(
     v.object({
@@ -25,6 +33,11 @@ const IncomingMessageSchema = v.object({
     }),
   ),
   Pong: v.optional(v.unknown()),
+  LlmConfigResponse: v.optional(
+    v.object({
+      config: LlmConfigSchema,
+    }),
+  ),
 });
 
 export const runDataChannel = (
@@ -35,6 +48,9 @@ export const runDataChannel = (
   onOpen: () => void,
   onScreenshot: (blob: Blob, meta: { id: string; format: string; size: number }) => void,
   onAnalyzeResult: (text: string) => void,
+  getLlmConfigQ: Queue.Queue<void>,
+  updateLlmConfigQ: Queue.Queue<LlmConfig>,
+  onLlmConfig: (config: LlmConfig) => void,
 ) =>
   Effect.gen(function* () {
     const waitForOpen = Effect.async<void>((resume) => {
@@ -111,6 +127,28 @@ export const runDataChannel = (
       Effect.forever,
     );
 
+    const processGetLlmConfig = Queue.take(getLlmConfigQ).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (dc.readyState === "open") {
+            dc.send(JSON.stringify({ GetLlmConfig: null }));
+          }
+        }),
+      ),
+      Effect.forever,
+    );
+
+    const processUpdateLlmConfig = Queue.take(updateLlmConfigQ).pipe(
+      Effect.tap((config) =>
+        Effect.sync(() => {
+          if (dc.readyState === "open") {
+            dc.send(JSON.stringify({ UpdateLlmConfig: { config } }));
+          }
+        }),
+      ),
+      Effect.forever,
+    );
+
     const waitForClose = Effect.async<void>((resume) => {
       const onClose = () => {
         dc.removeEventListener("close", onClose);
@@ -147,6 +185,9 @@ export const runDataChannel = (
             } else if (msg.ANALYZE_RESPONSE) {
               console.log("Analysis response received");
               onAnalyzeResult(msg.ANALYZE_RESPONSE.text);
+            } else if (msg.LlmConfigResponse) {
+              console.log("LlmConfig received:", msg.LlmConfigResponse.config);
+              onLlmConfig(msg.LlmConfigResponse.config);
             } else if (msg.Pong) {
               // Handle Pong if needed
             }
@@ -193,9 +234,19 @@ export const runDataChannel = (
     });
 
     yield* Effect.race(
-      Effect.all([keepAlive, processKeys, processScreens, processAnalyze], {
-        concurrency: "unbounded",
-      }),
+      Effect.all(
+        [
+          keepAlive,
+          processKeys,
+          processScreens,
+          processAnalyze,
+          processGetLlmConfig,
+          processUpdateLlmConfig,
+        ],
+        {
+          concurrency: "unbounded",
+        },
+      ),
       waitForClose,
     );
   });

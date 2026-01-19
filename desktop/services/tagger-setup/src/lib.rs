@@ -6,17 +6,57 @@ use tracing::{debug, info, warn};
 
 pub struct TaggerSetup {
     child: Option<Child>,
+    current_port: u16,
+    current_server_path: Option<PathBuf>,
+    current_model_path: Option<PathBuf>,
+    current_mmproj_path: Option<PathBuf>,
 }
+
 
 impl TaggerSetup {
     pub fn new() -> Self {
-        Self { child: None }
+        Self {
+            child: None,
+            current_port: 8081,
+            current_server_path: None,
+            current_model_path: None,
+            current_mmproj_path: None,
+        }
     }
 
-    pub async fn start(&mut self, port: u16, server_path: Option<PathBuf>) -> Result<()> {
+    pub async fn start(
+        &mut self,
+        port: u16,
+        server_path: Option<PathBuf>,
+        custom_model_path: Option<PathBuf>,
+        custom_mmproj_path: Option<PathBuf>,
+    ) -> Result<()> {
+        self.current_port = port;
+        self.current_server_path = server_path.clone();
+        self.current_model_path = custom_model_path.clone();
+        self.current_mmproj_path = custom_mmproj_path.clone();
+
         let server_path = self.resolve_server_path(server_path)?;
-        let model_path = self.resolve_model_path(&server_path)?;
-        let mmproj_path = self.resolve_mmproj_path(&server_path)?;
+        let model_path = if let Some(p) = custom_model_path {
+            if !p.exists() {
+                warn!("Custom model file not found at {:?}. llama-server might fail.", p);
+            }
+            p
+        } else {
+            self.resolve_model_path(&server_path)?
+        };
+        self.current_model_path = Some(model_path.clone());
+
+        let mmproj_path = if let Some(p) = custom_mmproj_path {
+             if !p.exists() {
+                warn!("Custom mmproj file not found at {:?}. llama-server might fail.", p);
+            }
+            p
+        } else {
+             self.resolve_mmproj_path(&server_path)?
+        };
+        self.current_mmproj_path = Some(mmproj_path.clone());
+
         let use_gpu = self.check_gpu_availability().await;
 
         let mut args = vec![
@@ -58,6 +98,21 @@ impl TaggerSetup {
         info!("llama-server started on port {}", port);
 
         Ok(())
+    }
+
+    pub async fn restart(
+        &mut self,
+        port: u16,
+        server_path: Option<PathBuf>,
+        custom_model_path: Option<PathBuf>,
+        custom_mmproj_path: Option<PathBuf>,
+    ) -> Result<()> {
+        self.shutdown().await?;
+        self.start(port, server_path, custom_model_path, custom_mmproj_path).await
+    }
+
+    pub fn get_config(&self) -> (u16, Option<PathBuf>, Option<PathBuf>) {
+        (self.current_port, self.current_model_path.clone(), self.current_mmproj_path.clone())
     }
 
     fn resolve_server_path(&self, server_path: Option<PathBuf>) -> Result<PathBuf> {

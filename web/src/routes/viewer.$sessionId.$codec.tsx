@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 
 import { ViewerOverlay } from "@/components/viewer/viewer-overlay";
 import { GalleryModal, type GalleryImage } from "@/components/viewer/gallery-modal";
+import { SettingsModal } from "@/components/viewer/settings-modal";
+import { type LlmConfig } from "@/lib/webrtc/data-channel";
 
 import * as v from "valibot";
 
@@ -27,7 +29,10 @@ function ViewerPage() {
   const overlayTimerRef = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
+
   const [galleryImages, setGalleryImages] = useState<GalleryImage[]>([]);
+  const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const handleTrack = useCallback((receivedStream: MediaStream) => {
     setStream(receivedStream);
@@ -58,7 +63,13 @@ function ViewerPage() {
   const handleAnalyzeResult = useCallback((text: string) => {
     console.log("Analyze result:", text);
     // TODO: Display result in UI
+    // TODO: Display result in UI
     alert(text);
+  }, []);
+
+  const handleLlmConfig = useCallback((config: LlmConfig) => {
+    console.log("LLM Config received:", config);
+    setLlmConfig(config);
   }, []);
 
   const {
@@ -70,6 +81,9 @@ function ViewerPage() {
     logs,
     requestScreenshot,
     requestAnalyze,
+
+    requestGetLlmConfig,
+    requestUpdateLlmConfig,
     simulateWsClose,
     simulatePcClose,
   } = useWebRTC({
@@ -79,6 +93,7 @@ function ViewerPage() {
     onTrack: handleTrack,
     onScreenshot: handleScreenshot,
     onAnalyzeResult: handleAnalyzeResult,
+    onLlmConfig: handleLlmConfig,
   });
 
   // Auto-connect on mount
@@ -188,6 +203,10 @@ function ViewerPage() {
         onDisconnect={disconnect}
         onRequestScreenshot={requestScreenshot}
         onOpenGallery={() => setGalleryOpen(true)}
+        onOpenSettings={() => {
+          setSettingsOpen(true);
+          requestGetLlmConfig();
+        }}
         showDebug={showDebug}
         onToggleDebug={setShowDebug}
         onSimulateWsClose={simulateWsClose}
@@ -202,6 +221,16 @@ function ViewerPage() {
           requestAnalyze(id);
           // Feedback for user
           console.log(`Requested analysis for ${id}`);
+        }}
+      />
+
+      <SettingsModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        config={llmConfig}
+        onSave={(newConfig) => {
+          console.log("Saving new config:", newConfig);
+          requestUpdateLlmConfig(newConfig);
         }}
       />
     </div>

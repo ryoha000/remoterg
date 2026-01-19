@@ -19,6 +19,7 @@ pub struct InputService {
     capture_cmd_tx: mpsc::Sender<CaptureMessage>,
     outgoing_dc_tx: mpsc::Sender<OutgoingDataChannelMessage>,
     tagger_service: TaggerService,
+    tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
     screenshot_dir: PathBuf,
 }
 
@@ -60,6 +61,7 @@ impl InputService {
         capture_cmd_tx: mpsc::Sender<CaptureMessage>,
         outgoing_dc_tx: mpsc::Sender<OutgoingDataChannelMessage>,
         tagger_service: TaggerService,
+        tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
         screenshot_dir: PathBuf,
     ) -> Self {
         Self {
@@ -67,6 +69,7 @@ impl InputService {
             capture_cmd_tx,
             outgoing_dc_tx,
             tagger_service,
+            tagger_cmd_tx,
             screenshot_dir,
         }
     }
@@ -115,6 +118,15 @@ impl InputService {
             }
             DataChannelMessage::Pong { timestamp: _ } => {
                 // Pong receives are ignored
+            }
+
+            DataChannelMessage::GetLlmConfig => {
+                info!("GetLlmConfig");
+                self.handle_get_llm_config().await?;
+            }
+            DataChannelMessage::UpdateLlmConfig { config } => {
+                info!("UpdateLlmConfig: {:?}", config);
+                self.handle_update_llm_config(config).await?;
             }
             _ => {
                 debug!("Unhandled message: {:?}", msg);
@@ -283,6 +295,46 @@ impl InputService {
             .await?;
 
         info!("Sent analysis response");
+        Ok(())
+    }
+
+    async fn handle_get_llm_config(&self) -> Result<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Err(e) = self
+            .tagger_cmd_tx
+            .send(core_types::TaggerCommand::GetConfig { reply_tx: tx })
+            .await
+        {
+            error!("Failed to send GetConfig to hostd: {}", e);
+            return Ok(());
+        }
+
+        match rx.await {
+            Ok(config) => {
+                let response = DataChannelMessage::LlmConfigResponse { config };
+                self.outgoing_dc_tx
+                    .send(OutgoingDataChannelMessage::Text(response))
+                    .await?;
+            }
+            Err(e) => {
+                error!("Failed to receive LlmConfig response: {}", e);
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_update_llm_config(&self, config: core_types::LlmConfig) -> Result<()> {
+        if let Err(e) = self
+            .tagger_cmd_tx
+            .send(core_types::TaggerCommand::UpdateConfig {
+                config: config.clone(),
+            })
+            .await
+        {
+            error!("Failed to send UpdateConfig to hostd: {}", e);
+            return Ok(());
+        }
+
         Ok(())
     }
 }

@@ -13,7 +13,7 @@ use audio_encoder::OpusEncoderFactory;
 use audio_stream::AudioStreamService;
 use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
-    SignalingResponse, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
+    SignalingResponse, TaggerCommand, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
 };
 #[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
     let llama_server_path = args.llama_server_path.as_ref().map(std::path::PathBuf::from);
 
     if let Err(e) = tagger_setup
-        .start(args.llm_port, llama_server_path)
+        .start(args.llm_port, llama_server_path.clone(), None, None)
         .await
     {
         tracing::warn!("Failed to start LLM sidecar: {}", e);
@@ -132,6 +132,9 @@ async fn main() -> Result<()> {
 
     // 音声チャンネル作成
     let (audio_capture_cmd_tx, audio_capture_cmd_rx) = mpsc::channel::<AudioCaptureMessage>(10);
+
+    // Tagger Config Channel
+    let (tagger_cmd_tx, mut tagger_cmd_rx) = mpsc::channel::<TaggerCommand>(10);
 
     // ビデオストリームメッセージチャネル（キーフレーム要求など）
     let (video_stream_msg_tx, video_stream_msg_rx) = mpsc::channel::<VideoStreamMessage>(10);
@@ -224,6 +227,7 @@ async fn main() -> Result<()> {
         capture_cmd_tx_for_input, 
         outgoing_dc_tx, // Pass outgoing_dc_tx
         tagger_service,
+        tagger_cmd_tx,
         std::path::PathBuf::from(args.screenshots_dir),
     );
     let signaling_client = SignalingClient::new(
@@ -256,18 +260,18 @@ async fn main() -> Result<()> {
     }
 
     // サービスを独立タスクとして起動（Send でない WebRTC はこのスレッドで駆動する）
-    let capture_handle = tokio::spawn(async move { capture_service.run().await });
-    let audio_capture_handle = tokio::spawn(async move { audio_capture_service.run().await });
-    let input_handle = tokio::spawn(async move { input_service.run().await });
-    let signaling_handle = tokio::spawn(async move { signaling_client.run().await });
+    let mut capture_handle = tokio::spawn(async move { capture_service.run().await });
+    let mut audio_capture_handle = tokio::spawn(async move { audio_capture_service.run().await });
+    let mut input_handle = tokio::spawn(async move { input_service.run().await });
+    let mut signaling_handle = tokio::spawn(async move { signaling_client.run().await });
 
     // VideoStreamService起動タスク
-    let video_stream_handle = tokio::spawn(async move {
+    let mut video_stream_handle = tokio::spawn(async move {
         video_stream_service.run(video_track_rx).await
     });
 
     // AudioStreamService起動タスク
-    let audio_stream_handle = tokio::spawn(async move {
+    let mut audio_stream_handle = tokio::spawn(async move {
         audio_stream_service.run(audio_track_rx).await
     });
 
@@ -275,42 +279,69 @@ async fn main() -> Result<()> {
     let webrtc_fut = webrtc_service.run(webrtc_msg_tx_for_run);
     pin!(webrtc_fut);
 
-    tokio::select! {
-        result = &mut webrtc_fut => match result {
-            Ok(()) => info!("WebRtcService finished"),
-            Err(e) => tracing::error!("WebRtcService error: {}", e),
-        },
-        result = capture_handle => match result {
-            Ok(Ok(())) => info!("CaptureService finished"),
-            Ok(Err(e)) => tracing::error!("CaptureService error: {}", e),
-            Err(e) => tracing::error!("CaptureService task panicked: {}", e),
-        },
-        result = audio_capture_handle => match result {
-            Ok(Ok(())) => info!("AudioCaptureService finished"),
-            Ok(Err(e)) => tracing::error!("AudioCaptureService error: {}", e),
-            Err(e) => tracing::error!("AudioCaptureService task panicked: {}", e),
-        },
-        result = video_stream_handle => match result {
-            Ok(Ok(())) => info!("VideoStreamService finished"),
-            Ok(Err(e)) => tracing::error!("VideoStreamService error: {}", e),
-            Err(e) => tracing::error!("VideoStreamService task panicked: {}", e),
-        },
-        result = audio_stream_handle => match result {
-            Ok(Ok(())) => info!("AudioStreamService finished"),
-            Ok(Err(e)) => tracing::error!("AudioStreamService error: {}", e),
-            Err(e) => tracing::error!("AudioStreamService task panicked: {}", e),
-        },
-        result = input_handle => match result {
-            Ok(Ok(())) => info!("InputService finished"),
-            Ok(Err(e)) => tracing::error!("InputService error: {}", e),
-            Err(e) => tracing::error!("InputService task panicked: {}", e),
-        },
-        result = signaling_handle => match result {
-            Ok(Ok(())) => info!("SignalingService finished"),
-            Ok(Err(e)) => tracing::error!("SignalingService error: {}", e),
-            Err(e) => tracing::error!("SignalingService task panicked: {}", e),
-        },
-    };
+    loop {
+        tokio::select! {
+            cmd = tagger_cmd_rx.recv() => {
+                match cmd {
+                    Some(TaggerCommand::UpdateConfig { config }) => {
+                        info!("Restarting llama-server with new config: {:?}", config);
+                        let model_path = config.model_path.map(std::path::PathBuf::from);
+                        let mmproj_path = config.mmproj_path.map(std::path::PathBuf::from);
+                        if let Err(e) = tagger_setup.restart(config.port, llama_server_path.clone(), model_path, mmproj_path).await {
+                             tracing::error!("Failed to restart llama-server: {}", e);
+                        }
+                    }
+                    Some(TaggerCommand::GetConfig { reply_tx }) => {
+                        let (port, model_path, mmproj_path) = tagger_setup.get_config();
+                        let config = core_types::LlmConfig {
+                            port,
+                            model_path: model_path.map(|p| p.to_string_lossy().to_string()),
+                            mmproj_path: mmproj_path.map(|p| p.to_string_lossy().to_string()),
+                        };
+                        let _ = reply_tx.send(config);
+                    }
+                    None => {
+                        info!("Tagger command channel closed");
+                        break;
+                    }
+                }
+            }
+            result = &mut webrtc_fut => match result {
+                Ok(()) => { info!("WebRtcService finished"); break; },
+                Err(e) => { tracing::error!("WebRtcService error: {}", e); break; },
+            },
+            result = &mut capture_handle => match result {
+                Ok(Ok(())) => { info!("CaptureService finished"); break; },
+                Ok(Err(e)) => { tracing::error!("CaptureService error: {}", e); break; },
+                Err(e) => { tracing::error!("CaptureService task panicked: {}", e); break; },
+            },
+            result = &mut audio_capture_handle => match result {
+                Ok(Ok(())) => { info!("AudioCaptureService finished"); break; },
+                Ok(Err(e)) => { tracing::error!("AudioCaptureService error: {}", e); break; },
+                Err(e) => { tracing::error!("AudioCaptureService task panicked: {}", e); break; },
+            },
+            result = &mut video_stream_handle => match result {
+                Ok(Ok(())) => { info!("VideoStreamService finished"); break; },
+                Ok(Err(e)) => { tracing::error!("VideoStreamService error: {}", e); break; },
+                Err(e) => { tracing::error!("VideoStreamService task panicked: {}", e); break; },
+            },
+            result = &mut audio_stream_handle => match result {
+                Ok(Ok(())) => { info!("AudioStreamService finished"); break; },
+                Ok(Err(e)) => { tracing::error!("AudioStreamService error: {}", e); break; },
+                Err(e) => { tracing::error!("AudioStreamService task panicked: {}", e); break; },
+            },
+            result = &mut input_handle => match result {
+                Ok(Ok(())) => { info!("InputService finished"); break; },
+                Ok(Err(e)) => { tracing::error!("InputService error: {}", e); break; },
+                Err(e) => { tracing::error!("InputService task panicked: {}", e); break; },
+            },
+            result = &mut signaling_handle => match result {
+                Ok(Ok(())) => { info!("SignalingService finished"); break; },
+                Ok(Err(e)) => { tracing::error!("SignalingService error: {}", e); break; },
+                Err(e) => { tracing::error!("SignalingService task panicked: {}", e); break; },
+            },
+        }
+    }
 
     info!("Host daemon stopped");
     Ok(())

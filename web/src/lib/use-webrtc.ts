@@ -17,7 +17,7 @@ export interface WebRTCOptions {
   onIceConnectionStateChange?: (state: string) => void;
   onScreenshot?: (blob: Blob, meta: { id: string; format: string; size: number }) => void;
 
-  onAnalyzeResult?: (text: string) => void;
+  onAnalyzeResult?: (id: string, text: string) => void;
   onLlmConfig?: (config: LlmConfig) => void;
 }
 
@@ -359,9 +359,9 @@ export function useWebRTC(options: WebRTCOptions) {
           addLog("スクリーンショット受信", "success");
           onScreenshot?.(blob, meta);
         },
-        (text) => {
+        (id, text) => {
           addLog("解析結果受信", "success");
-          onAnalyzeResult?.(text);
+          onAnalyzeResult?.(id, text);
         },
         getLlmConfigQ,
         updateLlmConfigQ,

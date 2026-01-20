@@ -249,6 +249,7 @@ pub enum DataChannelMessage {
     },
     #[serde(rename = "ANALYZE_RESPONSE")]
     AnalyzeResponse {
+        id: String,
         text: String,
     },
     // LLM Config

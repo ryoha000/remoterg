@@ -294,7 +294,10 @@ impl InputService {
         info!("Analysis result: {}", result_text);
 
         // 4. Send Response
-        let response = DataChannelMessage::AnalyzeResponse { text: result_text };
+        let response = DataChannelMessage::AnalyzeResponse {
+            id,
+            text: result_text,
+        };
         self.outgoing_dc_tx
             .send(OutgoingDataChannelMessage::Text(response))
             .await?;

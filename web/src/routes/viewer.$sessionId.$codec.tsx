@@ -60,11 +60,18 @@ function ViewerPage() {
     [],
   );
 
-  const handleAnalyzeResult = useCallback((text: string) => {
-    console.log("Analyze result:", text);
-    // TODO: Display result in UI
-    // TODO: Display result in UI
-    alert(text);
+  const handleAnalyzeResult = useCallback((id: string, text: string) => {
+    console.log(`Analyze result for ${id}:`, text);
+    try {
+      const analysis = JSON.parse(text);
+      setGalleryImages((prev) =>
+        prev.map((img) =>
+          img.id === id ? { ...img, analysis, isAnalyzing: false } : img
+        )
+      );
+    } catch (e) {
+      console.error("Failed to parse analysis result", e);
+    }
   }, []);
 
   const handleLlmConfig = useCallback((config: LlmConfig) => {
@@ -219,8 +226,11 @@ function ViewerPage() {
         images={galleryImages}
         onRequestAnalyze={(id) => {
           requestAnalyze(id);
-          // Feedback for user
-          console.log(`Requested analysis for ${id}`);
+          setGalleryImages((prev) =>
+            prev.map((img) =>
+              img.id === id ? { ...img, isAnalyzing: true } : img
+            )
+          );
         }}
       />
 

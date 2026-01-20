@@ -29,6 +29,7 @@ const IncomingMessageSchema = v.object({
   ),
   ANALYZE_RESPONSE: v.optional(
     v.object({
+      id: v.string(),
       text: v.string(),
     }),
   ),
@@ -47,7 +48,7 @@ export const runDataChannel = (
   analyzeQ: Queue.Queue<string>,
   onOpen: () => void,
   onScreenshot: (blob: Blob, meta: { id: string; format: string; size: number }) => void,
-  onAnalyzeResult: (text: string) => void,
+  onAnalyzeResult: (id: string, text: string) => void,
   getLlmConfigQ: Queue.Queue<void>,
   updateLlmConfigQ: Queue.Queue<LlmConfig>,
   onLlmConfig: (config: LlmConfig) => void,
@@ -184,7 +185,7 @@ export const runDataChannel = (
               };
             } else if (msg.ANALYZE_RESPONSE) {
               console.log("Analysis response received");
-              onAnalyzeResult(msg.ANALYZE_RESPONSE.text);
+              onAnalyzeResult(msg.ANALYZE_RESPONSE.id, msg.ANALYZE_RESPONSE.text);
             } else if (msg.LlmConfigResponse) {
               console.log("LlmConfig received:", msg.LlmConfigResponse.config);
               onLlmConfig(msg.LlmConfigResponse.config);

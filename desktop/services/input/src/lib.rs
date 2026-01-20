@@ -283,26 +283,52 @@ impl InputService {
         };
 
         // 3. Call Tagger
-        let result_text = match self.tagger_service.analyze_screenshot(&image_data_for_analysis, PROMPT).await {
-            Ok(text) => text,
+        let mut rx = match self
+            .tagger_service
+            .analyze_screenshot_stream(&image_data_for_analysis, PROMPT)
+            .await
+        {
+            Ok(rx) => rx,
             Err(e) => {
                 error!("Tagger analysis failed: {}", e);
-                format!("Error: {}", e)
+                let response = DataChannelMessage::AnalyzeResponse {
+                    id: id.clone(),
+                    text: format!("Error: {}", e),
+                };
+                self.outgoing_dc_tx
+                    .send(OutgoingDataChannelMessage::Text(response))
+                    .await?;
+                return Ok(());
             }
         };
 
-        info!("Analysis result: {}", result_text);
+        info!("Analysis stream started for {}", id);
 
-        // 4. Send Response
-        let response = DataChannelMessage::AnalyzeResponse {
-            id,
-            text: result_text,
-        };
+        while let Some(result) = rx.recv().await {
+            match result {
+                Ok(delta) => {
+                    let response = DataChannelMessage::AnalyzeResponseChunk {
+                        id: id.clone(),
+                        delta,
+                    };
+                    self.outgoing_dc_tx
+                        .send(OutgoingDataChannelMessage::Text(response))
+                        .await?;
+                }
+                Err(e) => {
+                    error!("Stream error during analysis: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // 4. Send Done
+        let response = DataChannelMessage::AnalyzeResponseDone { id };
         self.outgoing_dc_tx
             .send(OutgoingDataChannelMessage::Text(response))
             .await?;
 
-        info!("Sent analysis response");
+        info!("Sent analysis completion");
         Ok(())
     }
 

@@ -43,6 +43,7 @@ export interface GalleryImage {
   format: string;
   size: number;
   isAnalyzing?: boolean;
+  rawAnalysisText?: string;
   analysis?: AnalysisResult;
 }
 
@@ -125,7 +126,7 @@ function AnalysisViewer({ analysis }: { analysis: AnalysisResult }) {
                 </div>
                 <div className="text-zinc-300 mb-2">{char.visual_description}</div>
                 <div className="flex flex-wrap gap-1">
-                  {char.expression_tags.map((tag, j) => (
+                  {char.expression_tags?.map((tag, j) => (
                     <Badge key={j} variant="secondary" className="bg-zinc-800 text-zinc-400 text-[10px] hover:bg-zinc-700">
                       {tag}
                     </Badge>
@@ -272,13 +273,21 @@ export function GalleryModal({ open, onOpenChange, images, onRequestAnalyze }: G
                         </h3>
                       </div>
                       
-                      {selectedImage.isAnalyzing ? (
+                      {selectedImage.analysis ? (
+                        <div className="space-y-4">
+                          <AnalysisViewer analysis={selectedImage.analysis} />
+                          {selectedImage.isAnalyzing && (
+                            <div className="flex items-center justify-center py-2 text-xs text-zinc-500 gap-2 animate-pulse">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Generating...
+                            </div>
+                          )}
+                        </div>
+                      ) : selectedImage.isAnalyzing ? (
                         <div className="flex flex-col items-center justify-center py-8 gap-3 text-zinc-500">
                           <Loader2 className="w-8 h-8 animate-spin text-purple-500" />
                           <p className="text-sm animate-pulse">Analyzing image context...</p>
                         </div>
-                      ) : selectedImage.analysis ? (
-                        <AnalysisViewer analysis={selectedImage.analysis} />
                       ) : (
                         <div className="bg-zinc-900/30 rounded-lg p-4 border border-zinc-800/50 text-center space-y-3">
                           <p className="text-sm text-zinc-400">

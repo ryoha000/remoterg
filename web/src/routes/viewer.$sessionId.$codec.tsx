@@ -7,6 +7,7 @@ import { ViewerOverlay } from "@/components/viewer/viewer-overlay";
 import { GalleryModal, type GalleryImage } from "@/components/viewer/gallery-modal";
 import { SettingsModal } from "@/components/viewer/settings-modal";
 import { type LlmConfig } from "@/lib/webrtc/data-channel";
+import { parse } from "best-effort-json-parser";
 
 import * as v from "valibot";
 
@@ -74,6 +75,35 @@ function ViewerPage() {
     }
   }, []);
 
+  const handleAnalyzeResultDelta = useCallback((id: string, delta: string) => {
+    setGalleryImages((prev) =>
+      prev.map((img) => {
+        if (img.id !== id) return img;
+
+        const newRawText = (img.rawAnalysisText || "") + delta;
+        let analysis = img.analysis;
+        try {
+          analysis = parse(newRawText);
+        } catch {
+          // ignore transient parse errors
+        }
+
+        return {
+          ...img,
+          rawAnalysisText: newRawText,
+          analysis,
+          isAnalyzing: true,
+        };
+      })
+    );
+  }, []);
+
+  const handleAnalyzeDone = useCallback((id: string) => {
+    setGalleryImages((prev) =>
+      prev.map((img) => (img.id === id ? { ...img, isAnalyzing: false } : img))
+    );
+  }, []);
+
   const handleLlmConfig = useCallback((config: LlmConfig) => {
     console.log("LLM Config received:", config);
     setLlmConfig(config);
@@ -100,6 +130,8 @@ function ViewerPage() {
     onTrack: handleTrack,
     onScreenshot: handleScreenshot,
     onAnalyzeResult: handleAnalyzeResult,
+    onAnalyzeResultDelta: handleAnalyzeResultDelta,
+    onAnalyzeDone: handleAnalyzeDone,
     onLlmConfig: handleLlmConfig,
   });
 

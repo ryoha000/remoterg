@@ -18,6 +18,8 @@ export interface WebRTCOptions {
   onScreenshot?: (blob: Blob, meta: { id: string; format: string; size: number }) => void;
 
   onAnalyzeResult?: (id: string, text: string) => void;
+  onAnalyzeResultDelta?: (id: string, delta: string) => void;
+  onAnalyzeDone?: (id: string) => void;
   onLlmConfig?: (config: LlmConfig) => void;
 }
 
@@ -34,6 +36,8 @@ export function useWebRTC(options: WebRTCOptions) {
     onScreenshot,
 
     onAnalyzeResult,
+    onAnalyzeResultDelta,
+    onAnalyzeDone,
     onLlmConfig,
   } = options;
 
@@ -363,6 +367,12 @@ export function useWebRTC(options: WebRTCOptions) {
           addLog("解析結果受信", "success");
           onAnalyzeResult?.(id, text);
         },
+        (id, delta) => {
+          onAnalyzeResultDelta?.(id, delta);
+        },
+        (id) => {
+            onAnalyzeDone?.(id);
+        },
         getLlmConfigQ,
         updateLlmConfigQ,
         (config) => {
@@ -454,6 +464,8 @@ export function useWebRTC(options: WebRTCOptions) {
     onTrack,
     onScreenshot,
     onAnalyzeResult,
+    onAnalyzeResultDelta,
+    onAnalyzeDone,
     onLlmConfig,
   ]);
 

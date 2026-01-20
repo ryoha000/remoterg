@@ -252,6 +252,15 @@ pub enum DataChannelMessage {
         id: String,
         text: String,
     },
+    #[serde(rename = "ANALYZE_RESPONSE_CHUNK")]
+    AnalyzeResponseChunk {
+        id: String,
+        delta: String,
+    },
+    #[serde(rename = "ANALYZE_RESPONSE_DONE")]
+    AnalyzeResponseDone {
+        id: String,
+    },
     // LLM Config
     GetLlmConfig,
     UpdateLlmConfig {

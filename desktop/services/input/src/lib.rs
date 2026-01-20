@@ -260,6 +260,15 @@ impl InputService {
                     match resized.write_to(&mut cursor, image::ImageOutputFormat::Png) {
                         Ok(_) => {
                             info!("Resized image size: {} bytes", resized_data.len());
+                            
+                            // Save resized image
+                            let resized_path = self.screenshot_dir.join(format!("{}_resized.png", id));
+                            if let Err(e) = tokio::fs::write(&resized_path, &resized_data).await {
+                                error!("Failed to save resized image: {}", e);
+                            } else {
+                                info!("Saved resized image to: {:?}", resized_path);
+                            }
+
                             resized_data
                         },
                         Err(e) => {

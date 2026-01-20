@@ -99,6 +99,8 @@ impl TaggerSetup {
             info!("NVIDIA GPU detected, enabling GPU offload");
             args.push("--n-gpu-layers".to_string());
             args.push("999".to_string());
+            // Workaround for slow vision processing on some GPUs with Qwen2-VL
+            args.push("--no-mmproj-offload".to_string());
         } else {
             warn!("NVIDIA GPU not detected, falling back to CPU/Software");
         }

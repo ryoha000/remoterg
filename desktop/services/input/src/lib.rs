@@ -35,8 +35,7 @@ const PROMPT: &str = r#"以下のJSONスキーマに従って、スクリーン�
   },
   "dialogue": {
     "speaker": "文字列: 名前欄に表示されている名前",
-    "text": "文字列: メッセージウィンドウ内の全文（改行は \n で保持）",
-    "is_choice_active": "真偽値: 選択肢が表示されているかどうか"
+    "text": "文字列: メッセージウィンドウ内の全文（改行は \n で保持）"
   },
   "characters": [
     {
@@ -45,10 +44,7 @@ const PROMPT: &str = r#"以下のJSONスキーマに従って、スクリーン�
       "visual_description": "文字列: 服装やポーズの簡潔な説明",
       "position": "文字列: 画面内の位置（左、中央、右）"
     }
-  ],
-  "system_ui": {
-    "visible_buttons": ["文字列: セーブ、ログ、スキップ等、現在見えるUI要素"]
-  }
+  ]
 }
 
 ### 出力制約:

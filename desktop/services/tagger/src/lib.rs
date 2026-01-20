@@ -64,21 +64,6 @@ impl TaggerService {
     pub async fn analyze_screenshot(&self, image_data: &[u8], prompt: &str) -> Result<String> {
         let base64_image = BASE64_STANDARD.encode(image_data);
         let data_url = format!("data:image/png;base64,{}", base64_image); 
-        // Note: The screenshot capture service usually produces raw BGRA or RGBA. 
-        // We might need to encode it to JPEG/PNG before sending to LLM if it expects an image file format.
-        // Q: Does llama-server accept raw pixel data? No, usually data URLs with standard image formats.
-        // So we MUST encode the raw bytes (which I assume `image_data` is) into a compressed format (PNG/JPEG).
-        // Wait, where does `image_data` come from? If it's already encoded (e.g. from a saved file), good.
-        // If it's raw frame buffer, we need to encode it.
-        // The task description says "取得したスクリーンショット" (Taken screenshot). 
-        // If it comes from `CaptureService`, it's likely raw `Vec<u8>` (BGRA).
-        // If so, we need `image` crate to encode it to PNG/JPEG.
-        // Let's assume for now `image_data` IS ALREADY ENCODED (JPEG/PNG) by the caller, 
-        // or that we will add encoding logic.
-        // Given dependencies, I don't see `image` crate in `tagger`'s Cargo.toml.
-        // I should probably ensure the caller handles encoding or add `image` crate.
-        // However, `hostd` might already have `image` crate or `encoder` service might handle it.
-        // Let's proceed assuming `image_data` is a valid image FILE content (PNG/JPEG bytes).
 
         let request = ChatCompletionRequest {
             messages: vec![Message {
@@ -94,7 +79,7 @@ impl TaggerService {
                     },
                 ],
             }],
-            max_tokens: Some(1024), // Reasonable default
+            max_tokens: Some(512),
             temperature: Some(0.7),
         };
 

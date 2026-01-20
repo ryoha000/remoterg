@@ -3,9 +3,17 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 use tracing::{debug, info, warn};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
 pub struct TaggerSetup {
     child: Option<Child>,
+    job_handle: Option<HANDLE>,
     current_port: u16,
     current_server_path: Option<PathBuf>,
     current_model_path: Option<PathBuf>,
@@ -17,6 +25,7 @@ impl TaggerSetup {
     pub fn new() -> Self {
         Self {
             child: None,
+            job_handle: None,
             current_port: 8081,
             current_server_path: None,
             current_model_path: None,
@@ -57,6 +66,22 @@ impl TaggerSetup {
         };
         self.current_mmproj_path = Some(mmproj_path.clone());
 
+        // Ensure Job Object is created
+        if self.job_handle.is_none() {
+            unsafe {
+                let job = CreateJobObjectW(None, None)?;
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )?;
+                self.job_handle = Some(job);
+            }
+        }
+
         let use_gpu = self.check_gpu_availability().await;
 
         let mut args = vec![
@@ -93,6 +118,27 @@ impl TaggerSetup {
             .kill_on_drop(true)
             .spawn()
             .context("Failed to spawn llama-server")?;
+
+        if let Some(job) = self.job_handle {
+            if let Some(pid) = child.id() {
+                let process_handle_res = unsafe {
+                    OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)
+                };
+                match process_handle_res {
+                    Ok(process_handle) => {
+                        unsafe {
+                            if let Err(e) = AssignProcessToJobObject(job, process_handle) {
+                                warn!("Failed to assign llama-server to Job Object: {}", e);
+                            }
+                            let _ = CloseHandle(process_handle);
+                        }
+                    }
+                    Err(e) => {
+                         warn!("Failed to open process handle for llama-server (PID: {}): {}", pid, e);
+                    }
+                }
+            }
+        }
 
         self.child = Some(child);
         info!("llama-server started on port {}", port);
@@ -182,6 +228,9 @@ impl TaggerSetup {
             child.kill().await?;
             child.wait().await?;
             info!("llama-server stopped");
+        }
+        if let Some(job) = self.job_handle.take() {
+            unsafe { let _ = CloseHandle(job); }
         }
         Ok(())
     }

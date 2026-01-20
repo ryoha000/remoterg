@@ -3447,6 +3447,7 @@ dependencies = [
  "anyhow",
  "tokio",
  "tracing",
+ "windows",
 ]
 
 [[package]]

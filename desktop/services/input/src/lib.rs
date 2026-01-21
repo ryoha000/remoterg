@@ -104,9 +104,9 @@ impl InputService {
                 info!("Screenshot requested");
                 self.handle_screenshot_request().await?;
             }
-            DataChannelMessage::AnalyzeRequest { id } => {
-                info!("Analysis requested for screenshot: {}", id);
-                self.handle_analyze_request(id).await?;
+            DataChannelMessage::AnalyzeRequest { id, max_edge } => {
+                info!("Analysis requested for screenshot: {} (max_edge: {})", id, max_edge);
+                self.handle_analyze_request(id, max_edge).await?;
             }
             DataChannelMessage::Ping { timestamp } => {
                 debug!("Ping received: timestamp={}", timestamp);
@@ -228,7 +228,7 @@ impl InputService {
         Ok(())
     }
 
-    async fn handle_analyze_request(&self, id: String) -> Result<()> {
+    async fn handle_analyze_request(&self, id: String, max_edge: u32) -> Result<()> {
         let file_path = self.screenshot_dir.join(format!("{}.png", id));
         if !file_path.exists() {
             error!("Requested analysis for missing screenshot: {}", id);
@@ -246,9 +246,9 @@ impl InputService {
                 let width = img.width();
                 let height = img.height();
                 
-                if width > 512 || height > 512 {
-                    info!("Resizing image for analysis from {}x{}", width, height);
-                    let resized = img.resize(512, 512, image::imageops::FilterType::Lanczos3);
+                if width > max_edge || height > max_edge {
+                    info!("Resizing image for analysis from {}x{} to max_edge {}", width, height, max_edge);
+                    let resized = img.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3);
                     
                     let mut resized_data = Vec::new();
                     let mut cursor = std::io::Cursor::new(&mut resized_data);

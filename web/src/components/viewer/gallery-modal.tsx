@@ -51,7 +51,7 @@ interface GalleryModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   images: GalleryImage[];
-  onRequestAnalyze: (id: string) => void;
+  onRequestAnalyze: (id: string, max_edge?: number) => void;
 }
 
 // Format bytes to human readable string
@@ -296,7 +296,7 @@ export function GalleryModal({ open, onOpenChange, images, onRequestAnalyze }: G
                           <Button
                             className="w-full gap-2 border-zinc-700 bg-zinc-800 hover:bg-zinc-700"
                             variant="outline"
-                            onClick={() => onRequestAnalyze(selectedImage.id)}
+                            onClick={() => onRequestAnalyze(selectedImage.id, 512)}
                           >
                             <Sparkles className="w-4 h-4 text-purple-400" />
                             Analyze Screenshot

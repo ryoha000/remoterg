@@ -56,7 +56,7 @@ export const runDataChannel = (
   dc: RTCDataChannel,
   keyQ: Queue.Queue<{ key: string; down: boolean }>,
   screenQ: Queue.Queue<void>,
-  analyzeQ: Queue.Queue<string>,
+  analyzeQ: Queue.Queue<{ id: string; max_edge: number }>,
   onOpen: () => void,
   onScreenshot: (blob: Blob, meta: { id: string; format: string; size: number }) => void,
   onAnalyzeResult: (id: string, text: string) => void,
@@ -130,11 +130,15 @@ export const runDataChannel = (
     );
 
     const processAnalyze = Queue.take(analyzeQ).pipe(
-      Effect.tap((id) =>
+      Effect.tap((payload) =>
         Effect.sync(() => {
           if (dc.readyState === "open") {
-            // Send AnalyzeRequest with ID
-            dc.send(JSON.stringify({ AnalyzeRequest: { id } }));
+            // Send AnalyzeRequest with ID and max_edge
+            dc.send(
+              JSON.stringify({
+                AnalyzeRequest: { id: payload.id, max_edge: payload.max_edge },
+              }),
+            );
           }
         }),
       ),

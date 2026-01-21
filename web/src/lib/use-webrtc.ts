@@ -49,7 +49,7 @@ export function useWebRTC(options: WebRTCOptions) {
   // Queue to send signals to the running Effect
   const sendKeyQueue = useRef<Queue.Queue<{ key: string; down: boolean }> | null>(null);
   const screenshotRequestQueue = useRef<Queue.Queue<void> | null>(null);
-  const analyzeRequestQueue = useRef<Queue.Queue<string> | null>(null);
+  const analyzeRequestQueue = useRef<Queue.Queue<{ id: string; max_edge: number }> | null>(null);
 
   const debugActionQueue = useRef<Queue.Queue<"close_ws" | "close_pc"> | null>(null);
   const getLlmConfigQueue = useRef<Queue.Queue<void> | null>(null);
@@ -91,12 +91,14 @@ export function useWebRTC(options: WebRTCOptions) {
   }, [addLog]);
 
   const requestAnalyze = useCallback(
-    (id: string) => {
+    (id: string, max_edge: number = 512) => {
       if (analyzeRequestQueue.current) {
         Effect.runFork(
-          Queue.offer(analyzeRequestQueue.current, id).pipe(Effect.catchAll(() => Effect.void)),
+          Queue.offer(analyzeRequestQueue.current, { id, max_edge }).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
         );
-        addLog(`解析リクエスト送信: ${id}`);
+        addLog(`解析リクエスト送信: ${id} (max_edge: ${max_edge})`);
       } else {
         addLog("DataChannelが開いていません", "error");
       }
@@ -179,7 +181,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
       const keyQ = yield* Queue.unbounded<{ key: string; down: boolean }>();
       const screenQ = yield* Queue.unbounded<void>();
-      const analyzeQ = yield* Queue.unbounded<string>();
+      const analyzeQ = yield* Queue.unbounded<{ id: string; max_edge: number }>();
 
       const debugQ = yield* Queue.unbounded<"close_ws" | "close_pc">();
       const getLlmConfigQ = yield* Queue.unbounded<void>();

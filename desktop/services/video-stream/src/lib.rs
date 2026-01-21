@@ -146,7 +146,6 @@ impl VideoStreamService {
         });
 
         // 統計情報
-        let mut video_frame_count: u64 = 0;
         let mut first_encode_result_received = false;
         let mut last_encode_result_wait_start = Instant::now();
         let mut encode_result_timeout_warned = false;
@@ -228,7 +227,6 @@ impl VideoStreamService {
                                         encode_result,
                                     ).await?;
 
-                                    video_frame_count += 1;
                                     last_encode_result_wait_start = Instant::now();
                                 } else {
                                     // 接続準備未完了ならドロップ（ログ出しすぎないよう注意）

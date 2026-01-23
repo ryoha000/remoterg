@@ -13,4 +13,5 @@ core-types = { path = "../core" }
 tagger = { path = "../tagger" }
 image = "0.24"
 uuid = { version = "1.0", features = ["v4"] }
+windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 

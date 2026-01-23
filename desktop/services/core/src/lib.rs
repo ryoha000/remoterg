@@ -240,6 +240,8 @@ pub enum DataChannelMessage {
     ScreenshotRequest,
     Ping { timestamp: u64 },
     Pong { timestamp: u64 },
+    // Input
+    MouseClick { x: f64, y: f64, button: String },
     // LLM Analysis
     AnalyzeRequest { id: String, max_edge: u32 },
     // Outgoing messages (Host -> Client)

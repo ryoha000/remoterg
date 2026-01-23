@@ -123,6 +123,7 @@ function ViewerPage() {
     requestUpdateLlmConfig,
     simulateWsClose,
     simulatePcClose,
+    sendMouseClick,
   } = useWebRTC({
     signalUrl: "/api/signal",
     sessionId,
@@ -200,6 +201,45 @@ function ViewerPage() {
     }
   };
 
+  const handleVideoClick = (e: React.MouseEvent<HTMLVideoElement>) => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const rect = video.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Calculate displayed video area (letterboxing)
+    const videoRatio = video.videoWidth / video.videoHeight;
+    const elementRatio = rect.width / rect.height;
+
+    let drawWidth = rect.width;
+    let drawHeight = rect.height;
+    let startX = 0;
+    let startY = 0;
+
+    if (elementRatio > videoRatio) {
+      // Pillarbox (black bars on sides)
+      drawWidth = rect.height * videoRatio;
+      startX = (rect.width - drawWidth) / 2;
+    } else {
+      // Letterbox (black bars on top/bottom)
+      drawHeight = rect.width / videoRatio;
+      startY = (rect.height - drawHeight) / 2;
+    }
+
+    // specific relative coords
+    const relativeX = x - startX;
+    const relativeY = y - startY;
+
+    if (relativeX >= 0 && relativeX <= drawWidth && relativeY >= 0 && relativeY <= drawHeight) {
+      const normalizedX = relativeX / drawWidth;
+      const normalizedY = relativeY / drawHeight;
+      console.log(`Click: ${normalizedX.toFixed(3)}, ${normalizedY.toFixed(3)}`);
+      sendMouseClick(normalizedX, normalizedY, "left");
+    }
+  };
+
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden flex items-center justify-center">
       {/* Video Canvas */}
@@ -208,7 +248,9 @@ function ViewerPage() {
         autoPlay
         muted={isMuted}
         playsInline
-        className="absolute inset-0 w-full h-full object-contain z-0"
+        className="absolute inset-0 w-full h-full object-contain z-0 cursor-crosshair"
+        /* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */
+        onClick={handleVideoClick}
       >
         <track kind="captions" />
       </video>

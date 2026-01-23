@@ -50,6 +50,7 @@ export function useWebRTC(options: WebRTCOptions) {
   const sendKeyQueue = useRef<Queue.Queue<{ key: string; down: boolean }> | null>(null);
   const screenshotRequestQueue = useRef<Queue.Queue<void> | null>(null);
   const analyzeRequestQueue = useRef<Queue.Queue<{ id: string; max_edge: number }> | null>(null);
+  const mouseClickQueue = useRef<Queue.Queue<{ x: number; y: number; button: string }> | null>(null);
 
   const debugActionQueue = useRef<Queue.Queue<"close_ws" | "close_pc"> | null>(null);
   const getLlmConfigQueue = useRef<Queue.Queue<void> | null>(null);
@@ -104,6 +105,19 @@ export function useWebRTC(options: WebRTCOptions) {
       }
     },
     [addLog],
+  );
+
+  const sendMouseClick = useCallback(
+    (x: number, y: number, button: string = "left") => {
+      if (mouseClickQueue.current) {
+        Effect.runFork(
+          Queue.offer(mouseClickQueue.current, { x, y, button }).pipe(
+            Effect.catchAll(() => Effect.void),
+          ),
+        );
+      }
+    },
+    [],
   );
 
   const requestGetLlmConfig = useCallback(() => {
@@ -182,6 +196,7 @@ export function useWebRTC(options: WebRTCOptions) {
       const keyQ = yield* Queue.unbounded<{ key: string; down: boolean }>();
       const screenQ = yield* Queue.unbounded<void>();
       const analyzeQ = yield* Queue.unbounded<{ id: string; max_edge: number }>();
+      const mouseClickQ = yield* Queue.unbounded<{ x: number; y: number; button: string }>();
 
       const debugQ = yield* Queue.unbounded<"close_ws" | "close_pc">();
       const getLlmConfigQ = yield* Queue.unbounded<void>();
@@ -193,6 +208,7 @@ export function useWebRTC(options: WebRTCOptions) {
           sendKeyQueue.current = keyQ;
           screenshotRequestQueue.current = screenQ;
           analyzeRequestQueue.current = analyzeQ;
+          mouseClickQueue.current = mouseClickQ;
 
           debugActionQueue.current = debugQ;
           getLlmConfigQueue.current = getLlmConfigQ;
@@ -203,6 +219,7 @@ export function useWebRTC(options: WebRTCOptions) {
               if (sendKeyQueue.current === keyQ) sendKeyQueue.current = null;
               if (screenshotRequestQueue.current === screenQ) screenshotRequestQueue.current = null;
               if (analyzeRequestQueue.current === analyzeQ) analyzeRequestQueue.current = null;
+              if (mouseClickQueue.current === mouseClickQ) mouseClickQueue.current = null;
 
               if (debugActionQueue.current === debugQ) debugActionQueue.current = null;
               if (getLlmConfigQueue.current === getLlmConfigQ) getLlmConfigQueue.current = null;
@@ -360,6 +377,7 @@ export function useWebRTC(options: WebRTCOptions) {
         keyQ,
         screenQ,
         analyzeQ,
+        mouseClickQ,
         () => addLog("DataChannel OPEN", "success"),
         (blob, meta) => {
           addLog("スクリーンショット受信", "success");
@@ -481,6 +499,7 @@ export function useWebRTC(options: WebRTCOptions) {
     sendKey,
     requestScreenshot,
     requestAnalyze,
+    sendMouseClick,
     requestGetLlmConfig,
     requestUpdateLlmConfig,
     simulateWsClose,

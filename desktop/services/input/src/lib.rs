@@ -12,6 +12,12 @@ use core_types::{
 };
 
 use std::path::PathBuf;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, GetWindowRect, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN};
 
 /// 入力サービス
 pub struct InputService {
@@ -21,6 +27,7 @@ pub struct InputService {
     tagger_service: TaggerService,
     tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
     screenshot_dir: PathBuf,
+    target_hwnd: u64,
 }
 
 const PROMPT: &str = r#"以下のJSONスキーマに従って、スクリーンショットの解析結果を出力してください。
@@ -59,6 +66,7 @@ impl InputService {
         tagger_service: TaggerService,
         tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
         screenshot_dir: PathBuf,
+        target_hwnd: u64,
     ) -> Self {
         Self {
             message_rx,
@@ -67,6 +75,7 @@ impl InputService {
             tagger_service,
             tagger_cmd_tx,
             screenshot_dir,
+            target_hwnd,
         }
     }
 
@@ -99,6 +108,10 @@ impl InputService {
             DataChannelMessage::MouseWheel { delta } => {
                 info!("Mouse wheel: {}", delta);
                 // 後でWin32 SendInputを実装
+            }
+            DataChannelMessage::MouseClick { x, y, button } => {
+                // info!("Mouse click: ({}, {}) button={}", x, y, button);
+                self.handle_mouse_click(x, y, &button).await?;
             }
             DataChannelMessage::ScreenshotRequest => {
                 info!("Screenshot requested");
@@ -370,5 +383,95 @@ impl InputService {
         }
 
         Ok(())
+    }
+
+    async fn handle_mouse_click(&self, x: f64, y: f64, button: &str) -> Result<()> {
+        let (abs_x, abs_y) = if self.target_hwnd != 0 {
+            let hwnd = HWND(self.target_hwnd as *mut _);
+            let mut rect = windows::Win32::Foundation::RECT::default();
+            unsafe {
+                if GetWindowRect(hwnd, &mut rect).is_err() {
+                    error!("Failed to get window rect for hwnd {}", self.target_hwnd);
+                    return Ok(());
+                }
+            }
+            let width = rect.right - rect.left;
+            let height = rect.bottom - rect.top;
+
+            let target_x = rect.left + (x * width as f64) as i32;
+            let target_y = rect.top + (y * height as f64) as i32;
+
+            self.map_to_virtual_screen(target_x, target_y)
+        } else {
+            // Full screen mapping (assuming primary monitor or simple scaling)
+            // x, y are 0.0-1.0
+            ((x * 65535.0) as i32, (y * 65535.0) as i32)
+        };
+
+        // Click sequence: Move -> Down -> Up
+        // In SendInput, we can combine or just send separate events.
+        // For reliability, Move then Click.
+        
+        let inputs = [
+            INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: abs_x,
+                        dy: abs_y,
+                        mouseData: 0,
+                        dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: abs_x,
+                        dy: abs_y,
+                        mouseData: 0,
+                        dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: abs_x,
+                        dy: abs_y,
+                        mouseData: 0,
+                        dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTUP | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+
+        unsafe {
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        }
+
+        Ok(())
+    }
+
+    fn map_to_virtual_screen(&self, x: i32, y: i32) -> (i32, i32) {
+        unsafe {
+            let v_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            let v_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            let v_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            let v_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+            let abs_x = ((x - v_left) as f64 * 65535.0 / v_width as f64) as i32;
+            let abs_y = ((y - v_top) as f64 * 65535.0 / v_height as f64) as i32;
+
+            (abs_x, abs_y)
+        }
     }
 }

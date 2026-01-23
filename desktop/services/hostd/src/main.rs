@@ -229,6 +229,7 @@ async fn main() -> Result<()> {
         tagger_service,
         tagger_cmd_tx,
         std::path::PathBuf::from(args.screenshots_dir),
+        args.hwnd,
     );
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,

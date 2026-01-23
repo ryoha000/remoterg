@@ -13,6 +13,12 @@ const ScreenshotMetadataPayloadSchema = v.object({
   format: v.string(),
 });
 
+const MouseClickSchema = v.object({
+  x: v.number(),
+  y: v.number(),
+  button: v.string(),
+});
+
 export const LlmConfigSchema = v.object({
   port: v.number(),
   model_path: v.nullable(v.string()),
@@ -57,6 +63,7 @@ export const runDataChannel = (
   keyQ: Queue.Queue<{ key: string; down: boolean }>,
   screenQ: Queue.Queue<void>,
   analyzeQ: Queue.Queue<{ id: string; max_edge: number }>,
+  mouseClickQ: Queue.Queue<{ x: number; y: number; button: string }>,
   onOpen: () => void,
   onScreenshot: (blob: Blob, meta: { id: string; format: string; size: number }) => void,
   onAnalyzeResult: (id: string, text: string) => void,
@@ -123,6 +130,21 @@ export const runDataChannel = (
         Effect.sync(() => {
           if (dc.readyState === "open") {
             dc.send(JSON.stringify({ ScreenshotRequest: null }));
+          }
+        }),
+      ),
+      Effect.forever,
+    );
+
+    const processMouseClick = Queue.take(mouseClickQ).pipe(
+      Effect.tap((click) =>
+        Effect.sync(() => {
+          if (dc.readyState === "open") {
+            dc.send(
+              JSON.stringify({
+                MouseClick: { x: click.x, y: click.y, button: click.button },
+              }),
+            );
           }
         }),
       ),
@@ -268,6 +290,7 @@ export const runDataChannel = (
           processKeys,
           processScreens,
           processAnalyze,
+          processMouseClick,
           processGetLlmConfig,
           processUpdateLlmConfig,
         ],

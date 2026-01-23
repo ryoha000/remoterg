@@ -93,14 +93,24 @@ impl TaggerSetup {
             port.to_string(),
             "-fa".to_string(), // Flash Attention
             "on".to_string(),
+            "-t".to_string(),
+            "8".to_string(),
+            "-tb".to_string(),
+            "8".to_string(),
+            "-c".to_string(),
+            "8192".to_string(),
+            "-b".to_string(),
+            "2048".to_string(),
+            "-ub".to_string(),
+            "1024".to_string(),
+            "--image-min-tokens".to_string(),
+            "1024".to_string(),
         ];
 
         if use_gpu {
             info!("NVIDIA GPU detected, enabling GPU offload");
             args.push("--n-gpu-layers".to_string());
             args.push("999".to_string());
-            // Workaround for slow vision processing on some GPUs with Qwen2-VL
-            args.push("--no-mmproj-offload".to_string());
         } else {
             warn!("NVIDIA GPU not detected, falling back to CPU/Software");
         }

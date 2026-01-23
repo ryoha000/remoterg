@@ -18,7 +18,7 @@ encoder = { path = "../encoder", features = ["h264"] }
 windows-capture = "2.0.0-alpha.7"
 
 [dev-dependencies]
-windows = { version = "0.62.2", features = [
+windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
 ] }

@@ -9,7 +9,7 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 core-types = { path = "../core" }
 windows-capture = "2.0.0-alpha.7"
-windows = { version = "0.62.2", features = [
+windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
 ] }

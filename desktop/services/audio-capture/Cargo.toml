@@ -10,7 +10,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 core-types = { path = "../core" }
 windows-core = "0.62.2"
-windows = { version = "0.62.2", features = [
+windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Com",

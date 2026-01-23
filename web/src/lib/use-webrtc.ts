@@ -198,16 +198,16 @@ export function useWebRTC(options: WebRTCOptions) {
           getLlmConfigQueue.current = getLlmConfigQ;
           updateLlmConfigQueue.current = updateLlmConfigQ;
         }),
-        () =>
-          Effect.sync(() => {
-            sendKeyQueue.current = null;
-            screenshotRequestQueue.current = null;
-            analyzeRequestQueue.current = null;
+          () =>
+            Effect.sync(() => {
+              if (sendKeyQueue.current === keyQ) sendKeyQueue.current = null;
+              if (screenshotRequestQueue.current === screenQ) screenshotRequestQueue.current = null;
+              if (analyzeRequestQueue.current === analyzeQ) analyzeRequestQueue.current = null;
 
-            debugActionQueue.current = null;
-            getLlmConfigQueue.current = null;
-            updateLlmConfigQueue.current = null;
-          }),
+              if (debugActionQueue.current === debugQ) debugActionQueue.current = null;
+              if (getLlmConfigQueue.current === getLlmConfigQ) getLlmConfigQueue.current = null;
+              if (updateLlmConfigQueue.current === updateLlmConfigQ) updateLlmConfigQueue.current = null;
+            }),
       );
 
       // 1. Signaling

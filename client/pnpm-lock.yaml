@@ -49,6 +49,15 @@ importers:
       '@radix-ui/react-switch':
         specifier: ^1.2.6
         version: 1.2.6(@types/react-dom@19.2.3(@types/react@19.2.9))(@types/react@19.2.9)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@remoterg/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@remoterg/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@remoterg/webrtc':
+        specifier: workspace:*
+        version: link:../../packages/webrtc
       '@sentry/tanstackstart-react':
         specifier: ^10.33.0
         version: 10.36.0(react@19.2.3)
@@ -183,11 +192,51 @@ importers:
         specifier: ^4.59.1
         version: 4.60.0
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@remoterg/webrtc':
+        specifier: workspace:*
+        version: link:../webrtc
+      '@t3-oss/env-core':
+        specifier: ^0.13.10
+        version: 0.13.10(typescript@5.9.3)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      '@tanstack/store':
+        specifier: ^0.8.0
+        version: 0.8.0
+      effect:
+        specifier: ^3.19.14
+        version: 3.19.15
+      react:
+        specifier: ^19.2.3
+        version: 19.2.3
+      valibot:
+        specifier: ^1.2.0
+        version: 1.2.0(typescript@5.9.3)
+    devDependencies:
+      vite:
+        specifier: ^7.3.1
+        version: 7.3.1(@types/node@25.0.10)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)
 
-  packages/ui: {}
+  packages/ui:
+    dependencies:
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      react:
+        specifier: ^19.2.3
+        version: 19.2.3
+      tailwind-merge:
+        specifier: ^3.4.0
+        version: 3.4.0
 
-  packages/webrtc: {}
+  packages/webrtc:
+    dependencies:
+      effect:
+        specifier: ^3.19.14
+        version: 3.19.15
+      valibot:
+        specifier: ^1.2.0
+        version: 1.2.0(typescript@5.9.3)
 
 packages:
 

@@ -1,0 +1,27 @@
+
+> web@ build F:\workspace\remoterg\client\apps\web
+> vite build
+
+[36mvite v7.3.1 [32mbuilding client environment for production...[36m[39m
+transforming...
+
+[@tanstack/devtools-vite] Removed devtools code from: /src/routes/__root.tsx
+
+[32m笨・[39m 2567 modules transformed.
+笨・[39m Build failed in 2.81s
+error during build:
+[vite]: Rollup failed to resolve import "valibot" from "F:/workspace/remoterg/client/packages/webrtc/src/signaling.ts".
+This is most likely unintended because it can break your application at runtime.
+If you do want to externalize this module explicitly add it to
+`build.rollupOptions.external`
+    at viteLog (file:///F:/workspace/remoterg/client/node_modules/.pnpm/vite@7.3.1_@types+node@25.0_bdd5ad85bf47de7a8f4685b032152cba/node_modules/vite/dist/node/chunks/config.js:33635:57)
+    at file:///F:/workspace/remoterg/client/node_modules/.pnpm/vite@7.3.1_@types+node@25.0_bdd5ad85bf47de7a8f4685b032152cba/node_modules/vite/dist/node/chunks/config.js:33669:73
+    at onwarn (file:///F:/workspace/remoterg/client/node_modules/.pnpm/@vitejs+plugin-react@5.1.2__c6c3db2f3840d028ec61e6508ad7d6c5/node_modules/@vitejs/plugin-react/dist/index.js:76:7)
+    at file:///F:/workspace/remoterg/client/node_modules/.pnpm/vite@7.3.1_@types+node@25.0_bdd5ad85bf47de7a8f4685b032152cba/node_modules/vite/dist/node/chunks/config.js:33669:28
+    at onRollupLog (file:///F:/workspace/remoterg/client/node_modules/.pnpm/vite@7.3.1_@types+node@25.0_bdd5ad85bf47de7a8f4685b032152cba/node_modules/vite/dist/node/chunks/config.js:33664:63)
+    at onLog (file:///F:/workspace/remoterg/client/node_modules/.pnpm/vite@7.3.1_@types+node@25.0_bdd5ad85bf47de7a8f4685b032152cba/node_modules/vite/dist/node/chunks/config.js:33467:4)
+    at file:///F:/workspace/remoterg/client/node_modules/.pnpm/rollup@4.56.0/node_modules/rollup/dist/es/shared/node-entry.js:21037:32
+    at Object.logger [as onLog] (file:///F:/workspace/remoterg/client/node_modules/.pnpm/rollup@4.56.0/node_modules/rollup/dist/es/shared/node-entry.js:22924:9)
+    at ModuleLoader.handleInvalidResolvedId (file:///F:/workspace/remoterg/client/node_modules/.pnpm/rollup@4.56.0/node_modules/rollup/dist/es/shared/node-entry.js:21668:26)
+    at file:///F:/workspace/remoterg/client/node_modules/.pnpm/rollup@4.56.0/node_modules/rollup/dist/es/shared/node-entry.js:21626:26
+窶右LIFECYCLE窶・Command failed with exit code 1.

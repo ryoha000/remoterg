@@ -34,6 +34,9 @@ const config = defineConfig({
       ],
     }),
   ],
+  optimizeDeps: {
+    exclude: ["@remoterg/core", "@remoterg/webrtc", "@remoterg/ui"],
+  },
 });
 
 export default config;

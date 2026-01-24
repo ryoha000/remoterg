@@ -3,7 +3,19 @@
   "version": "0.0.1",
   "private": true,
   "main": "src/index.ts",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@remoterg/webrtc": "workspace:*",
+    "effect": "^3.19.14",
+    "react": "^19.2.3",
+    "@tanstack/store": "^0.8.0",
+    "@t3-oss/env-core": "^0.13.10",
+    "valibot": "^1.2.0"
+  },
+  "devDependencies": {
+      "vite": "^7.3.1"
   }
 }

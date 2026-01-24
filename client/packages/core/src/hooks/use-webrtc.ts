@@ -1,17 +1,26 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import { Effect, Queue, Fiber, Stream, Schedule } from "effect";
-import { env } from "@/env";
-import { makeSignaling, WebRTCMessage, WebSocketError } from "./webrtc/signaling";
-import { makeConnection, PeerConnectionError, setH264Preferences } from "./webrtc/connection";
-import { createDataChannel, runDataChannel, type LlmConfig } from "./webrtc/data-channel";
-import { runStatsLoop, WebRTCStats } from "./webrtc/stats";
-import { makeMediaStreamHandler } from "./webrtc/media";
-import { runMockMode } from "./webrtc/mock";
+import {
+  makeSignaling,
+  type WebRTCMessage,
+  WebSocketError,
+  makeConnection,
+  PeerConnectionError,
+  setH264Preferences,
+  createDataChannel,
+  runDataChannel,
+  type LlmConfig,
+  runStatsLoop,
+  type WebRTCStats,
+  makeMediaStreamHandler,
+  runMockMode,
+} from "@remoterg/webrtc";
 
 export interface WebRTCOptions {
   signalUrl: string;
   sessionId: string;
   codec?: "h264" | "any";
+  useMock?: boolean;
   onTrack?: (stream: MediaStream) => void;
   onConnectionStateChange?: (state: string) => void;
   onIceConnectionStateChange?: (state: string) => void;
@@ -30,6 +39,7 @@ export function useWebRTC(options: WebRTCOptions) {
     signalUrl,
     sessionId,
     codec = "h264",
+    useMock = false,
     onTrack,
     onConnectionStateChange,
     onIceConnectionStateChange,
@@ -182,7 +192,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
     const program = Effect.gen(function* () {
       // --- Mock Mode Check ---
-      if (env.VITE_USE_MOCK === "true") {
+      if (useMock) {
         yield* runMockMode(onTrack, setConnectionState, setIceConnectionState, addLog);
         return;
       }
@@ -228,8 +238,7 @@ export function useWebRTC(options: WebRTCOptions) {
       );
 
       // 1. Signaling
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}${signalUrl}?session_id=${sessionId}&role=viewer`;
+      const wsUrl = `${signalUrl}?session_id=${sessionId}&role=viewer`;
 
       // Error handling for Signaling
       const signalingEffect = makeSignaling(wsUrl);
@@ -487,6 +496,7 @@ export function useWebRTC(options: WebRTCOptions) {
     onAnalyzeResultDelta,
     onAnalyzeDone,
     onLlmConfig,
+    useMock,
   ]);
 
   return {

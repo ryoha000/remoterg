@@ -17,8 +17,8 @@ import {
   Camera,
   Images,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { WebRTCStats } from "@/lib/use-webrtc";
+import { cn } from "@remoterg/ui";
+import type { WebRTCStats } from "@remoterg/webrtc";
 
 export interface LogEntry {
   time: string;

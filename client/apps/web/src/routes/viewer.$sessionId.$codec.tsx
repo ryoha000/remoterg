@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useWebRTC } from "@/lib/use-webrtc";
+import { useWebRTC } from "@remoterg/core";
 import { Button } from "@/components/ui/button";
 
 import { ViewerOverlay } from "@/components/viewer/viewer-overlay";
 import { GalleryModal, type GalleryImage } from "@/components/viewer/gallery-modal";
 import { SettingsModal } from "@/components/viewer/settings-modal";
-import { type LlmConfig } from "@/lib/webrtc/data-channel";
+import { type LlmConfig } from "@remoterg/webrtc";
 import { parse } from "best-effort-json-parser";
 
 import * as v from "valibot";
@@ -125,7 +125,7 @@ function ViewerPage() {
     simulatePcClose,
     sendMouseClick,
   } = useWebRTC({
-    signalUrl: "/api/signal",
+    signalUrl: `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/signal`,
     sessionId,
     codec,
     onTrack: handleTrack,

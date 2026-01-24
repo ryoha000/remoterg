@@ -1,7 +1,7 @@
 version: "3"
 
 dotenv:
-  - "web/.env.local"
+  - "client/apps/web/.env.local"
   - "desktop/services/.env.local"
 
 tasks:
@@ -18,12 +18,12 @@ tasks:
     cmds:
       - cargo run --bin hostd -- --mock
   web:
-    dir: "web"
+    dir: "client/apps/web"
     cmds:
       - pnpm run dev
     env:
       NODE_OPTIONS: "--import ./instrument.server.mjs"
   e2e:
-    dir: "web"
+    dir: "client/apps/web"
     cmds:
       - pnpm exec tsx scripts/e2e-test.ts

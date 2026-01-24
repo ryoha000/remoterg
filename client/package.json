@@ -1,0 +1,13 @@
+{
+  "name": "remoterg-client",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "prettier": "^3.0.0"
+  }
+}

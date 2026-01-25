@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { View, TextInput, Button, StyleSheet, Dimensions, Text } from "react-native";
+import * as ScreenOrientation from 'expo-screen-orientation';
 import {
   RTCPeerConnection,
   RTCIceCandidate,
@@ -201,6 +202,20 @@ export default function Index() {
     return () => clearInterval(interval);
   }, [isConnected]);
 
+  useEffect(() => {
+    // Unlock orientation to allow user to rotate device nicely
+    ScreenOrientation.unlockAsync();
+  }, []);
+
+  const rotate = async () => {
+    const current = await ScreenOrientation.getOrientationAsync();
+    if (current === ScreenOrientation.Orientation.PORTRAIT_UP || current === ScreenOrientation.Orientation.PORTRAIT_DOWN) {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE_LEFT);
+    } else {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    }
+  };
+
   return (
     <View style={styles.container}>
       {isConnected && remoteStream ? (
@@ -208,12 +223,14 @@ export default function Index() {
             {/* @ts-ignore: handling both props for compatibility */}
             <RTCView
               key={remoteStream.toURL()} 
-              stream={remoteStream}
               streamURL={remoteStream.toURL()}
               style={styles.video}
-              objectFit="cover"
+              objectFit="contain"
             />
-            <Button title="Disconnect" onPress={disconnect} color="red" />
+            <View style={styles.controls}>
+               <Button title="Rotate" onPress={rotate} />
+               <Button title="Disconnect" onPress={disconnect} color="red" />
+            </View>
         </View>
 
       ) : (
@@ -240,13 +257,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
+  controls: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    flexDirection: 'row',
+    gap: 10,
+    zIndex: 100, // Ensure buttons are clickable
+  },
   videoContainer: {
     flex: 1,
     justifyContent: 'center',
   },
   video: {
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height - 100, // Leave space for button
+    flex: 1,
+    width: '100%',
     backgroundColor: '#333',
   },
   formContainer: {

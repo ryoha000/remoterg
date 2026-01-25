@@ -9,8 +9,78 @@ import {
   mediaDevices,
   MediaStream,
 } from 'react-native-webrtc';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS } from 'react-native-reanimated';
 
 const SIGNALING_URL_BASE = "ws://10.0.2.2:3000/api/signal";
+
+const VideoPlayer = ({ stream }: { stream: MediaStream }) => {
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((e) => {
+      scale.value = Math.max(1, savedScale.value * e.scale);
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+      if (scale.value < 1) {
+          scale.value = withTiming(1);
+          savedScale.value = 1;
+      }
+    });
+
+  const panGesture = Gesture.Pan()
+    .onUpdate((e) => {
+      if (scale.value > 1) {
+        translateX.value = savedTranslateX.value + e.translationX;
+        translateY.value = savedTranslateY.value + e.translationY;
+      }
+    })
+    .onEnd(() => {
+       savedTranslateX.value = translateX.value;
+       savedTranslateY.value = translateY.value;
+    });
+
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .onEnd(() => {
+      scale.value = withTiming(1);
+      savedScale.value = 1;
+      translateX.value = withTiming(0);
+      savedTranslateX.value = 0;
+      translateY.value = withTiming(0);
+      savedTranslateY.value = 0;
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+  }));
+
+  const composed = Gesture.Simultaneous(pinchGesture, panGesture, doubleTapGesture);
+
+  return (
+    <GestureDetector gesture={composed}>
+      <Animated.View style={[styles.video, animatedStyle, { overflow: 'hidden' }]}>
+        {/* @ts-ignore: handling both props for compatibility */}
+        <RTCView
+          key={stream.toURL()} 
+          streamURL={stream.toURL()} // @ts-ignore
+          style={StyleSheet.absoluteFill}
+          objectFit="contain"
+        />
+      </Animated.View>
+    </GestureDetector>
+  );
+};
 
 export default function Index() {
   const [sessionId, setSessionId] = useState("fixed");
@@ -220,13 +290,7 @@ export default function Index() {
     <View style={styles.container}>
       {isConnected && remoteStream ? (
         <View style={styles.videoContainer}>
-            {/* @ts-ignore: handling both props for compatibility */}
-            <RTCView
-              key={remoteStream.toURL()} 
-              streamURL={remoteStream.toURL()}
-              style={styles.video}
-              objectFit="contain"
-            />
+            <VideoPlayer stream={remoteStream} />
             <View style={styles.controls}>
                <Button title="Rotate" onPress={rotate} />
                <Button title="Disconnect" onPress={disconnect} color="red" />
@@ -268,6 +332,8 @@ const styles = StyleSheet.create({
   videoContainer: {
     flex: 1,
     justifyContent: 'center',
+    width: '100%',
+    height: '100%',
   },
   video: {
     flex: 1,
@@ -303,4 +369,3 @@ const styles = StyleSheet.create({
     borderRadius: 5,
   },
 });
-

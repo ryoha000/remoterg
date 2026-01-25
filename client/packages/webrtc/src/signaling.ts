@@ -31,11 +31,14 @@ export const MessageSchema = v.union([
 
 export type WebRTCMessage = v.InferOutput<typeof MessageSchema>;
 
-export const makeSignaling = (url: string) =>
+export const makeSignaling = (
+  url: string,
+  createWebSocket: (url: string) => WebSocket = (u) => new WebSocket(u),
+) =>
   Effect.gen(function* () {
     const ws = yield* Effect.acquireRelease(
       Effect.async<WebSocket, WebSocketError>((resume) => {
-        const s = new WebSocket(url);
+        const s = createWebSocket(url);
         const onOpen = () => resume(Effect.succeed(s));
         const onError = (e: Event) =>
           resume(Effect.fail(new WebSocketError({ message: "Open failed", originalError: e })));

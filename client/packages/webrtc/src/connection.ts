@@ -5,10 +5,14 @@ export class PeerConnectionError extends Data.TaggedError("PeerConnectionError")
   originalError?: unknown;
 }> {}
 
-export const makeConnection = (config: RTCConfiguration) =>
+export const makeConnection = (
+  config: RTCConfiguration,
+  createPeerConnection: (config: RTCConfiguration) => RTCPeerConnection = (c) =>
+    new RTCPeerConnection(c),
+) =>
   Effect.gen(function* () {
     const pc = yield* Effect.acquireRelease(
-      Effect.sync(() => new RTCPeerConnection(config)),
+      Effect.sync(() => createPeerConnection(config)),
       (pc) => Effect.sync(() => pc.close()),
     );
 

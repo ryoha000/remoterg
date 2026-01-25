@@ -13,7 +13,8 @@ import {
   runStatsLoop,
   type WebRTCStats,
   makeMediaStreamHandler,
-  runMockMode,
+  createMockWebSocket,
+  createMockPeerConnection,
 } from "@remoterg/webrtc";
 
 export interface WebRTCOptions {
@@ -191,12 +192,6 @@ export function useWebRTC(options: WebRTCOptions) {
     }
 
     const program = Effect.gen(function* () {
-      // --- Mock Mode Check ---
-      if (useMock) {
-        yield* runMockMode(onTrack, setConnectionState, setIceConnectionState, addLog);
-        return;
-      }
-
       // --- Real WebRTC Logic ---
       yield* Effect.sync(() => {
         setConnectionState("connecting");
@@ -241,7 +236,10 @@ export function useWebRTC(options: WebRTCOptions) {
       const wsUrl = `${signalUrl}?session_id=${sessionId}&role=viewer`;
 
       // Error handling for Signaling
-      const signalingEffect = makeSignaling(wsUrl);
+      const signalingEffect = makeSignaling(
+        wsUrl,
+        useMock ? createMockWebSocket : undefined,
+      );
 
       const { ws, messages: wsMessages, send: sendWs } = yield* signalingEffect;
       yield* Effect.sync(() => addLog("WebSocket接続確立", "success"));
@@ -256,7 +254,10 @@ export function useWebRTC(options: WebRTCOptions) {
         iceConnectionState: iceStateStream,
         iceCandidates: iceCandidateStream,
         track: trackStream,
-      } = yield* makeConnection(config);
+      } = yield* makeConnection(
+        config,
+        useMock ? createMockPeerConnection : undefined,
+      );
 
       yield* Effect.sync(() => addLog("PeerConnectionを作成..."));
 

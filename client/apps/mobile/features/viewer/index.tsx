@@ -1,7 +1,10 @@
-import { View, Button, StyleSheet } from "react-native";
+import { View, StyleSheet, TouchableWithoutFeedback } from "react-native";
+import { useState, useCallback } from "react";
 import { VideoPlayer } from "./components/VideoPlayer";
 import { ConnectForm } from "./components/ConnectForm";
+import { ViewerOverlay } from "./components/ViewerOverlay";
 import { useViewer } from "./hooks/useViewer";
+import { StatusBar } from "expo-status-bar";
 
 export function ViewerScreen() {
   const {
@@ -15,15 +18,24 @@ export function ViewerScreen() {
     rotate
   } = useViewer();
 
+  const [showOverlay, setShowOverlay] = useState(true);
+
+  const toggleOverlay = useCallback(() => {
+    setShowOverlay(prev => !prev);
+  }, []);
+
   return (
     <View style={styles.container}>
+      <StatusBar hidden={isConnected && !showOverlay} />
       {isConnected && remoteStream ? (
         <View style={styles.videoContainer}>
-            <VideoPlayer stream={remoteStream} />
-            <View style={styles.controls}>
-               <Button title="Rotate" onPress={rotate} />
-               <Button title="Disconnect" onPress={disconnect} color="red" />
-            </View>
+            <VideoPlayer stream={remoteStream} onTap={toggleOverlay} />
+            <ViewerOverlay 
+              visible={showOverlay}
+              status={status}
+              onDisconnect={disconnect}
+              onRotate={rotate}
+            />
         </View>
 
       ) : (
@@ -42,14 +54,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
-  },
-  controls: {
-    position: 'absolute',
-    bottom: 20,
-    right: 20,
-    flexDirection: 'row',
-    gap: 10,
-    zIndex: 100, // Ensure buttons are clickable
   },
   videoContainer: {
     flex: 1,

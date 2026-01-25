@@ -1,4 +1,9 @@
-import { View, TextInput, Button, StyleSheet, Text } from "react-native";
+import { View } from "react-native";
+import { Button } from "@/components/ui/button";
+import { Text } from "@/components/ui/text";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface ConnectFormProps {
   sessionId: string;
@@ -9,49 +14,35 @@ interface ConnectFormProps {
 
 export const ConnectForm = ({ sessionId, setSessionId, status, connect }: ConnectFormProps) => {
   return (
-    <View style={styles.formContainer}>
-      <Text style={styles.title}>RemoteRG Mobile</Text>
-      <Text style={styles.status}>{status}</Text>
-      <Text style={styles.label}>Session ID</Text>
-      <TextInput
-        style={styles.input}
-        value={sessionId}
-        onChangeText={setSessionId}
-        placeholder="Enter Session ID"
-        autoCapitalize="none"
-      />
-      <Button title="Connect" onPress={connect} />
+    <View className="flex-1 justify-center p-6 bg-background">
+      <Card className="w-full max-w-xl mx-auto">
+        <CardHeader>
+          <CardTitle className="text-2xl font-bold text-center">RemoteRG Mobile</CardTitle>
+          <CardDescription className="text-center">
+            Enter your Session ID to connect to the host.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="gap-4">
+          <View className="gap-2">
+            <Label nativeID="sessionId">Session ID</Label>
+            <Input
+              placeholder="Enter Session ID"
+              value={sessionId}
+              onChangeText={setSessionId}
+              autoCapitalize="none"
+              aria-labelledby="sessionId"
+            />
+          </View>
+          {!!status && (
+             <Text className="text-xs text-center text-muted-foreground">{status}</Text>
+          )}
+        </CardContent>
+        <CardFooter>
+          <Button onPress={connect} className="w-full">
+            <Text>Connect</Text>
+          </Button>
+        </CardFooter>
+      </Card>
     </View>
   );
 };
-
-const styles = StyleSheet.create({
-  formContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 20,
-    backgroundColor: '#fff',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  status: {
-    marginBottom: 20,
-    textAlign: 'center',
-    color: 'gray',
-  },
-  label: {
-    marginBottom: 5,
-    fontWeight: 'bold',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    padding: 10,
-    marginBottom: 20,
-    borderRadius: 5,
-  },
-});

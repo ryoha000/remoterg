@@ -5,9 +5,10 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-na
 
 interface VideoPlayerProps {
   stream: MediaStream;
+  onTap?: () => void;
 }
 
-export const VideoPlayer = ({ stream }: VideoPlayerProps) => {
+export const VideoPlayer = ({ stream, onTap }: VideoPlayerProps) => {
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -50,6 +51,20 @@ export const VideoPlayer = ({ stream }: VideoPlayerProps) => {
       savedTranslateY.value = 0;
     });
 
+  const singleTapGesture = Gesture.Tap()
+    .onEnd(() => {
+        if (onTap) {
+            // runOnJS is needed because this runs in UI thread
+            // But we can try simple call first or use runOnJS from reanimated if generic worklet issue arises.
+            // onTap is passed from props, so it should be fine if called from JS thread, 
+            // but gesture callbacks form gesture-handler might be on UI thread.
+            // Let's assume standard behavior for now, or use runOnJS if needed.
+             // @ts-ignore
+             if (global.runOnJS) global.runOnJS(onTap)(); else onTap();
+        }
+    })
+    .requireExternalGestureToFail(doubleTapGesture);
+
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: translateX.value },
@@ -58,7 +73,7 @@ export const VideoPlayer = ({ stream }: VideoPlayerProps) => {
     ],
   }));
 
-  const composed = Gesture.Simultaneous(pinchGesture, panGesture, doubleTapGesture);
+  const composed = Gesture.Simultaneous(pinchGesture, panGesture, doubleTapGesture, singleTapGesture);
 
   return (
     <GestureDetector gesture={composed}>

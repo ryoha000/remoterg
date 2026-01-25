@@ -1,6 +1,6 @@
 ---
 trigger: glob
-globs: web/**
+globs: client/apps/web/**
 ---
 
 We use Sentry for watching for errors in our deployed application, as well as for instrumentation of our application.

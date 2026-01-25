@@ -1,5 +1,5 @@
 import { View, StyleSheet, TouchableWithoutFeedback } from "react-native";
-import { useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { VideoPlayer } from "./components/VideoPlayer";
 import { ConnectForm } from "./components/ConnectForm";
 import { ViewerOverlay } from "./components/ViewerOverlay";
@@ -19,9 +19,28 @@ export function ViewerScreen() {
   } = useViewer();
 
   const [showOverlay, setShowOverlay] = useState(true);
+  const [lastInteraction, setLastInteraction] = useState(Date.now());
+
+  // Auto-hide overlay
+  useEffect(() => {
+    if (!showOverlay || !isConnected) return;
+
+    const timer = setTimeout(() => {
+      setShowOverlay(false);
+    }, 4000); // Hide after 4 seconds
+
+    return () => clearTimeout(timer);
+  }, [showOverlay, isConnected, lastInteraction]);
 
   const toggleOverlay = useCallback(() => {
     setShowOverlay(prev => !prev);
+    setLastInteraction(Date.now());
+  }, []);
+
+
+
+  const onInteraction = useCallback(() => {
+     setLastInteraction(Date.now());
   }, []);
 
   return (
@@ -35,6 +54,13 @@ export function ViewerScreen() {
               status={status}
               onDisconnect={disconnect}
               onRotate={rotate}
+              sessionId={sessionId}
+              stats={{
+                fps: 60, // TODO: Get real stats
+                bitrate: 0, // TODO: Get real stats
+                loss: 0, // TODO: Get real stats
+              }}
+              onInteraction={onInteraction}
             />
         </View>
 

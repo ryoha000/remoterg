@@ -1,55 +1,218 @@
-import { View, TouchableOpacity, StyleSheet } from "react-native";
+import { View, StyleSheet, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { cn } from "@/lib/utils";
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import Animated, { FadeIn, FadeOut, Layout } from "react-native-reanimated";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
+import { useState } from "react";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 interface ViewerOverlayProps {
   visible: boolean;
   status: string;
   onDisconnect: () => void;
   onRotate?: () => void;
+  sessionId: string;
+  stats: {
+    fps: number;
+    bitrate: number;
+    loss: number;
+  };
+  onInteraction?: () => void;
 }
 
-export function ViewerOverlay({ visible, status, onDisconnect, onRotate }: ViewerOverlayProps) {
-  if (!visible) return null;
+export function ViewerOverlay({ visible, status, onDisconnect, onRotate, sessionId, stats, onInteraction }: ViewerOverlayProps) {
+  const [showSettings, setShowSettings] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
 
+  const handleInteraction = () => {
+      onInteraction?.();
+  };
+
+  // If main overlay is hidden, sub-menus should also be hidden effectively (or we rely on parent unmounting/hiding)
+  // But since we are using `if (!visible) return null;` at top level control, it's fine.
+  // Wait, we want animations. So we shouldn't return null immediately if we want exit animations.
+  // The parent implementation uses `visible` prop but currently `if (!visible) return null` prevents exit animation?
+  // Actually `ViewerOverlay` is always rendered in parent? No, logic in parent is `visible={showOverlay}`.
+  // We should change internal logic to use `pointerEvents` and opacity if we want to keep it mounted for exit anims,
+  // OR rely on AnimatePresence (which isn't standard in Reanimated without extra setup or LayoutAnimation).
+  // The current code used `entering` and `exiting` which works if component is unmounted or conditional.
+  // In `ViewerScreen`, it is always rendered: `<ViewerOverlay visible={showOverlay} ... />`
+  // So we should handle visibility inside here with animations.
+
+  if (!visible) {
+    // We want to animate out.
+    // However, reanimated `exiting` only triggers on unmount. 
+    // If parent keeps it mounted but passes `visible=false`, we need to use a shared value for opacity/transform
+    // OR we change parent to conditionally render it.
+    // Parent code: `<ViewerOverlay visible={showOverlay} ... />` -> It's always mounted.
+    // So `entering`/`exiting` props won't work unless we use a conditional wrap inside.
+    // Let's wrap content in an Animated.View that reacts to `visible`.
+  }
+
+  // Actually, standard pattern is pointerEvents="box-none" on container, and animate opacity of children.
+  
   return (
-    <Animated.View 
-      entering={FadeIn.duration(200)} 
-      exiting={FadeOut.duration(200)}
-      style={StyleSheet.absoluteFill} 
-      pointerEvents="box-none"
-    >
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       {/* Top Bar */}
-      <View className="absolute top-0 left-0 right-0 p-4 pt-12 flex-row justify-between items-center bg-black/50">
-        <View className="flex-row items-center gap-2">
-          <View className={cn("w-2 h-2 rounded-full", status.includes("connected") || status.includes("PC: connected") ? "bg-green-500" : "bg-yellow-500")} />
-          <Text className="text-white font-medium">{status}</Text>
-        </View>
-      </View>
-
-      {/* Bottom Bar */}
-      <View className="absolute bottom-0 left-0 right-0 p-6 pb-10 flex-row justify-between items-center bg-black/50 gap-4">
-        <Button 
-          variant="outline" 
-          size="icon" 
-          className="rounded-full bg-white/20 border-0 backdrop-blur-md"
-          onPress={onRotate}
+      {visible && (
+        <Animated.View 
+          entering={FadeIn.duration(200)} 
+          exiting={FadeOut.duration(200)}
+          style={styles.topBar}
+          onTouchStart={handleInteraction}
         >
-           <Ionicons name="sync" size={24} color="white" />
-        </Button>
+            <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea}>
+                <View className="flex-row justify-between items-center px-4 pb-2">
+                    <View className="flex-row items-center gap-4">
+                        <Button variant="ghost" size="icon" onPress={onDisconnect} className="rounded-full active:bg-white/20">
+                            <Ionicons name="arrow-back" size={24} color="white" />
+                        </Button>
+                        <View className="flex-row items-center gap-2 px-3 py-1.5 bg-black/40 rounded-full border border-white/10">
+                            <View className={cn("w-2 h-2 rounded-full", status.includes("connected") ? "bg-green-500" : "bg-yellow-500")} />
+                            <Text className="text-white/90 text-xs font-medium capitalize">{status}</Text>
+                        </View>
+                        {status.includes("connected") && (
+                            <View className="flex-row items-center gap-2 px-3 py-1.5 bg-black/40 rounded-full border border-white/10">
+                                <Ionicons name="cellular" size={12} color="rgba(255,255,255,0.8)" />
+                                <Text className="text-white/80 text-xs font-mono">{stats.loss}% loss</Text>
+                            </View>
+                        )}
+                    </View>
+                    
+                    {/* Right side settings/debug toggles could go here if Top Bar needs them, 
+                        but usually controls are on bottom or spread out. 
+                        Web has them on top right. Let's match web. */}
+                    <View className="flex-row items-center gap-2">
+                         <Button variant="ghost" size="icon" onPress={() => setShowDebug(!showDebug)} className={cn("rounded-full active:bg-white/20", showDebug && "bg-white/20")}>
+                            <Ionicons name="bug-outline" size={20} color="white" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onPress={() => setShowSettings(!showSettings)} className={cn("rounded-full active:bg-white/20", showSettings && "bg-white/20")}>
+                            <Ionicons name="settings-outline" size={20} color="white" />
+                        </Button>
+                    </View>
+                </View>
+            </SafeAreaView>
+        </Animated.View>
+      )}
 
-        <Button 
-            variant="destructive" 
-            size="icon"
-            className="rounded-full backdrop-blur-md"
-            onPress={onDisconnect}
+      {/* Bottom Floating Bar (Web uses bottom controls sometimes, but here we put main actions in bottom right or center?)
+          Web has top-right controls mostly.
+          Let's put Rotation and other primary actions in a bottom bar or just use the top bar like web.
+          Web: Fullscreen, Screenshot, Gallery, Debug, Settings all in Top Right.
+          Mobile: Top right is good, but maybe hard to reach on large phones. 
+          Let's stick to Web design: Top Bar has everything.
+          But we also have `onRotate` which is useful on mobile. Let's put it in bottom right floating.
+      */}
+      
+      {visible && (
+        <Animated.View 
+            entering={FadeIn.delay(100).duration(200)} 
+            exiting={FadeOut.duration(200)}
+            style={styles.bottomBar}
+            pointerEvents="box-none"
+            onTouchStart={handleInteraction}
         >
-          <Ionicons name="close" size={24} color="white" />
-        </Button>
-      </View>
-    </Animated.View>
+             <SafeAreaView edges={['bottom', 'left', 'right']} style={styles.safeArea}>
+                <View className="flex-row justify-end items-center px-6 pb-6 gap-4">
+                     {onRotate && (
+                        <Button 
+                            variant="secondary" 
+                            size="icon" 
+                            className="rounded-full w-12 h-12 bg-black/50 border border-white/10 backdrop-blur-md active:bg-black/70"
+                            onPress={onRotate}
+                        >
+                            <Ionicons name="sync" size={24} color="white" />
+                        </Button>
+                     )}
+                </View>
+             </SafeAreaView>
+        </Animated.View>
+      )}
+
+      {/* Settings Panel (Overlay) */}
+      {visible && showSettings && (
+          <Animated.View 
+            entering={FadeIn.duration(200)} 
+            exiting={FadeOut.duration(200)}
+            style={styles.settingsPanel}
+          >
+             <View className="bg-zinc-900/95 p-4 rounded-xl border border-zinc-800 w-64 backdrop-blur-xl">
+                 <View className="flex-row justify-between items-center mb-4">
+                     <Text className="text-white font-medium text-sm">Settings</Text>
+                     <Text className="text-zinc-500 text-[10px]">v0.1.0</Text>
+                 </View>
+                 
+                 {/* Audio (Mock) */}
+                 <View className="mb-4">
+                     <Text className="text-zinc-400 text-xs mb-2">Audio</Text>
+                     <View className="flex-row items-center gap-2">
+                         <Ionicons name="volume-medium" size={16} color="#a1a1aa" />
+                         <View className="h-1 flex-1 bg-zinc-700 rounded-full" />
+                         <Text className="text-zinc-500 text-xs">50%</Text>
+                     </View>
+                 </View>
+
+                 <Button variant="destructive" size="sm" className="w-full" onPress={onDisconnect}>
+                     <View className="flex-row items-center gap-2">
+                         <Ionicons name="log-out-outline" size={16} color="white" />
+                         <Text className="text-white text-xs">Disconnect</Text>
+                     </View>
+                 </Button>
+             </View>
+          </Animated.View>
+      )}
+
+      {/* Debug Panel */}
+      {visible && showDebug && (
+          <Animated.View 
+            entering={FadeIn.duration(200)} 
+            exiting={FadeOut.duration(200)}
+            style={styles.debugPanel}
+          >
+             <View className="bg-black/60 p-3 rounded-lg border border-white/10 backdrop-blur-md">
+                 <Text className="text-green-400 font-mono text-xs">FPS: {stats.fps}</Text>
+                 <Text className="text-green-400 font-mono text-xs">Bitrate: {stats.bitrate} kbps</Text>
+                 <Text className="text-green-400 font-mono text-xs">Loss: {stats.loss}%</Text>
+                 <Text className="text-green-400 font-mono text-xs mt-1">Session: {sessionId.slice(0, 8)}...</Text>
+             </View>
+          </Animated.View>
+      )}
+
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+    topBar: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 50,
+        backgroundColor: 'rgba(0,0,0,0.4)', // Gradient replacement since RN doesn't have linear-gradient built-in easily without lib
+    },
+    safeArea: {
+        width: '100%',
+    },
+    bottomBar: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        zIndex: 40,
+        alignItems: 'flex-end',
+    },
+    settingsPanel: {
+        position: 'absolute',
+        top: 100,
+        right: 16,
+        zIndex: 60,
+    },
+    debugPanel: {
+        position: 'absolute',
+        top: 100,
+        left: 16,
+        zIndex: 60,
+    }
+});

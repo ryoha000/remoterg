@@ -60,6 +60,7 @@ export function ViewerOverlay({ visible, status, onDisconnect, onRotate, session
           entering={FadeIn.duration(200)} 
           exiting={FadeOut.duration(200)}
           style={styles.topBar}
+          onStartShouldSetResponder={() => true}
           onTouchStart={handleInteraction}
         >
             <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea}>
@@ -130,12 +131,25 @@ export function ViewerOverlay({ visible, status, onDisconnect, onRotate, session
         </Animated.View>
       )}
 
+      {/* Settings Backdrop */}
+      {showSettings && (
+        <TouchableOpacity
+          style={[StyleSheet.absoluteFill, { zIndex: 55 }]}
+          activeOpacity={1}
+          onPress={() => setShowSettings(false)}
+        >
+             <View style={{ flex: 1 }} />
+        </TouchableOpacity>
+      )}
+
       {/* Settings Panel (Overlay) */}
-      {visible && showSettings && (
+      {showSettings && (
           <Animated.View 
             entering={FadeIn.duration(200)} 
             exiting={FadeOut.duration(200)}
             style={styles.settingsPanel}
+            onStartShouldSetResponder={() => true}
+            onTouchStart={handleInteraction}
           >
              <View className="bg-zinc-900/95 p-4 rounded-xl border border-zinc-800 w-64 backdrop-blur-xl">
                  <View className="flex-row justify-between items-center mb-4">
@@ -164,11 +178,13 @@ export function ViewerOverlay({ visible, status, onDisconnect, onRotate, session
       )}
 
       {/* Debug Panel */}
-      {visible && showDebug && (
+      {showDebug && (
           <Animated.View 
             entering={FadeIn.duration(200)} 
             exiting={FadeOut.duration(200)}
             style={styles.debugPanel}
+            onStartShouldSetResponder={() => true}
+            onTouchStart={handleInteraction}
           >
              <View className="bg-black/60 p-3 rounded-lg border border-white/10 backdrop-blur-md">
                  <Text className="text-green-400 font-mono text-xs">FPS: {stats.fps}</Text>

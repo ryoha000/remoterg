@@ -6,6 +6,7 @@ import {
   RTCSessionDescription,
   RTCView,
   mediaDevices,
+  MediaStream,
 } from 'react-native-webrtc';
 
 const SIGNALING_URL_BASE = "ws://10.0.2.2:3000/api/signal";
@@ -13,7 +14,6 @@ const SIGNALING_URL_BASE = "ws://10.0.2.2:3000/api/signal";
 export default function Index() {
   const [sessionId, setSessionId] = useState("fixed");
   const [isConnected, setIsConnected] = useState(false);
-  // @ts-ignore
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [status, setStatus] = useState("Disconnected");
   
@@ -111,10 +111,22 @@ export default function Index() {
     // Handle Tracks (Video)
     // @ts-ignore: react-native-webrtc types might be slightly off or I'm lazy with the event type
     pc.ontrack = (event: any) => {
-      console.log("Track received:", event.streams.length);
-      if (event.streams && event.streams[0]) {
-        console.log("Stream found at index 0");
-        setRemoteStream(event.streams[0]);
+      const track = event.track;
+      console.log("Track received:", track?.kind, track?.id);
+      
+      if (track && track.kind === "video") { // Only care about video for RTCView
+        track.enabled = true;
+        setRemoteStream((prev) => {
+          // Create new stream with ONLY this video track
+          const newStream = new MediaStream(undefined); 
+          newStream.addTrack(track);
+          
+          console.log(`Created new Video Stream: ${newStream.toURL()} with track ${track.id} (${track.kind}) state:${track.readyState}`);
+          return newStream;
+        });
+      } else if (track) {
+         console.log(`Ignoring non-video track for RTCView: ${track.kind} ${track.id}`);
+         track.enabled = true; // Still enable audio, it plays automatically via PC
       }
     };
 
@@ -164,15 +176,42 @@ export default function Index() {
     return () => disconnect();
   }, []);
 
+  // Stats Logging
+  useEffect(() => {
+    if (!isConnected || !pcRef.current) return;
+
+    const interval = setInterval(async () => {
+      const pc = pcRef.current;
+      if (!pc) return;
+
+      try {
+        // @ts-ignore
+        const stats = await pc.getStats();
+        // @ts-ignore
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'video') {
+             console.log(`[Video Stats] Bytes: ${report.bytesReceived}, Packets: ${report.packetsReceived}, Decoded: ${report.framesDecoded}, Dropped: ${report.framesDropped}, Lost: ${report.packetsLost}`);
+          }
+        });
+      } catch (e) {
+        console.error("Stats logging error:", e);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [isConnected]);
+
   return (
     <View style={styles.container}>
       {isConnected && remoteStream ? (
         <View style={styles.videoContainer}>
-            {/* @ts-ignore: stream prop is valid in v111+ but types might be lagging */}
+            {/* @ts-ignore: handling both props for compatibility */}
             <RTCView
+              key={remoteStream.toURL()} 
               stream={remoteStream}
+              streamURL={remoteStream.toURL()}
               style={styles.video}
-              objectFit="contain" 
+              objectFit="cover"
             />
             <Button title="Disconnect" onPress={disconnect} color="red" />
         </View>

@@ -2,6 +2,7 @@ import { StyleSheet } from "react-native";
 import { RTCView, MediaStream } from 'react-native-webrtc';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 
 interface VideoPlayerProps {
   stream: MediaStream;
@@ -54,13 +55,7 @@ export const VideoPlayer = ({ stream, onTap }: VideoPlayerProps) => {
   const singleTapGesture = Gesture.Tap()
     .onEnd(() => {
         if (onTap) {
-            // runOnJS is needed because this runs in UI thread
-            // But we can try simple call first or use runOnJS from reanimated if generic worklet issue arises.
-            // onTap is passed from props, so it should be fine if called from JS thread, 
-            // but gesture callbacks form gesture-handler might be on UI thread.
-            // Let's assume standard behavior for now, or use runOnJS if needed.
-             // @ts-ignore
-             if (global.runOnJS) global.runOnJS(onTap)(); else onTap();
+            scheduleOnRN(onTap);
         }
     })
     .requireExternalGestureToFail(doubleTapGesture);

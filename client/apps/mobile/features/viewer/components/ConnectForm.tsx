@@ -1,15 +1,23 @@
-import { View } from "react-native";
-import { Button } from "@/components/ui/button";
-import { Text } from "@/components/ui/text";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { View } from "react-native"
+
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Text } from "@/components/ui/text"
 
 interface ConnectFormProps {
-  sessionId: string;
-  setSessionId: (id: string) => void;
-  status: string;
-  connect: () => void;
+  sessionId: string
+  setSessionId: (id: string) => void
+  status: string
+  connect: () => void
 }
 
 export const ConnectForm = ({ sessionId, setSessionId, status, connect }: ConnectFormProps) => {
@@ -33,9 +41,7 @@ export const ConnectForm = ({ sessionId, setSessionId, status, connect }: Connec
               aria-labelledby="sessionId"
             />
           </View>
-          {!!status && (
-             <Text className="text-xs text-center text-muted-foreground">{status}</Text>
-          )}
+          {!!status && <Text className="text-xs text-center text-muted-foreground">{status}</Text>}
         </CardContent>
         <CardFooter>
           <Button onPress={connect} className="w-full">
@@ -44,5 +50,5 @@ export const ConnectForm = ({ sessionId, setSessionId, status, connect }: Connec
         </CardFooter>
       </Card>
     </View>
-  );
-};
+  )
+}

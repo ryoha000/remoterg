@@ -1,5 +1,5 @@
-import { ViewerScreen } from "@/features/viewer";
+import { ViewerScreen } from "@/features/viewer"
 
 export default function Index() {
-  return <ViewerScreen />;
+  return <ViewerScreen />
 }

@@ -1,8 +1,8 @@
 import { Ionicons } from "@expo/vector-icons"
 import { useState } from "react"
 import { View, StyleSheet, TouchableOpacity } from "react-native"
-import Animated, { FadeIn, FadeOut, Layout } from "react-native-reanimated"
-import { SafeAreaView } from "react-native-safe-area-context"
+import Animated, { FadeIn, FadeOut, Layout, useAnimatedStyle, withTiming } from "react-native-reanimated"
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { Button } from "@/components/ui/button"
 import { Text } from "@/components/ui/text"
@@ -33,33 +33,17 @@ export function ViewerOverlay({
 }: ViewerOverlayProps) {
   const [showSettings, setShowSettings] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
+  const insets = useSafeAreaInsets()
 
   const handleInteraction = () => {
     onInteraction?.()
   }
 
-  // If main overlay is hidden, sub-menus should also be hidden effectively (or we rely on parent unmounting/hiding)
-  // But since we are using `if (!visible) return null;` at top level control, it's fine.
-  // Wait, we want animations. So we shouldn't return null immediately if we want exit animations.
-  // The parent implementation uses `visible` prop but currently `if (!visible) return null` prevents exit animation?
-  // Actually `ViewerOverlay` is always rendered in parent? No, logic in parent is `visible={showOverlay}`.
-  // We should change internal logic to use `pointerEvents` and opacity if we want to keep it mounted for exit anims,
-  // OR rely on AnimatePresence (which isn't standard in Reanimated without extra setup or LayoutAnimation).
-  // The current code used `entering` and `exiting` which works if component is unmounted or conditional.
-  // In `ViewerScreen`, it is always rendered: `<ViewerOverlay visible={showOverlay} ... />`
-  // So we should handle visibility inside here with animations.
-
-  if (!visible) {
-    // We want to animate out.
-    // However, reanimated `exiting` only triggers on unmount.
-    // If parent keeps it mounted but passes `visible=false`, we need to use a shared value for opacity/transform
-    // OR we change parent to conditionally render it.
-    // Parent code: `<ViewerOverlay visible={showOverlay} ... />` -> It's always mounted.
-    // So `entering`/`exiting` props won't work unless we use a conditional wrap inside.
-    // Let's wrap content in an Animated.View that reacts to `visible`.
-  }
-
-  // Actually, standard pattern is pointerEvents="box-none" on container, and animate opacity of children.
+  const panelStyle = useAnimatedStyle(() => {
+    return {
+      top: withTiming(visible ? 90 : insets.top + 20, { duration: 200 }),
+    }
+  })
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
@@ -100,9 +84,7 @@ export function ViewerOverlay({
                 )}
               </View>
 
-              {/* Right side settings/debug toggles could go here if Top Bar needs them,
-                        but usually controls are on bottom or spread out. 
-                        Web has them on top right. Let's match web. */}
+              {/* Right side settings/debug toggles */}
               <View className="flex-row items-center gap-2">
                 <Button
                   variant="ghost"
@@ -126,15 +108,7 @@ export function ViewerOverlay({
         </Animated.View>
       )}
 
-      {/* Bottom Floating Bar (Web uses bottom controls sometimes, but here we put main actions in bottom right or center?)
-          Web has top-right controls mostly.
-          Let's put Rotation and other primary actions in a bottom bar or just use the top bar like web.
-          Web: Fullscreen, Screenshot, Gallery, Debug, Settings all in Top Right.
-          Mobile: Top right is good, but maybe hard to reach on large phones. 
-          Let's stick to Web design: Top Bar has everything.
-          But we also have `onRotate` which is useful on mobile. Let's put it in bottom right floating.
-      */}
-
+      {/* Bottom Floating Bar */}
       {visible && (
         <Animated.View
           entering={FadeIn.delay(100).duration(200)}
@@ -176,7 +150,7 @@ export function ViewerOverlay({
         <Animated.View
           entering={FadeIn.duration(200)}
           exiting={FadeOut.duration(200)}
-          style={styles.settingsPanel}
+          style={[styles.settingsPanel, panelStyle]}
           onStartShouldSetResponder={() => true}
           onTouchStart={handleInteraction}
         >
@@ -211,7 +185,7 @@ export function ViewerOverlay({
         <Animated.View
           entering={FadeIn.duration(200)}
           exiting={FadeOut.duration(200)}
-          style={styles.debugPanel}
+          style={[styles.debugPanel, panelStyle]}
           onStartShouldSetResponder={() => true}
           onTouchStart={handleInteraction}
         >
@@ -251,13 +225,13 @@ const styles = StyleSheet.create({
   },
   settingsPanel: {
     position: "absolute",
-    top: 100,
+    // top: 100, // Handled dynamically
     right: 16,
     zIndex: 60,
   },
   debugPanel: {
     position: "absolute",
-    top: 100,
+    // top: 100, // Handled dynamically
     left: 16,
     zIndex: 60,
   },

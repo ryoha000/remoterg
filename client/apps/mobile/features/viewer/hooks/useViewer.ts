@@ -212,17 +212,7 @@ export function useViewer() {
     ScreenOrientation.unlockAsync()
   }, [])
 
-  const rotate = async () => {
-    const current = await ScreenOrientation.getOrientationAsync()
-    if (
-      current === ScreenOrientation.Orientation.PORTRAIT_UP ||
-      current === ScreenOrientation.Orientation.PORTRAIT_DOWN
-    ) {
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE_LEFT)
-    } else {
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
-    }
-  }
+
 
   return {
     sessionId,
@@ -232,6 +222,6 @@ export function useViewer() {
     status,
     connect,
     disconnect,
-    rotate,
+
   }
 }

@@ -16,7 +16,7 @@ export function ViewerScreen() {
     status,
     connect,
     disconnect,
-    rotate,
+
   } = useViewer()
 
   const [showOverlay, setShowOverlay] = useState(true)
@@ -52,7 +52,6 @@ export function ViewerScreen() {
             visible={showOverlay}
             status={status}
             onDisconnect={disconnect}
-            onRotate={rotate}
             sessionId={sessionId}
             stats={{
               fps: 60, // TODO: Get real stats

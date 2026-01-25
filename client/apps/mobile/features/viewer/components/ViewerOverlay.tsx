@@ -12,7 +12,6 @@ interface ViewerOverlayProps {
   visible: boolean
   status: string
   onDisconnect: () => void
-  onRotate?: () => void
   sessionId: string
   stats: {
     fps: number
@@ -26,7 +25,6 @@ export function ViewerOverlay({
   visible,
   status,
   onDisconnect,
-  onRotate,
   sessionId,
   stats,
   onInteraction,
@@ -103,32 +101,6 @@ export function ViewerOverlay({
                   <Ionicons name="settings-outline" size={20} color="white" />
                 </Button>
               </View>
-            </View>
-          </SafeAreaView>
-        </Animated.View>
-      )}
-
-      {/* Bottom Floating Bar */}
-      {visible && (
-        <Animated.View
-          entering={FadeIn.delay(100).duration(200)}
-          exiting={FadeOut.duration(200)}
-          style={styles.bottomBar}
-          pointerEvents="box-none"
-          onTouchStart={handleInteraction}
-        >
-          <SafeAreaView edges={["bottom", "left", "right"]} style={styles.safeArea}>
-            <View className="flex-row justify-end items-center px-6 pb-6 gap-4">
-              {onRotate && (
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  className="rounded-full w-12 h-12 bg-black/50 border border-white/10 backdrop-blur-md active:bg-black/70"
-                  onPress={onRotate}
-                >
-                  <Ionicons name="sync" size={24} color="white" />
-                </Button>
-              )}
             </View>
           </SafeAreaView>
         </Animated.View>

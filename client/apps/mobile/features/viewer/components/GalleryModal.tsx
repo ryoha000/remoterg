@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
 import { cn } from "@/lib/utils"
-import { AssetOrigin, ScreenshotDetail } from "./ScreenshotDetail"
+import { AssetOrigin, ScreenshotDetail, ScreenshotDetailRef } from "./ScreenshotDetail"
 
 interface GalleryModalProps {
   visible: boolean
@@ -75,6 +75,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   const [hasNoAlbum, setHasNoAlbum] = useState(false)
   const insets = useSafeAreaInsets()
   const slideAnim = useRef(new Animated.Value(Dimensions.get("window").width)).current
+  const screenshotDetailRef = useRef<ScreenshotDetailRef>(null) // Ref for detail view
   // Search state
   const [searchQuery, setSearchQuery] = useState("")
 
@@ -110,7 +111,12 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
 
   const handleBack = () => {
     if (selectedAsset) {
-      setSelectedAsset(null)
+      // Trigger detail view close animation if available
+      if (screenshotDetailRef.current) {
+        screenshotDetailRef.current.close()
+      } else {
+        setSelectedAsset(null)
+      }
     } else {
       handleClose()
     }
@@ -260,6 +266,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
         </SafeAreaView>
         {selectedAsset && (
           <ScreenshotDetail
+            ref={screenshotDetailRef}
             asset={selectedAsset}
             origin={selectedAssetOrigin}
             onClose={() => setSelectedAsset(null)}

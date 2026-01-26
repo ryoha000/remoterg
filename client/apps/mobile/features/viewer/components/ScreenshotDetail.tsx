@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons"
 import * as MediaLibrary from "expo-media-library"
-import { useEffect, useState } from "react"
+import { forwardRef, useImperativeHandle, useEffect, useState } from "react"
 import { View, Image, Text, Dimensions } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import Animated, {
@@ -29,7 +29,12 @@ interface ScreenshotDetailProps {
   onClose: () => void
 }
 
-export function ScreenshotDetail({ asset, origin, onClose }: ScreenshotDetailProps) {
+export interface ScreenshotDetailRef {
+  close: () => void
+}
+
+export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetailProps>(
+  ({ asset, origin, onClose }, ref) => {
   const [assetInfo, setAssetInfo] = useState<MediaLibrary.AssetInfo | null>(null)
   
   // Animation state: 0 = closed (at thumbnail), 1 = open (fullscreen)
@@ -61,6 +66,10 @@ export function ScreenshotDetail({ asset, origin, onClose }: ScreenshotDetailPro
       }
     })
   }
+
+  useImperativeHandle(ref, () => ({
+    close: handleClose
+  }))
 
   const formatSize = (bytes?: number) => {
     if (!bytes) return "Unknown"
@@ -217,4 +226,4 @@ export function ScreenshotDetail({ asset, origin, onClose }: ScreenshotDetailPro
       </SafeAreaView>
     </View>
   )
-}
+})

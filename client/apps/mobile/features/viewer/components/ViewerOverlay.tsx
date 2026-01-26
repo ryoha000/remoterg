@@ -1,12 +1,19 @@
 import { Ionicons } from "@expo/vector-icons"
 import { useState } from "react"
 import { View, StyleSheet, TouchableOpacity } from "react-native"
-import Animated, { FadeIn, FadeOut, Layout, useAnimatedStyle, withTiming } from "react-native-reanimated"
+import Animated, {
+  FadeIn,
+  FadeOut,
+  Layout,
+  useAnimatedStyle,
+  withTiming,
+} from "react-native-reanimated"
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { Button } from "@/components/ui/button"
 import { Text } from "@/components/ui/text"
 import { cn } from "@/lib/utils"
+
 import { GalleryModal } from "./GalleryModal"
 
 interface ViewerOverlayProps {

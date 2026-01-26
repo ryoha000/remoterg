@@ -128,9 +128,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
     return (
       <Modal visible={visible} animationType="slide" transparent={false}>
         <View className="flex-1 items-center justify-center bg-zinc-950 p-4">
-          <Text className="text-white mb-4 text-center">
-            アルバムへのアクセス権限が必要です。
-          </Text>
+          <Text className="text-white mb-4 text-center">アルバムへのアクセス権限が必要です。</Text>
           <Button onPress={requestPermission}>
             <Text>権限を許可する</Text>
           </Button>
@@ -217,7 +215,11 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
                         </Text>
                       </View>
                       <Text className="text-zinc-300 font-mono text-sm">
-                        {assetInfo ? formatSize(assetInfo.localUri ? undefined : 0) : "Loading..." /* React Native Asset doesn't always have size easy access without file info */}
+                        {
+                          assetInfo
+                            ? formatSize(assetInfo.localUri ? undefined : 0)
+                            : "Loading..." /* React Native Asset doesn't always have size easy access without file info */
+                        }
                         {/* Note call MediaLibrary.getAssetInfoAsync might not return size on all platforms directly in bytes easily without FileSystem */}
                       </Text>
                     </View>
@@ -246,9 +248,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
                     <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
                       <Ionicons name="images-outline" size={32} color="#3f3f46" />
                     </View>
-                    <Text className="text-zinc-500 text-center">
-                      画像がありません。
-                    </Text>
+                    <Text className="text-zinc-500 text-center">画像がありません。</Text>
                   </View>
                 ) : (
                   <FlatList

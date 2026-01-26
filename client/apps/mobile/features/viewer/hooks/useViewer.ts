@@ -1,16 +1,16 @@
+// @ts-ignore: Check if File/Paths are available in the installed version, assuming yes per user request
+import { File, Paths } from "expo-file-system"
+import * as MediaLibrary from "expo-media-library"
 import * as ScreenOrientation from "expo-screen-orientation"
 import { useState, useEffect, useRef, useCallback } from "react"
+import { Alert, Platform } from "react-native"
+import ReactNativeBlobUtil from "react-native-blob-util"
 import {
   RTCPeerConnection,
   RTCIceCandidate,
   RTCSessionDescription,
   MediaStream,
 } from "react-native-webrtc"
-import { Alert, Platform } from "react-native"
-import ReactNativeBlobUtil from "react-native-blob-util"
-import * as MediaLibrary from "expo-media-library"
-// @ts-ignore: Check if File/Paths are available in the installed version, assuming yes per user request
-import { File, Paths } from "expo-file-system"
 
 const SIGNALING_URL_BASE = "ws://10.0.2.2:3000/api/signal"
 
@@ -23,7 +23,7 @@ export function useViewer() {
   const wsRef = useRef<WebSocket | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const dcRef = useRef<any | null>(null)
-  
+
   const incomingScreenshotRef = useRef<{
     id: string
     size: number
@@ -65,54 +65,52 @@ export function useViewer() {
         const file = new File(Paths.document, `${screenshot.id}.${screenshot.format}`)
         // Write bytes directly
         file.write(combined)
-        
+
         console.log("File saved to:", file.uri)
 
         // 3. Save to Gallery
         try {
-            if (Platform.OS === 'android') {
-                 // Android: Use MediaCollection to save directly to Pictures/RemoteRG
-                 // This avoids "Allow to modify?" dialog on Android 11+ (Scoped Storage)
-                 // because we are creating a new entry, not moving/modifying an existing one.
-                 
-                 const mimeType = screenshot.format === 'png' ? 'image/png' : 'image/jpeg'
-                 
-                 // copyToMediaStore takes: (details, mediaType, path)
-                 // The path must be absolute path to the temp file. 
-                 // file.uri from Expo FS starts with 'file://' which BlobUtil handles or we might need to strip it?
-                 // Usually BlobUtil handles file://, but let's be safe and check if it fails.
-                 
-                 await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
-                    {
-                        name: screenshot.id, // filename
-                        parentFolder: 'RemoteRG', // "RemoteRG" folder in Pictures
-                        mimeType: mimeType
-                    },
-                    'Image',
-                    file.uri
-                 )
-                 Alert.alert("Success", "Screenshot saved to gallery!")
-            } else {
-                // iOS: Use Expo MediaLibrary
-                const asset = await MediaLibrary.createAssetAsync(file.uri)
-                const album = await MediaLibrary.getAlbumAsync("RemoteRG")
-                if (album) {
-                    await MediaLibrary.addAssetsToAlbumAsync([asset], album, false)
-                } else {
-                    await MediaLibrary.createAlbumAsync("RemoteRG", asset, false)
-                }
-                Alert.alert("Success", "Screenshot saved to gallery!")
-            }
+          if (Platform.OS === "android") {
+            // Android: Use MediaCollection to save directly to Pictures/RemoteRG
+            // This avoids "Allow to modify?" dialog on Android 11+ (Scoped Storage)
+            // because we are creating a new entry, not moving/modifying an existing one.
 
+            const mimeType = screenshot.format === "png" ? "image/png" : "image/jpeg"
+
+            // copyToMediaStore takes: (details, mediaType, path)
+            // The path must be absolute path to the temp file.
+            // file.uri from Expo FS starts with 'file://' which BlobUtil handles or we might need to strip it?
+            // Usually BlobUtil handles file://, but let's be safe and check if it fails.
+
+            await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
+              {
+                name: screenshot.id, // filename
+                parentFolder: "RemoteRG", // "RemoteRG" folder in Pictures
+                mimeType: mimeType,
+              },
+              "Image",
+              file.uri,
+            )
+            Alert.alert("Success", "Screenshot saved to gallery!")
+          } else {
+            // iOS: Use Expo MediaLibrary
+            const asset = await MediaLibrary.createAssetAsync(file.uri)
+            const album = await MediaLibrary.getAlbumAsync("RemoteRG")
+            if (album) {
+              await MediaLibrary.addAssetsToAlbumAsync([asset], album, false)
+            } else {
+              await MediaLibrary.createAlbumAsync("RemoteRG", asset, false)
+            }
+            Alert.alert("Success", "Screenshot saved to gallery!")
+          }
         } catch (e) {
-            console.error("Failed to save to gallery", e)
-            Alert.alert("Error", `Failed to save to gallery: ${e}`)
+          console.error("Failed to save to gallery", e)
+          Alert.alert("Error", `Failed to save to gallery: ${e}`)
         }
       } catch (e) {
-         console.error("FileSystem File API Error", e);
-         Alert.alert("Error", `FileSystem Error: ${e}`)
+        console.error("FileSystem File API Error", e)
+        Alert.alert("Error", `FileSystem Error: ${e}`)
       }
-
     } catch (e) {
       console.error("Error processing screenshot:", e)
       Alert.alert("Error", `Failed to process screenshot: ${e}`)
@@ -200,40 +198,40 @@ export function useViewer() {
       console.log("Creating DataChannel...")
       const dc = pc.createDataChannel("data")
       dcRef.current = dc
-      
+
       // @ts-ignore
       dc.onopen = () => console.log("DataChannel Open")
       // @ts-ignore
       dc.onmessage = (event: any) => {
         const data = event.data
-        if (typeof data === 'string') {
-             try {
-                 const msg = JSON.parse(data)
-                 if (msg.SCREENSHOT_METADATA) {
-                     const payload = msg.SCREENSHOT_METADATA.payload
-                     console.log("Screenshot metadata:", payload)
-                     incomingScreenshotRef.current = {
-                         ...payload,
-                         received: 0,
-                         chunks: []
-                     }
-                 }
-             } catch (e) {
-                 console.error("Failed to parse DC message", e)
-             }
-        } else {
-            // Binary
-            if (incomingScreenshotRef.current) {
-                const chunk = new Uint8Array(data)
-                incomingScreenshotRef.current.chunks.push(chunk)
-                incomingScreenshotRef.current.received += chunk.byteLength
-                
-                if (incomingScreenshotRef.current.received >= incomingScreenshotRef.current.size) {
-                    console.log("Screenshot done")
-                    handleScreenshotComplete(incomingScreenshotRef.current)
-                    incomingScreenshotRef.current = null
-                }
+        if (typeof data === "string") {
+          try {
+            const msg = JSON.parse(data)
+            if (msg.SCREENSHOT_METADATA) {
+              const payload = msg.SCREENSHOT_METADATA.payload
+              console.log("Screenshot metadata:", payload)
+              incomingScreenshotRef.current = {
+                ...payload,
+                received: 0,
+                chunks: [],
+              }
             }
+          } catch (e) {
+            console.error("Failed to parse DC message", e)
+          }
+        } else {
+          // Binary
+          if (incomingScreenshotRef.current) {
+            const chunk = new Uint8Array(data)
+            incomingScreenshotRef.current.chunks.push(chunk)
+            incomingScreenshotRef.current.received += chunk.byteLength
+
+            if (incomingScreenshotRef.current.received >= incomingScreenshotRef.current.size) {
+              console.log("Screenshot done")
+              handleScreenshotComplete(incomingScreenshotRef.current)
+              incomingScreenshotRef.current = null
+            }
+          }
         }
       }
 
@@ -347,8 +345,6 @@ export function useViewer() {
     // Unlock orientation to allow user to rotate device nicely
     ScreenOrientation.unlockAsync()
   }, [])
-
-
 
   return {
     sessionId,

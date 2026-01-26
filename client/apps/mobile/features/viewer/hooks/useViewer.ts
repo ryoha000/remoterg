@@ -6,7 +6,8 @@ import {
   RTCSessionDescription,
   MediaStream,
 } from "react-native-webrtc"
-import { Alert } from "react-native"
+import { Alert, Platform } from "react-native"
+import ReactNativeBlobUtil from "react-native-blob-util"
 import * as MediaLibrary from "expo-media-library"
 // @ts-ignore: Check if File/Paths are available in the installed version, assuming yes per user request
 import { File, Paths } from "expo-file-system"
@@ -69,17 +70,43 @@ export function useViewer() {
 
         // 3. Save to Gallery
         try {
-            const asset = await MediaLibrary.createAssetAsync(file.uri)
-            const album = await MediaLibrary.getAlbumAsync("RemoteRG")
-            if (album) {
-                await MediaLibrary.addAssetsToAlbumAsync([asset], album, false)
+            if (Platform.OS === 'android') {
+                 // Android: Use MediaCollection to save directly to Pictures/RemoteRG
+                 // This avoids "Allow to modify?" dialog on Android 11+ (Scoped Storage)
+                 // because we are creating a new entry, not moving/modifying an existing one.
+                 
+                 const mimeType = screenshot.format === 'png' ? 'image/png' : 'image/jpeg'
+                 
+                 // copyToMediaStore takes: (details, mediaType, path)
+                 // The path must be absolute path to the temp file. 
+                 // file.uri from Expo FS starts with 'file://' which BlobUtil handles or we might need to strip it?
+                 // Usually BlobUtil handles file://, but let's be safe and check if it fails.
+                 
+                 await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
+                    {
+                        name: screenshot.id, // filename
+                        parentFolder: 'RemoteRG', // "RemoteRG" folder in Pictures
+                        mimeType: mimeType
+                    },
+                    'Image',
+                    file.uri
+                 )
+                 Alert.alert("Success", "Screenshot saved to gallery!")
             } else {
-                await MediaLibrary.createAlbumAsync("RemoteRG", asset, false)
+                // iOS: Use Expo MediaLibrary
+                const asset = await MediaLibrary.createAssetAsync(file.uri)
+                const album = await MediaLibrary.getAlbumAsync("RemoteRG")
+                if (album) {
+                    await MediaLibrary.addAssetsToAlbumAsync([asset], album, false)
+                } else {
+                    await MediaLibrary.createAlbumAsync("RemoteRG", asset, false)
+                }
+                Alert.alert("Success", "Screenshot saved to gallery!")
             }
-            Alert.alert("Success", "Screenshot saved to gallery!")
+
         } catch (e) {
             console.error("Failed to save to gallery", e)
-            Alert.alert("Error", "Failed to save to gallery")
+            Alert.alert("Error", `Failed to save to gallery: ${e}`)
         }
       } catch (e) {
          console.error("FileSystem File API Error", e);

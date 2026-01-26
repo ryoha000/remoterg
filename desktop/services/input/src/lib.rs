@@ -164,7 +164,7 @@ impl InputService {
             }
         };
 
-        // 2. Encode to PNG
+        // 2. Encode to JPEG for performance
         // The frame data is BGRA (Windows Capture default)
         // Convert BGRA to RGBA if needed, or just tell the encoder strictly.
         // image crate supports Bgra8 so we can use that if available, or just swap.
@@ -175,8 +175,9 @@ impl InputService {
         let width = frame.width;
         let height = frame.height;
 
-        let mut png_data = Vec::new();
-        let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
+        let mut jpeg_data = Vec::new();
+        // Use JPEG with quality 80
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_data, 80);
         encoder.write_image(&frame.data, width, height, ColorType::Rgba8.into())?;
 
         // 3. Create Metadata
@@ -185,15 +186,15 @@ impl InputService {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let total_size = png_data.len() as u32;
+        let total_size = jpeg_data.len() as u32;
 
         // --- Save to Server ---
         if !self.screenshot_dir.exists() {
             tokio::fs::create_dir_all(&self.screenshot_dir).await?;
         }
 
-        let file_path = self.screenshot_dir.join(format!("{}.png", id));
-        tokio::fs::write(&file_path, &png_data).await?;
+        let file_path = self.screenshot_dir.join(format!("{}.jpeg", id));
+        tokio::fs::write(&file_path, &jpeg_data).await?;
         info!("Saved screenshot to: {:?}", file_path);
         // ----------------------
 
@@ -201,7 +202,7 @@ impl InputService {
             payload: ScreenshotMetadataPayload {
                 id: id.clone(),
                 timestamp,
-                format: "png".to_string(),
+                format: "jpeg".to_string(),
                 width,
                 height,
                 size: total_size,
@@ -216,9 +217,9 @@ impl InputService {
         // 5. Send Binary Chunks
         // Chunk size 16KB (WebRTC safe limit is usually higher like 64KB or 256KB, but 16KB is safe)
         const CHUNK_SIZE: usize = 16 * 1024;
-        let total_chunks = (png_data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        let total_chunks = (jpeg_data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
-        for chunk in png_data.chunks(CHUNK_SIZE) {
+        for chunk in jpeg_data.chunks(CHUNK_SIZE) {
             // We just send raw binary for now as per spec "Meta -> Binary Transfer".
             // If the client expects just the image stream, we send chunks.
             // But if we need ordering or ID, we might need a header.
@@ -236,7 +237,7 @@ impl InputService {
                 .await?;
         }
 
-        info!("Sent screenshot {} ({} bytes, {} chunks)", id, png_data.len(), total_chunks);
+        info!("Sent screenshot {} ({} bytes, {} chunks)", id, jpeg_data.len(), total_chunks);
 
         Ok(())
     }

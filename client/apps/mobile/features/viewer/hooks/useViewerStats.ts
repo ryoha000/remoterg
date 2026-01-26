@@ -15,9 +15,9 @@ export function useViewerStats(pcRef: RefObject<RTCPeerConnection | null>, isCon
         // @ts-ignore
         stats.forEach((report) => {
           if (report.type === "inbound-rtp" && report.kind === "video") {
-            console.log(
-              `[Video Stats] Bytes: ${report.bytesReceived}, Packets: ${report.packetsReceived}, Decoded: ${report.framesDecoded}, Dropped: ${report.framesDropped}, Lost: ${report.packetsLost}`,
-            )
+            // console.log(
+            //   `[Video Stats] Bytes: ${report.bytesReceived}, Packets: ${report.packetsReceived}, Decoded: ${report.framesDecoded}, Dropped: ${report.framesDropped}, Lost: ${report.packetsLost}`,
+            // )
           }
         })
       } catch (e) {

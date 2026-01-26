@@ -195,6 +195,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
       animationType="none"
       transparent={true}
       onRequestClose={handleBack}
+      statusBarTranslucent
     >
       <View className="flex-1 bg-black/50">
         <Animated.View

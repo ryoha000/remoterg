@@ -16,7 +16,7 @@ export function ViewerScreen() {
     status,
     connect,
     disconnect,
-
+    requestScreenshot,
   } = useViewer()
 
   const [showOverlay, setShowOverlay] = useState(true)
@@ -59,6 +59,7 @@ export function ViewerScreen() {
               loss: 0, // TODO: Get real stats
             }}
             onInteraction={onInteraction}
+            onRequestScreenshot={requestScreenshot}
           />
         </View>
       ) : (

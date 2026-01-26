@@ -6,6 +6,10 @@ import {
   RTCSessionDescription,
   MediaStream,
 } from "react-native-webrtc"
+import { Alert } from "react-native"
+import * as MediaLibrary from "expo-media-library"
+// @ts-ignore: Check if File/Paths are available in the installed version, assuming yes per user request
+import { File, Paths } from "expo-file-system"
 
 const SIGNALING_URL_BASE = "ws://10.0.2.2:3000/api/signal"
 
@@ -17,6 +21,76 @@ export function useViewer() {
 
   const wsRef = useRef<WebSocket | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
+  const dcRef = useRef<any | null>(null)
+  
+  const incomingScreenshotRef = useRef<{
+    id: string
+    size: number
+    format: string
+    received: number
+    chunks: Uint8Array[]
+  } | null>(null)
+
+  const requestScreenshot = useCallback(() => {
+    if (dcRef.current && dcRef.current.readyState === "open") {
+      dcRef.current.send(JSON.stringify({ ScreenshotRequest: null }))
+      console.log("Screenshot request sent")
+    } else {
+      console.warn("DataChannel not open")
+    }
+  }, [])
+
+  const handleScreenshotComplete = async (screenshot: {
+    id: string
+    format: string
+    chunks: Uint8Array[]
+  }) => {
+    try {
+      // 1. Combine chunks
+      let totalLength = 0
+      for (const chunk of screenshot.chunks) {
+        totalLength += chunk.length
+      }
+      const combined = new Uint8Array(totalLength)
+      let offset = 0
+      for (const chunk of screenshot.chunks) {
+        combined.set(chunk, offset)
+        offset += chunk.length
+      }
+
+      // 2. Save directly to FileSystem using new API (no base64 conv needed)
+      // Note: File class writes Uint8Array directly
+      try {
+        const file = new File(Paths.document, `${screenshot.id}.${screenshot.format}`)
+        // Write bytes directly
+        file.write(combined)
+        
+        console.log("File saved to:", file.uri)
+
+        // 3. Save to Gallery
+        try {
+            const asset = await MediaLibrary.createAssetAsync(file.uri)
+            const album = await MediaLibrary.getAlbumAsync("RemoteRG")
+            if (album) {
+                await MediaLibrary.addAssetsToAlbumAsync([asset], album, false)
+            } else {
+                await MediaLibrary.createAlbumAsync("RemoteRG", asset, false)
+            }
+            Alert.alert("Success", "Screenshot saved to gallery!")
+        } catch (e) {
+            console.error("Failed to save to gallery", e)
+            Alert.alert("Error", "Failed to save to gallery")
+        }
+      } catch (e) {
+         console.error("FileSystem File API Error", e);
+         Alert.alert("Error", `FileSystem Error: ${e}`)
+      }
+
+    } catch (e) {
+      console.error("Error processing screenshot:", e)
+      Alert.alert("Error", `Failed to process screenshot: ${e}`)
+    }
+  }
 
   const connect = useCallback(() => {
     setStatus("Connecting...")
@@ -98,10 +172,43 @@ export function useViewer() {
       // 4. Create Data Channel (Required by hostd?)
       console.log("Creating DataChannel...")
       const dc = pc.createDataChannel("data")
+      dcRef.current = dc
+      
       // @ts-ignore
       dc.onopen = () => console.log("DataChannel Open")
       // @ts-ignore
-      dc.onmessage = (e: any) => console.log("DC Message:", e.data)
+      dc.onmessage = (event: any) => {
+        const data = event.data
+        if (typeof data === 'string') {
+             try {
+                 const msg = JSON.parse(data)
+                 if (msg.SCREENSHOT_METADATA) {
+                     const payload = msg.SCREENSHOT_METADATA.payload
+                     console.log("Screenshot metadata:", payload)
+                     incomingScreenshotRef.current = {
+                         ...payload,
+                         received: 0,
+                         chunks: []
+                     }
+                 }
+             } catch (e) {
+                 console.error("Failed to parse DC message", e)
+             }
+        } else {
+            // Binary
+            if (incomingScreenshotRef.current) {
+                const chunk = new Uint8Array(data)
+                incomingScreenshotRef.current.chunks.push(chunk)
+                incomingScreenshotRef.current.received += chunk.byteLength
+                
+                if (incomingScreenshotRef.current.received >= incomingScreenshotRef.current.size) {
+                    console.log("Screenshot done")
+                    handleScreenshotComplete(incomingScreenshotRef.current)
+                    incomingScreenshotRef.current = null
+                }
+            }
+        }
+      }
 
       // 5. Create Offer
       try {
@@ -168,8 +275,10 @@ export function useViewer() {
   const disconnect = () => {
     if (wsRef.current) wsRef.current.close()
     if (pcRef.current) pcRef.current.close()
+    if (dcRef.current) dcRef.current.close()
     wsRef.current = null
     pcRef.current = null
+    dcRef.current = null
     setIsConnected(false)
     setRemoteStream(null)
     setStatus("Disconnected")
@@ -222,6 +331,6 @@ export function useViewer() {
     status,
     connect,
     disconnect,
-
+    requestScreenshot,
   }
 }

@@ -20,6 +20,7 @@ interface ViewerOverlayProps {
     loss: number
   }
   onInteraction?: () => void
+  onRequestScreenshot?: () => void
 }
 
 export function ViewerOverlay({
@@ -29,6 +30,7 @@ export function ViewerOverlay({
   sessionId,
   stats,
   onInteraction,
+  onRequestScreenshot,
 }: ViewerOverlayProps) {
   const [showSettings, setShowSettings] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
@@ -101,6 +103,14 @@ export function ViewerOverlay({
                   className="rounded-full active:bg-white/20"
                 >
                   <Ionicons name="images-outline" size={20} color="white" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onPress={onRequestScreenshot}
+                  className="rounded-full active:bg-white/20"
+                >
+                  <Ionicons name="camera-outline" size={20} color="white" />
                 </Button>
                 <Button
                   variant="ghost"

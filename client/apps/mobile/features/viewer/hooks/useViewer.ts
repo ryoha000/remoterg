@@ -5,7 +5,11 @@ import { useScreenshot } from "./useScreenshot"
 import { useViewerConnection } from "./useViewerConnection"
 import { useViewerStats } from "./useViewerStats"
 
-export function useViewer() {
+interface UseViewerProps {
+  onScreenshotSuccess?: (uri: string) => void
+}
+
+export function useViewer(props?: UseViewerProps) {
   const [sessionId, setSessionId] = useState("fixed")
 
   const {
@@ -13,7 +17,7 @@ export function useViewer() {
     handleMetadata,
     handleChunk,
     isReceiving,
-  } = useScreenshot()
+  } = useScreenshot({ onSuccess: props?.onScreenshotSuccess })
 
   const handleDataChannelMessage = useCallback(
     (data: string | ArrayBuffer) => {

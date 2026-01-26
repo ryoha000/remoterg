@@ -3,11 +3,13 @@ import { useRef, useEffect, useState, useCallback } from "react"
 import { View, StyleSheet, TouchableWithoutFeedback } from "react-native"
 
 import { ConnectForm } from "./components/ConnectForm"
+import { ScreenshotFlash, ScreenshotFlashHandle } from "./components/ScreenshotFlash"
 import { VideoPlayer } from "./components/VideoPlayer"
 import { ViewerOverlay } from "./components/ViewerOverlay"
 import { useViewer } from "./hooks/useViewer"
 
 export function ViewerScreen() {
+  const flashRef = useRef<ScreenshotFlashHandle>(null)
   const {
     sessionId,
     setSessionId,
@@ -16,8 +18,30 @@ export function ViewerScreen() {
     status,
     connect,
     disconnect,
-    requestScreenshot,
-  } = useViewer()
+    requestScreenshot: requestScreenshotInternal,
+  } = useViewer({
+    onScreenshotSuccess: (uri) => {
+      flashRef.current?.showResult(uri)
+    },
+  })
+
+  // Update flash layout when stream dimensions change
+  useEffect(() => {
+    if (remoteStream) {
+      const track = remoteStream.getVideoTracks()[0]
+      if (track) {
+        const { width, height } = track.getSettings()
+        if (width && height) {
+          flashRef.current?.setContentSize(width, height)
+        }
+      }
+    }
+  }, [remoteStream])
+
+  const requestScreenshot = useCallback(() => {
+    flashRef.current?.triggerFlash()
+    requestScreenshotInternal()
+  }, [requestScreenshotInternal])
 
   const [showOverlay, setShowOverlay] = useState(true)
   const [lastInteraction, setLastInteraction] = useState(Date.now())
@@ -70,6 +94,7 @@ export function ViewerScreen() {
           connect={connect}
         />
       )}
+      <ScreenshotFlash ref={flashRef} />
     </View>
   )
 }

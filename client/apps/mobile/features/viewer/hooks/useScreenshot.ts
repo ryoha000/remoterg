@@ -13,7 +13,11 @@ interface ScreenshotMetadata {
   chunks: Uint8Array[]
 }
 
-export function useScreenshot() {
+interface UseScreenshotProps {
+  onSuccess?: (uri: string) => void
+}
+
+export function useScreenshot({ onSuccess }: UseScreenshotProps = {}) {
   const incomingScreenshotRef = useRef<ScreenshotMetadata | null>(null)
 
   const requestScreenshot = useCallback((sendDataChannelMessage?: (msg: string) => void) => {
@@ -65,7 +69,7 @@ export function useScreenshot() {
               "Image",
               file.uri,
             )
-            Alert.alert("Success", "Screenshot saved to gallery!")
+            onSuccess?.(file.uri)
           } else {
             const asset = await MediaLibrary.createAssetAsync(file.uri)
             const album = await MediaLibrary.getAlbumAsync("RemoteRG")
@@ -74,7 +78,7 @@ export function useScreenshot() {
             } else {
               await MediaLibrary.createAlbumAsync("RemoteRG", asset, false)
             }
-            Alert.alert("Success", "Screenshot saved to gallery!")
+            onSuccess?.(file.uri)
           }
         } catch (e) {
           console.error("Failed to save to gallery", e)

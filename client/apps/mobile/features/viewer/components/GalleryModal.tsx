@@ -19,16 +19,58 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
 import { cn } from "@/lib/utils"
+import { AssetOrigin, ScreenshotDetail } from "./ScreenshotDetail"
 
 interface GalleryModalProps {
   visible: boolean
   onClose: () => void
 }
 
+const ThumbnailItem = ({
+  item,
+  onPress,
+}: {
+  item: MediaLibrary.Asset
+  onPress: (asset: MediaLibrary.Asset, origin: AssetOrigin) => void
+}) => {
+  const itemRef = useRef<View>(null)
+  const width = Dimensions.get("window").width / 3 - 2
+
+  const handlePress = () => {
+    itemRef.current?.measureInWindow((x, y, w, h) => {
+      onPress(item, { x, y, width: w, height: h })
+    })
+  }
+
+  return (
+    <TouchableOpacity
+      ref={itemRef}
+      onPress={handlePress}
+      className="m-[1px] relative"
+      style={{ width, height: width * 0.5625 }}
+    >
+      <Image
+        source={{ uri: item.uri }}
+        style={{ width: "100%", height: "100%" }}
+        resizeMode="cover"
+      />
+      <View className="absolute bottom-0 left-0 right-0 p-1 bg-black/40">
+        <Text className="text-white/90 text-[10px] font-mono">
+          {new Date(item.creationTime).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  )
+}
+
 export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   const [permissionResponse, requestPermission] = MediaLibrary.usePermissions()
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([])
   const [selectedAsset, setSelectedAsset] = useState<MediaLibrary.Asset | null>(null)
+  const [selectedAssetOrigin, setSelectedAssetOrigin] = useState<AssetOrigin | null>(null)
   const [loading, setLoading] = useState(false)
   const [hasNoAlbum, setHasNoAlbum] = useState(false)
   const insets = useSafeAreaInsets()
@@ -61,6 +103,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
       onClose()
       // Reset state after close
       setSelectedAsset(null)
+      setSelectedAssetOrigin(null)
       setSearchQuery("")
     })
   }, [onClose, slideAnim])
@@ -113,53 +156,12 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
     }
   }, [visible, permissionResponse, requestPermission])
 
-  // アセットの詳細情報を取得（ファイルサイズなど）
-  const [assetInfo, setAssetInfo] = useState<MediaLibrary.AssetInfo | null>(null)
-  useEffect(() => {
-    const fetchInfo = async () => {
-      if (selectedAsset) {
-        const info = await MediaLibrary.getAssetInfoAsync(selectedAsset)
-        setAssetInfo(info)
-      } else {
-        setAssetInfo(null)
-      }
-    }
-    fetchInfo()
-  }, [selectedAsset])
 
-  const formatSize = (bytes?: number) => {
-    if (!bytes) return "Unknown"
-    const k = 1024
-    const sizes = ["B", "KB", "MB", "GB"]
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-  }
 
-  const renderGridItem = ({ item }: { item: MediaLibrary.Asset }) => {
-    const width = Dimensions.get("window").width / 3 - 2
-    return (
-      <TouchableOpacity
-        onPress={() => setSelectedAsset(item)}
-        className="m-[1px] relative"
-        style={{ width, height: width * 0.5625 }} // 16:9 aspect ratio roughly
-      >
-        <Image
-          source={{ uri: item.uri }}
-          style={{ width: "100%", height: "100%" }}
-          resizeMode="cover"
-        />
-        {/* Web版のデザインに合わせたグラデーションオーバーレイとタイムスタンプ */}
-        <View className="absolute bottom-0 left-0 right-0 p-1 bg-black/40">
-          <Text className="text-white/90 text-[10px] font-mono">
-            {new Date(item.creationTime).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    )
-  }
+  const handleAssetSelect = useCallback((asset: MediaLibrary.Asset, origin: AssetOrigin) => {
+    setSelectedAssetOrigin(origin)
+    setSelectedAsset(asset)
+  }, [])
 
   if (!permissionResponse) {
     return <View />
@@ -209,119 +211,61 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
               </Button>
               
               <View className="flex-1">
-                {selectedAsset ? (
-                   <Text className="text-white text-lg font-medium ml-2">
-                     Screenshot Details
-                   </Text>
-                ) : (
-                  <Input
-                    placeholder="Search..."
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                    className="h-10 bg-zinc-900 border-zinc-800 text-white placeholder:text-zinc-500"
-                  />
-                )}
+                <Input
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  className="h-10 bg-zinc-900 border-zinc-800 text-white placeholder:text-zinc-500"
+                />
               </View>
             </View>
 
-          {/* Content */}
-          <View className="flex-1 bg-zinc-900/30">
-            {selectedAsset ? (
-              // Detail View
-              <View className="flex-1 flex-col">
-                <View className="flex-1 items-center justify-center p-4">
-                  <Image
-                    source={{ uri: selectedAsset.uri }}
-                    className="w-full h-full"
-                    resizeMode="contain"
-                  />
+            {/* Grid View */}
+            <View className="flex-1 bg-zinc-900/30">
+
+              {loading ? (
+                <View className="flex-1 items-center justify-center">
+                  <ActivityIndicator size="large" color="#a855f7" />
                 </View>
-
-                {/* Info Panel */}
-                <View className="bg-zinc-900/50 border-t border-zinc-800 p-6 pb-8">
-                  <Text className="text-lg font-semibold text-white mb-4">Metadata</Text>
-                  <View className="gap-4">
-                    <View>
-                      <View className="flex-row items-center gap-2 mb-1">
-                        <Ionicons name="calendar-outline" size={14} color="#71717a" />
-                        <Text className="text-zinc-500 text-xs uppercase tracking-wider font-medium">
-                          Timestamp
-                        </Text>
-                      </View>
-                      <Text className="text-zinc-300 font-mono text-sm">
-                        {new Date(selectedAsset.creationTime).toLocaleString()}
-                      </Text>
-                    </View>
-
-                    <View>
-                      <View className="flex-row items-center gap-2 mb-1">
-                        <Ionicons name="resize-outline" size={14} color="#71717a" />
-                        <Text className="text-zinc-500 text-xs uppercase tracking-wider font-medium">
-                          Dimensions
-                        </Text>
-                      </View>
-                      <Text className="text-zinc-300 font-mono text-sm">
-                        {selectedAsset.width} x {selectedAsset.height}
-                      </Text>
-                    </View>
-
-                    <View>
-                      <View className="flex-row items-center gap-2 mb-1">
-                        <Ionicons name="hardware-chip-outline" size={14} color="#71717a" />
-                        <Text className="text-zinc-500 text-xs uppercase tracking-wider font-medium">
-                          Size
-                        </Text>
-                      </View>
-                      <Text className="text-zinc-300 font-mono text-sm">
-                        {
-                          assetInfo
-                            ? formatSize(assetInfo.localUri ? undefined : 0)
-                            : "Loading..." /* React Native Asset doesn't always have size easy access without file info */
-                        }
-                        {/* Note call MediaLibrary.getAssetInfoAsync might not return size on all platforms directly in bytes easily without FileSystem */}
-                      </Text>
-                    </View>
+              ) : hasNoAlbum ? (
+                <View className="flex-1 items-center justify-center p-8 gap-4">
+                  <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
+                    <Ionicons name="images-outline" size={32} color="#3f3f46" />
                   </View>
+                  <Text className="text-zinc-500 text-center">
+                    "{ALBUM_NAME}" アルバムが見つかりません。
+                    {"\n"}スクリーンショットを撮影するとここに表示されます。
+                  </Text>
                 </View>
-              </View>
-            ) : (
-              // Grid View
-              <View className="flex-1">
-                {loading ? (
-                  <View className="flex-1 items-center justify-center">
-                    <ActivityIndicator size="large" color="#a855f7" />
+              ) : assets.length === 0 ? (
+                <View className="flex-1 items-center justify-center p-8 gap-4">
+                  <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
+                    <Ionicons name="images-outline" size={32} color="#3f3f46" />
                   </View>
-                ) : hasNoAlbum ? (
-                  <View className="flex-1 items-center justify-center p-8 gap-4">
-                    <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
-                      <Ionicons name="images-outline" size={32} color="#3f3f46" />
-                    </View>
-                    <Text className="text-zinc-500 text-center">
-                      "{ALBUM_NAME}" アルバムが見つかりません。
-                      {"\n"}スクリーンショットを撮影するとここに表示されます。
-                    </Text>
-                  </View>
-                ) : assets.length === 0 ? (
-                  <View className="flex-1 items-center justify-center p-8 gap-4">
-                    <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
-                      <Ionicons name="images-outline" size={32} color="#3f3f46" />
-                    </View>
-                    <Text className="text-zinc-500 text-center">画像がありません。</Text>
-                  </View>
-                ) : (
-                  <FlatList
-                    data={assets}
-                    renderItem={renderGridItem}
-                    keyExtractor={(item) => item.id}
-                    numColumns={3}
-                    contentContainerStyle={{ padding: 1 }}
-                  />
-                )}
-              </View>
-            )}
-          </View>
+                  <Text className="text-zinc-500 text-center">画像がありません。</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={assets}
+                  renderItem={({ item }) => (
+                    <ThumbnailItem item={item} onPress={handleAssetSelect} />
+                  )}
+                  keyExtractor={(item) => item.id}
+                  numColumns={3}
+                  contentContainerStyle={{ padding: 1 }}
+                />
+              )}
+            </View>
+
         </SafeAreaView>
-        </Animated.View>
+        {selectedAsset && (
+          <ScreenshotDetail
+            asset={selectedAsset}
+            origin={selectedAssetOrigin}
+            onClose={() => setSelectedAsset(null)}
+          />
+        )}
+      </Animated.View>
       </View>
     </Modal>
   )

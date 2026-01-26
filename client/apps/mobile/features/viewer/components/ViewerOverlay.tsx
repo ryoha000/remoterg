@@ -7,6 +7,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Button } from "@/components/ui/button"
 import { Text } from "@/components/ui/text"
 import { cn } from "@/lib/utils"
+import { GalleryModal } from "./GalleryModal"
 
 interface ViewerOverlayProps {
   visible: boolean
@@ -31,6 +32,7 @@ export function ViewerOverlay({
 }: ViewerOverlayProps) {
   const [showSettings, setShowSettings] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
+  const [showGallery, setShowGallery] = useState(false)
   const insets = useSafeAreaInsets()
 
   const handleInteraction = () => {
@@ -91,6 +93,14 @@ export function ViewerOverlay({
                   className={cn("rounded-full active:bg-white/20", showDebug && "bg-white/20")}
                 >
                   <Ionicons name="bug-outline" size={20} color="white" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onPress={() => setShowGallery(true)}
+                  className="rounded-full active:bg-white/20"
+                >
+                  <Ionicons name="images-outline" size={20} color="white" />
                 </Button>
                 <Button
                   variant="ghost"
@@ -171,6 +181,7 @@ export function ViewerOverlay({
           </View>
         </Animated.View>
       )}
+      <GalleryModal visible={showGallery} onClose={() => setShowGallery(false)} />
     </View>
   )
 }

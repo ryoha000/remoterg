@@ -9,7 +9,6 @@
     "**/routeTree.gen.ts": true
   },
   "rust-analyzer.linkedProjects": ["desktop/services/Cargo.toml"],
-  "oxc.fmt.experimental": false,
   "editor.defaultFormatter": "oxc.oxc-vscode",
-  "oxc.path.oxfmt": "client\\node_modules\\@oxfmt\\win32-x64\\oxfmt.win32-x64.node"
+  // "oxc.path.oxfmt": "client\\node_modules\\@oxfmt\\win32-x64\\oxfmt.win32-x64.node"
 }

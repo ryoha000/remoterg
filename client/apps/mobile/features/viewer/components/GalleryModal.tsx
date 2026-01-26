@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons"
 import * as MediaLibrary from "expo-media-library"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import {
   Modal,
   View,
@@ -10,10 +10,13 @@ import {
   Dimensions,
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
 } from "react-native"
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
 import { cn } from "@/lib/utils"
 
@@ -29,8 +32,46 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   const [loading, setLoading] = useState(false)
   const [hasNoAlbum, setHasNoAlbum] = useState(false)
   const insets = useSafeAreaInsets()
+  const slideAnim = useRef(new Animated.Value(Dimensions.get("window").width)).current
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("")
 
   const ALBUM_NAME = "RemoteRG" // このアプリで保存した画像のアルバム名
+
+  useEffect(() => {
+    if (visible) {
+      // Reset position just in case
+      slideAnim.setValue(Dimensions.get("window").width)
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+        easing: Easing.out(Easing.poly(4)),
+      }).start()
+    }
+  }, [visible])
+
+  const handleClose = useCallback(() => {
+    Animated.timing(slideAnim, {
+      toValue: Dimensions.get("window").width,
+      duration: 250,
+      useNativeDriver: true,
+      easing: Easing.in(Easing.poly(4)),
+    }).start(() => {
+      onClose()
+      // Reset state after close
+      setSelectedAsset(null)
+      setSearchQuery("")
+    })
+  }, [onClose, slideAnim])
+
+  const handleBack = () => {
+    if (selectedAsset) {
+      setSelectedAsset(null)
+    } else {
+      handleClose()
+    }
+  }
 
   const loadAssets = useCallback(async () => {
     if (permissionResponse?.status !== "granted") {
@@ -141,30 +182,47 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   }
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
-      <View className="flex-1 bg-zinc-950">
-        <SafeAreaView className="flex-1" edges={["top", "left", "right"]}>
-          {/* Header */}
-          <View className="flex-row items-center justify-between px-4 py-2 border-b border-zinc-900 bg-zinc-950/50">
-            <View className="flex-row items-center gap-2">
-              {selectedAsset && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full"
-                  onPress={() => setSelectedAsset(null)}
-                >
-                  <Ionicons name="arrow-back" size={24} color="#a1a1aa" />
-                </Button>
-              )}
-              <Text className="text-white text-lg font-medium">
-                {selectedAsset ? "Screenshot Details" : "Screenshot Gallery"}
-              </Text>
+    <Modal
+      visible={visible}
+      animationType="none"
+      transparent={true}
+      onRequestClose={handleBack}
+    >
+      <View className="flex-1 bg-black/50">
+        <Animated.View
+          style={{
+            transform: [{ translateX: slideAnim }],
+            flex: 1,
+          }}
+          className="bg-zinc-950"
+        >
+          <SafeAreaView className="flex-1" edges={["top", "left", "right"]}>
+            {/* Header */}
+            <View className="flex-row items-center gap-2 px-4 py-2 border-b border-zinc-900 bg-zinc-950/50">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full"
+                onPress={handleBack}
+              >
+                <Ionicons name="arrow-back" size={24} color="#a1a1aa" />
+              </Button>
+              
+              <View className="flex-1">
+                {selectedAsset ? (
+                   <Text className="text-white text-lg font-medium ml-2">
+                     Screenshot Details
+                   </Text>
+                ) : (
+                  <Input
+                    placeholder="Search..."
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    className="h-10 bg-zinc-900 border-zinc-800 text-white placeholder:text-zinc-500"
+                  />
+                )}
+              </View>
             </View>
-            <Button variant="ghost" size="icon" className="rounded-full" onPress={onClose}>
-              <Ionicons name="close" size={24} color="#a1a1aa" />
-            </Button>
-          </View>
 
           {/* Content */}
           <View className="flex-1 bg-zinc-900/30">
@@ -263,6 +321,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
             )}
           </View>
         </SafeAreaView>
+        </Animated.View>
       </View>
     </Modal>
   )

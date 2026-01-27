@@ -30,6 +30,8 @@ interface ScreenshotDetailProps {
   initialIndex: number
   origin?: AssetOrigin | null
   onClose: () => void
+  getAssetOrigin: (id: string) => Promise<AssetOrigin | null>
+  onCurrentIndexChange: (index: number) => void
 }
 
 export interface ScreenshotDetailRef {
@@ -46,6 +48,8 @@ const ScreenshotPage = ({
   onDismiss,
   shouldAnimateEntry,
   origin,
+  closingOrigin,
+  isClosing,
   windowDimensions,
 }: {
   asset: MediaLibrary.Asset
@@ -54,10 +58,13 @@ const ScreenshotPage = ({
   onDismiss: () => void
   shouldAnimateEntry: boolean
   origin?: AssetOrigin | null
+  closingOrigin?: AssetOrigin | null
+  isClosing: boolean
   windowDimensions: { width: number; height: number }
 }) => {
   // Animation for entry (only if this is the initial active item)
   const entryAnim = useSharedValue(shouldAnimateEntry ? 0 : 1)
+  const closingAnim = useSharedValue(0)
 
   // Gesture Values
   const translationY = useSharedValue(0)
@@ -72,7 +79,17 @@ const ScreenshotPage = ({
     }
   }, [])
 
+  useEffect(() => {
+    if (isClosing && isActive) {
+      closingAnim.value = withTiming(1, {
+        duration: 350,
+        easing: Easing.out(Easing.cubic),
+      })
+    }
+  }, [isClosing, isActive])
+
   const panGesture = Gesture.Pan()
+    .enabled(!isClosing) // Disable gestures when closing
     .activeOffsetY([-10, 10]) // Don't activate immediately, wait for vertical movement
     .onUpdate((e) => {
       translationY.value = e.translationY
@@ -88,8 +105,9 @@ const ScreenshotPage = ({
     })
 
   const tapGesture = Gesture.Tap()
+    .enabled(!isClosing)
     .onEnd(() => {
-        runOnJS(onTap)()
+      runOnJS(onTap)()
     })
 
   // Pan takes precedence over Tap. If Pan activates, Tap fails.
@@ -98,12 +116,14 @@ const ScreenshotPage = ({
   const containerStyle = useAnimatedStyle(() => {
     // If dragging, follow gesture.
     // If entering, interpolate from origin.
+    // If closing, interpolate TO closingOrigin.
 
     let translateX = 0
     let translateY = translationY.value
     let scale = 1
     let width = windowDimensions.width
     let height = windowDimensions.height
+    let borderRadius = 0
 
     // Scale down slightly when dragging logic can be added here
     const dragScale = interpolate(
@@ -113,7 +133,23 @@ const ScreenshotPage = ({
       Extrapolation.CLAMP,
     )
 
-    if (shouldAnimateEntry && entryAnim.value < 1) {
+    if (isClosing && isActive && closingOrigin) {
+      // Closing Animation Logic
+      const targetX = closingOrigin.x
+      const targetY = closingOrigin.y
+      const targetWidth = closingOrigin.width
+      const targetHeight = closingOrigin.height
+
+      // Interpolate from current state (fullscreen) to target (thumbnail)
+      // Note: We need to handle the case where user might be dragging when close is triggered?
+      // For now assume close resets drag or starts from 0 (we disabled gestures).
+
+      translateX = interpolate(closingAnim.value, [0, 1], [0, targetX])
+      translateY = interpolate(closingAnim.value, [0, 1], [translationY.value, targetY])
+      width = interpolate(closingAnim.value, [0, 1], [windowDimensions.width, targetWidth])
+      height = interpolate(closingAnim.value, [0, 1], [windowDimensions.height, targetHeight])
+      // Fade out slightly or just let size handle it
+    } else if (shouldAnimateEntry && entryAnim.value < 1) {
       // Entry Animation Logic
       if (origin) {
         const targetX = 0
@@ -140,15 +176,25 @@ const ScreenshotPage = ({
       height,
       transform: [{ translateX }, { translateY }, { scale }],
       zIndex: 10,
+      overflow: "hidden", // Important for clipping if we added borderRadius
     }
+  })
+
+  // Fade out only if not the active closing item (to clear background items)
+  const opacityStyle = useAnimatedStyle(() => {
+    if (isClosing && !isActive) {
+        return { opacity: withTiming(0, { duration: 200 }) }
+    }
+    return { opacity: 1 }
   })
 
   return (
     <View
       style={{ width: windowDimensions.width, height: windowDimensions.height, overflow: "hidden" }}
+      pointerEvents={isClosing ? "none" : "auto"}
     >
       <GestureDetector gesture={composedGesture}>
-        <Animated.View style={containerStyle}>
+        <Animated.View style={[containerStyle, opacityStyle]}>
           <AnimatedImage
             source={{ uri: asset.uri }}
             style={{ width: "100%", height: "100%" }}
@@ -161,9 +207,13 @@ const ScreenshotPage = ({
 }
 
 export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetailProps>(
-  ({ assets, initialIndex, origin, onClose }, ref) => {
+  ({ assets, initialIndex, origin, onClose, getAssetOrigin, onCurrentIndexChange }, ref) => {
     const [currentIndex, setCurrentIndex] = useState(initialIndex)
     const [assetInfo, setAssetInfo] = useState<MediaLibrary.AssetInfo | null>(null)
+
+    // Closing state
+    const [isClosing, setIsClosing] = useState(false)
+    const [closingOrigin, setClosingOrigin] = useState<AssetOrigin | null>(null)
 
     // Animation state: 0 = closed (at thumbnail), 1 = open (fullscreen)
     // We use this primarily for the backdrop opacity now
@@ -193,18 +243,39 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
 
     // Sync overlay animation with state
     useEffect(() => {
-      overlayAnim.value = withTiming(showOverlay ? 1 : 0, {
+      overlayAnim.value = withTiming(showOverlay && !isClosing ? 1 : 0, {
         duration: 200,
       })
-    }, [showOverlay])
+    }, [showOverlay, isClosing])
 
-    const handleClose = () => {
-      // Fade out backdrop
+    const handleClose = async () => {
+      // 1. Prepare closing
+      setIsClosing(true)
+      
+      // 2. Hide overlay immediately (via effect)
+      
+      // 3. Get target origin
+      const currentAsset = assets[currentIndex]
+      // Ensure we scroll to it first (though onCurrentIndexChange should have handled it mostly)
+      onCurrentIndexChange(currentIndex)
+
+      // Small delay to allow layout to settle if it was just scrolled?
+      // In practice, since we call onCurrentIndexChange on swipe, it should be there.
+      // But if we just opened it, it might be fine.
+      
+      // We rely on the parent (GalleryModal) to have the ref ready.
+      // Since `getAssetOrigin` is async (conceptual, though implementation is fast), we await it.
+      // However, `measureInWindow` is callback based.
+
+      const origin = await getAssetOrigin(currentAsset.id)
+      setClosingOrigin(origin)
+
+      // 4. Fade out backdrop
       anim.value = withTiming(
         0,
         {
-          duration: 250,
-          easing: Easing.in(Easing.cubic),
+          duration: 350,
+          easing: Easing.out(Easing.cubic),
         },
         (finished) => {
           if (finished) {
@@ -248,7 +319,11 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
 
     const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
       if (viewableItems.length > 0) {
-        setCurrentIndex(viewableItems[0].index)
+        const newIndex = viewableItems[0].index
+        setCurrentIndex(newIndex)
+        if (newIndex !== null && newIndex !== undefined) {
+            onCurrentIndexChange(newIndex)
+        }
       }
     }).current
 
@@ -276,6 +351,7 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
           showsHorizontalScrollIndicator={false}
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
+          scrollEnabled={!isClosing}
           renderItem={({ item, index }) => (
             <ScreenshotPage
               asset={item}
@@ -286,6 +362,8 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
               // Only animate entry for the initially selected item
               shouldAnimateEntry={index === initialIndex}
               origin={index === initialIndex ? origin : null}
+              isClosing={isClosing}
+              closingOrigin={closingOrigin}
             />
           )}
           keyExtractor={(item) => item.id}

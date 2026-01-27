@@ -160,6 +160,9 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null) // Ref for detail view
   // Search state
   const [searchQuery, setSearchQuery] = useState("")
+  // Refs
+  const flatListRef = useRef<FlatList>(null)
+  const itemRefs = useRef<Map<string, View>>(new Map()).current
 
   const ALBUM_NAME = "RemoteRG" // このアプリで保存した画像のアルバム名
   const screenWidth = Dimensions.get("window").width
@@ -252,6 +255,47 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
     setSelectedAsset(asset)
   }, [])
 
+  // Provide measurement for closing animation
+  const getAssetOrigin = useCallback(
+    async (id: string): Promise<AssetOrigin | null> => {
+      const view = itemRefs.get(id)
+      if (!view) return null
+
+      return new Promise((resolve) => {
+        view.measureInWindow((x, y, width, height) => {
+          resolve({ x, y, width, height })
+        })
+      })
+    },
+    [],
+  )
+
+  // Scroll to asset in grid (called when swiping between images in detail view)
+  const scrollToAsset = useCallback(
+    (index: number) => {
+      // Find which row this index belongs to
+      let count = 0
+      let rowIndex = 0
+
+      for (let i = 0; i < justifiedRows.length; i++) {
+        const row = justifiedRows[i]
+        // Check if the asset is in this row
+        const rowHasItem = row.items.some((item) => item.asset.id === assets[index].id)
+        if (rowHasItem) {
+          rowIndex = i
+          break
+        }
+      }
+
+      flatListRef.current?.scrollToIndex({
+        index: rowIndex,
+        animated: false, // Instant scroll so it's ready for animation
+        viewPosition: 0.5,
+      })
+    },
+    [justifiedRows, assets],
+  )
+
   if (!permissionResponse) {
     return <View />
   }
@@ -331,22 +375,34 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
                   </View>
                 ) : (
                   <FlatList
+                    ref={flatListRef}
                     data={justifiedRows}
                     renderItem={({ item: row }) => (
                       <View style={{ flexDirection: "row", marginBottom: SPACING }}>
-                        {row.items.map((img) => (
-                          <ThumbnailItem
+                        {row.items.map((img: JustifiedRow['items'][number]) => (
+                          <View
                             key={img.asset.id}
-                            item={img.asset}
-                            width={img.width}
-                            height={img.height}
-                            onPress={handleAssetSelect}
-                          />
+                            ref={(view) => {
+                              if (view) itemRefs.set(img.asset.id, view)
+                              else itemRefs.delete(img.asset.id)
+                            }}
+                          >
+                            <ThumbnailItem
+                              item={img.asset}
+                              width={img.width}
+                              height={img.height}
+                              onPress={handleAssetSelect}
+                            />
+                          </View>
                         ))}
                       </View>
                     )}
                     keyExtractor={(item) => item.id}
                     contentContainerStyle={{ padding: SPACING / 2 }}
+                    // Improve performance
+                    initialNumToRender={5}
+                    maxToRenderPerBatch={5}
+                    windowSize={5}
                   />
                 )}
               </View>
@@ -357,6 +413,8 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
                 assets={assets}
                 initialIndex={assets.findIndex((a) => a.id === selectedAsset.id)}
                 origin={selectedAssetOrigin}
+                getAssetOrigin={getAssetOrigin}
+                onCurrentIndexChange={scrollToAsset}
                 onClose={() => setSelectedAsset(null)}
               />
             )}
@@ -366,3 +424,4 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
     </Modal>
   )
 }
+

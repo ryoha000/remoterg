@@ -3,26 +3,15 @@ trigger: glob
 globs: client/apps/mobile/**
 ---
 
-# shadcn instructions
+# UIコンポーネントの追加
 
-## Add components
-You can now start adding components to your app.
+コンポーネント実装時に汎用的なコンポーネントが必要な時は実装するより先に react-native-reusables に既に存在していないか検討してください。
 
+react-native-reusables からは client/apps/mobile で以下のコマンドを実行することでUIコンポーネントを追加できます。(ボタンコンポーネントの場合)
 ```
 pnpm dlx @react-native-reusables/cli@latest add button
 ```
 
-The command above will add the Button component to your project. You can then import it like this:
+# コード編集後
 
-```index.tsx
-import { Button } from '@/components/ui/button';
-import { Text } from '@/components/ui/text';
- 
-export default function Screen() {
-  return (
-    <Button>
-      <Text>Click me</Text>
-    </Button>
-  );
-}
-```
+コードを編集してユーザーに提出する前には必ず `pnpm fmt` を実行してフォーマットをかけてください。

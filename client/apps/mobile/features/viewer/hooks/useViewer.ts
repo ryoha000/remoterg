@@ -1,7 +1,8 @@
 import * as ScreenOrientation from "expo-screen-orientation"
 import { useState, useEffect, useCallback, useRef } from "react"
 
-import { saveAnalysis, getLocalIds } from "@/lib/db"
+import { useSaveAnalysis } from "@/db/queries/use-analysis"
+import { getLocalIds } from "@/db/services/screenshot-service"
 
 import { useScreenshot } from "./useScreenshot"
 import { useViewerConnection } from "./useViewerConnection"
@@ -15,6 +16,7 @@ interface UseViewerProps {
 export function useViewer(props?: UseViewerProps) {
   const [sessionId, setSessionId] = useState("fixed")
   const analysisBuffers = useRef<Record<string, string>>({})
+  const { mutate: saveAnalysis } = useSaveAnalysis()
 
   const {
     requestScreenshot: requestScreenshotInternal,
@@ -36,7 +38,7 @@ export function useViewer(props?: UseViewerProps) {
             // Resolve local IDs and save
             getLocalIds(msg.ANALYZE_RESPONSE.id).then((localIds) => {
               localIds.forEach((localId) => {
-                saveAnalysis(localId, result)
+                saveAnalysis({ localId, analysis: result })
                 // We might need to notify UI with Host ID because UI subscribes to Host ID or Local ID?
                 // Currently UI logic uses Host ID (from filename) to subscribe.
                 // But if we want to support multiple local copies of same host ID?
@@ -76,7 +78,7 @@ export function useViewer(props?: UseViewerProps) {
                 // Resolve local IDs and save
                 getLocalIds(id).then((localIds) => {
                   localIds.forEach((localId) => {
-                    saveAnalysis(localId, result)
+                    saveAnalysis({ localId, analysis: result })
                   })
                 })
 

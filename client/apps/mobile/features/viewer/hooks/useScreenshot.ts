@@ -5,7 +5,7 @@ import { useState, useRef, useCallback } from "react"
 import { Alert, Platform } from "react-native"
 import ReactNativeBlobUtil from "react-native-blob-util"
 
-import { mapScreenshot } from "@/lib/db"
+import { useMapScreenshot } from "@/db/queries/use-screenshots"
 
 interface ScreenshotMetadata {
   id: string
@@ -21,6 +21,7 @@ interface UseScreenshotProps {
 
 export function useScreenshot({ onSuccess }: UseScreenshotProps = {}) {
   const incomingScreenshotRef = useRef<ScreenshotMetadata | null>(null)
+  const { mutateAsync: mapScreenshot } = useMapScreenshot()
 
   const requestScreenshot = useCallback((sendDataChannelMessage?: (msg: string) => void) => {
     if (sendDataChannelMessage) {
@@ -75,7 +76,7 @@ export function useScreenshot({ onSuccess }: UseScreenshotProps = {}) {
           } else {
             const asset = await MediaLibrary.createAssetAsync(file.uri)
             // Map local ID to host ID
-            await mapScreenshot(asset.id, screenshot.id)
+            await mapScreenshot({ localId: asset.id, hostId: screenshot.id })
 
             const album = await MediaLibrary.getAlbumAsync("RemoteRG")
             if (album) {

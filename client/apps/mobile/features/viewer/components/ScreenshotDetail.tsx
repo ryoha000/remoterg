@@ -25,7 +25,8 @@ import Animated, {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { Button } from "@/components/ui/button"
-import { getAnalysis, getHostId } from "@/lib/db"
+import { useAnalysis } from "@/db/queries/use-analysis"
+import { useHostId } from "@/db/queries/use-screenshots"
 
 import { AnalysisResult } from "../types"
 import { AnalysisViewer } from "./AnalysisViewer"
@@ -260,7 +261,6 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
   ) => {
     const [currentIndex, setCurrentIndex] = useState(initialIndex)
     const [assetInfo, setAssetInfo] = useState<MediaLibrary.AssetInfo | null>(null)
-    const [savedAnalysis, setSavedAnalysis] = useState<AnalysisResult | null>(null)
 
     // Closing state
     const [isClosing, setIsClosing] = useState(false)
@@ -277,36 +277,14 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
     const currentAsset = assets[currentIndex]
 
     // Load persisted analysis & Resolve Host ID
-    const [hostId, setHostId] = useState<string | null>(null)
+    const { data: dbHostId } = useHostId(currentAsset.id)
+    const hostId = useMemo(() => {
+      if (dbHostId) return dbHostId
+      return currentAsset.filename?.replace(/\.[^/.]+$/, "") || currentAsset.id
+    }, [dbHostId, currentAsset])
 
-    useEffect(() => {
-      let active = true
-      const loadData = async () => {
-        // 1. Try to get Host ID from DB map first
-        let resolvedHostId = await getHostId(currentAsset.id)
-
-        // 2. Fallback to filename parsing if not in DB (legacy/backup)
-        if (!resolvedHostId) {
-          resolvedHostId = currentAsset.filename?.replace(/\.[^/.]+$/, "") || currentAsset.id
-        }
-
-        if (active) {
-          setHostId(resolvedHostId)
-        }
-
-        // 3. Load analysis using Local ID
-        const saved = await getAnalysis(currentAsset.id)
-        if (active) {
-          setSavedAnalysis(saved)
-        }
-      }
-      setSavedAnalysis(null) // Reset while loading
-      setHostId(null)
-      loadData()
-      return () => {
-        active = false
-      }
-    }, [currentAsset.id])
+    // Load analysis using Local ID
+    const { data: savedAnalysis } = useAnalysis(currentAsset.id)
 
     const sessionAnalysis = hostId ? analysisResults?.[hostId] : null
     const analysis = sessionAnalysis || savedAnalysis

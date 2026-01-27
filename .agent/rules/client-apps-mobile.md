@@ -1,7 +1,9 @@
 ---
 trigger: glob
-globs: client/apps/mobile/**
+globs: client/apps/mobile/**/**
 ---
+
+このルールを読み込んだ時はユーザーへの返答に「client-apps-mobile のルールを確認しました」という文言を必ず含めるようにしてください
 
 # UIコンポーネントの追加
 

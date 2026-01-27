@@ -77,6 +77,7 @@ function Text({
   const textClass = React.useContext(TextClassContext);
   const Component = asChild ? Slot.Text : RNText;
   return (
+    // @ts-ignore
     <Component
       className={cn(textVariants({ variant }), textClass, className)}
       role={variant ? ROLE[variant] : undefined}

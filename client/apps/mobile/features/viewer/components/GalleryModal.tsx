@@ -12,6 +12,7 @@ import {
   Animated,
   Easing,
 } from "react-native"
+import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { Button } from "@/components/ui/button"
@@ -279,86 +280,89 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
       onRequestClose={handleBack}
       statusBarTranslucent
     >
-      <View className="flex-1 bg-black/50">
-        <Animated.View
-          style={{
-            transform: [{ translateX: slideAnim }],
-            flex: 1,
-          }}
-          className="bg-zinc-950"
-        >
-          <SafeAreaView className="flex-1" edges={["top", "left", "right"]}>
-            {/* Header */}
-            <View className="flex-row items-center gap-2 px-4 py-2 border-b border-zinc-900 bg-zinc-950/50">
-              <Button variant="ghost" size="icon" className="rounded-full" onPress={handleBack}>
-                <Ionicons name="arrow-back" size={24} color="#a1a1aa" />
-              </Button>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View className="flex-1 bg-black/50">
+          <Animated.View
+            style={{
+              transform: [{ translateX: slideAnim }],
+              flex: 1,
+            }}
+            className="bg-zinc-950"
+          >
+            <SafeAreaView className="flex-1" edges={["top", "left", "right"]}>
+              {/* Header */}
+              <View className="flex-row items-center gap-2 px-4 py-2 border-b border-zinc-900 bg-zinc-950/50">
+                <Button variant="ghost" size="icon" className="rounded-full" onPress={handleBack}>
+                  <Ionicons name="arrow-back" size={24} color="#a1a1aa" />
+                </Button>
 
-              <View className="flex-1">
-                <Input
-                  placeholder="Search..."
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  className="h-10 bg-zinc-900 border-zinc-800 text-white placeholder:text-zinc-500"
-                />
+                <View className="flex-1">
+                  <Input
+                    placeholder="Search..."
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    className="h-10 bg-zinc-900 border-zinc-800 text-white placeholder:text-zinc-500"
+                  />
+                </View>
               </View>
-            </View>
 
-            {/* Grid View */}
-            <View className="flex-1 bg-zinc-900/30">
-              {loading ? (
-                <View className="flex-1 items-center justify-center">
-                  <ActivityIndicator size="large" color="#a855f7" />
-                </View>
-              ) : hasNoAlbum ? (
-                <View className="flex-1 items-center justify-center p-8 gap-4">
-                  <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
-                    <Ionicons name="images-outline" size={32} color="#3f3f46" />
+              {/* Grid View */}
+              <View className="flex-1 bg-zinc-900/30">
+                {loading ? (
+                  <View className="flex-1 items-center justify-center">
+                    <ActivityIndicator size="large" color="#a855f7" />
                   </View>
-                  <Text className="text-zinc-500 text-center">
-                    "{ALBUM_NAME}" アルバムが見つかりません。
-                    {"\n"}スクリーンショットを撮影するとここに表示されます。
-                  </Text>
-                </View>
-              ) : assets.length === 0 ? (
-                <View className="flex-1 items-center justify-center p-8 gap-4">
-                  <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
-                    <Ionicons name="images-outline" size={32} color="#3f3f46" />
-                  </View>
-                  <Text className="text-zinc-500 text-center">画像がありません。</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={justifiedRows}
-                  renderItem={({ item: row }) => (
-                    <View style={{ flexDirection: "row", marginBottom: SPACING }}>
-                      {row.items.map((img) => (
-                        <ThumbnailItem
-                          key={img.asset.id}
-                          item={img.asset}
-                          width={img.width}
-                          height={img.height}
-                          onPress={handleAssetSelect}
-                        />
-                      ))}
+                ) : hasNoAlbum ? (
+                  <View className="flex-1 items-center justify-center p-8 gap-4">
+                    <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
+                      <Ionicons name="images-outline" size={32} color="#3f3f46" />
                     </View>
-                  )}
-                  keyExtractor={(item) => item.id}
-                  contentContainerStyle={{ padding: SPACING / 2 }}
-                />
-              )}
-            </View>
-          </SafeAreaView>
-          {selectedAsset && (
-            <ScreenshotDetail
-              ref={screenshotDetailRef}
-              asset={selectedAsset}
-              origin={selectedAssetOrigin}
-              onClose={() => setSelectedAsset(null)}
-            />
-          )}
-        </Animated.View>
-      </View>
+                    <Text className="text-zinc-500 text-center">
+                      "{ALBUM_NAME}" アルバムが見つかりません。
+                      {"\n"}スクリーンショットを撮影するとここに表示されます。
+                    </Text>
+                  </View>
+                ) : assets.length === 0 ? (
+                  <View className="flex-1 items-center justify-center p-8 gap-4">
+                    <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
+                      <Ionicons name="images-outline" size={32} color="#3f3f46" />
+                    </View>
+                    <Text className="text-zinc-500 text-center">画像がありません。</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={justifiedRows}
+                    renderItem={({ item: row }) => (
+                      <View style={{ flexDirection: "row", marginBottom: SPACING }}>
+                        {row.items.map((img) => (
+                          <ThumbnailItem
+                            key={img.asset.id}
+                            item={img.asset}
+                            width={img.width}
+                            height={img.height}
+                            onPress={handleAssetSelect}
+                          />
+                        ))}
+                      </View>
+                    )}
+                    keyExtractor={(item) => item.id}
+                    contentContainerStyle={{ padding: SPACING / 2 }}
+                  />
+                )}
+              </View>
+            </SafeAreaView>
+            {selectedAsset && (
+              <ScreenshotDetail
+                ref={screenshotDetailRef}
+                assets={assets}
+                initialIndex={assets.findIndex((a) => a.id === selectedAsset.id)}
+                origin={selectedAssetOrigin}
+                onClose={() => setSelectedAsset(null)}
+              />
+            )}
+          </Animated.View>
+        </View>
+      </GestureHandlerRootView>
     </Modal>
   )
 }

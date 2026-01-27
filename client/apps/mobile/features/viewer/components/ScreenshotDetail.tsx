@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons"
+import { BlurView } from "expo-blur"
 import * as MediaLibrary from "expo-media-library"
 import { StatusBar } from "expo-status-bar"
 import { forwardRef, useImperativeHandle, useEffect, useState, useRef, useMemo } from "react"
@@ -14,7 +15,7 @@ import Animated, {
   withSpring,
   Extrapolation,
 } from "react-native-reanimated"
-import { SafeAreaView } from "react-native-safe-area-context"
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { Button } from "@/components/ui/button"
 
@@ -40,6 +41,13 @@ export interface ScreenshotDetailRef {
 
 const AnimatedImage = Animated.createAnimatedComponent(Image)
 
+const INFO_PANEL_WIDTH_PCT = 0.35 // 35% width for info panel
+// Adjust for portrait mode - in portrait 35% might be too narrow for text, but 60% image is also small.
+// Let's assume the user knows what they want (Google Photos style).
+// Google Photos actually pushes the image UP in portrait, and Left in Landscape?
+// Or maybe just overlays? The user specifically said "Image small left, Info right".
+// We will follow that instruction.
+
 // Item Component for FlatList
 const ScreenshotPage = ({
   asset,
@@ -51,6 +59,7 @@ const ScreenshotPage = ({
   closingOrigin,
   isClosing,
   windowDimensions,
+  isInfoOpen,
 }: {
   asset: MediaLibrary.Asset
   isActive: boolean
@@ -61,10 +70,12 @@ const ScreenshotPage = ({
   closingOrigin?: AssetOrigin | null
   isClosing: boolean
   windowDimensions: { width: number; height: number }
+  isInfoOpen: boolean
 }) => {
   // Animation for entry (only if this is the initial active item)
   const entryAnim = useSharedValue(shouldAnimateEntry ? 0 : 1)
   const closingAnim = useSharedValue(0)
+  const infoOpenAnim = useSharedValue(isInfoOpen ? 1 : 0)
 
   // Gesture Values
   const translationY = useSharedValue(0)
@@ -88,9 +99,16 @@ const ScreenshotPage = ({
     }
   }, [isClosing, isActive])
 
+  useEffect(() => {
+    infoOpenAnim.value = withTiming(isInfoOpen ? 1 : 0, {
+      duration: 300,
+      easing: Easing.inOut(Easing.cubic),
+    })
+  }, [isInfoOpen])
+
   const panGesture = Gesture.Pan()
-    .enabled(!isClosing) // Disable gestures when closing
-    .activeOffsetY([-10, 10]) // Don't activate immediately, wait for vertical movement
+    .enabled(!isClosing)
+    .activeOffsetY([-10, 10])
     .onUpdate((e) => {
       translationY.value = e.translationY
       isDragging.value = true
@@ -110,22 +128,30 @@ const ScreenshotPage = ({
       runOnJS(onTap)()
     })
 
-  // Pan takes precedence over Tap. If Pan activates, Tap fails.
   const composedGesture = Gesture.Exclusive(panGesture, tapGesture)
 
   const containerStyle = useAnimatedStyle(() => {
-    // If dragging, follow gesture.
-    // If entering, interpolate from origin.
-    // If closing, interpolate TO closingOrigin.
-
     let translateX = 0
     let translateY = translationY.value
     let scale = 1
     let width = windowDimensions.width
     let height = windowDimensions.height
-    let borderRadius = 0
 
-    // Scale down slightly when dragging logic can be added here
+    // -- Layout Shift Logic (Info Open) --
+    const infoPanelWidth = windowDimensions.width * INFO_PANEL_WIDTH_PCT
+    const imageAreaWidth = windowDimensions.width - infoPanelWidth
+
+    // -- Layout Shift Logic (Info Open) --
+    // Animate width to shrink
+    const currentWidth = interpolate(
+      infoOpenAnim.value,
+      [0, 1],
+      [windowDimensions.width, imageAreaWidth],
+    )
+
+    width = currentWidth
+
+    // -- Drag Scale --
     const dragScale = interpolate(
       Math.abs(translationY.value),
       [0, windowDimensions.height],
@@ -140,17 +166,14 @@ const ScreenshotPage = ({
       const targetWidth = closingOrigin.width
       const targetHeight = closingOrigin.height
 
-      // Interpolate from current state (fullscreen) to target (thumbnail)
-      // Note: We need to handle the case where user might be dragging when close is triggered?
-      // For now assume close resets drag or starts from 0 (we disabled gestures).
-
-      translateX = interpolate(closingAnim.value, [0, 1], [0, targetX])
-      translateY = interpolate(closingAnim.value, [0, 1], [translationY.value, targetY])
-      width = interpolate(closingAnim.value, [0, 1], [windowDimensions.width, targetWidth])
-      height = interpolate(closingAnim.value, [0, 1], [windowDimensions.height, targetHeight])
-      // Fade out slightly or just let size handle it
+      // Interpolate to target
+      // We start from 0 translation (relative to our current container) to targetX which is absolute.
+      // But our container is at 0,0.
+      translateX = interpolate(closingAnim.value, [0, 1], [translateX, targetX])
+      translateY = interpolate(closingAnim.value, [0, 1], [translateY, targetY])
+      width = interpolate(closingAnim.value, [0, 1], [width, targetWidth])
+      height = interpolate(closingAnim.value, [0, 1], [height, targetHeight])
     } else if (shouldAnimateEntry && entryAnim.value < 1) {
-      // Entry Animation Logic
       if (origin) {
         const targetX = 0
         const targetY = 0
@@ -159,9 +182,7 @@ const ScreenshotPage = ({
         translateY = interpolate(entryAnim.value, [0, 1], [origin.y, targetY]) + translationY.value
         width = interpolate(entryAnim.value, [0, 1], [origin.width, windowDimensions.width])
         height = interpolate(entryAnim.value, [0, 1], [origin.height, windowDimensions.height])
-        // We handle scale differently here, mostly relies on width/height change
       } else {
-        // Fallback zoom
         scale = interpolate(entryAnim.value, [0, 1], [0.8, 1]) * dragScale
       }
     } else {
@@ -176,14 +197,14 @@ const ScreenshotPage = ({
       height,
       transform: [{ translateX }, { translateY }, { scale }],
       zIndex: 10,
-      overflow: "hidden", // Important for clipping if we added borderRadius
+      overflow: "hidden",
     }
   })
 
-  // Fade out only if not the active closing item (to clear background items)
+  // Fade out only if not the active closing item
   const opacityStyle = useAnimatedStyle(() => {
     if (isClosing && !isActive) {
-        return { opacity: withTiming(0, { duration: 200 }) }
+      return { opacity: withTiming(0, { duration: 200 }) }
     }
     return { opacity: 1 }
   })
@@ -219,11 +240,15 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
     // We use this primarily for the backdrop opacity now
     const anim = useSharedValue(0)
 
-    // Overlay state: 0 = hidden, 1 = visible
-    const overlayAnim = useSharedValue(1)
-    const [showOverlay, setShowOverlay] = useState(true)
+    // Info/Overlay state: true = Info Visible, false = Fullscreen
+    const [showInfo, setShowInfo] = useState(false)
+    // Default to false (Fullscreen) as per "Initially object-fit: contain" request
+
+    // Animated value for toggling UI
+    const infoAnim = useSharedValue(0)
 
     const windowDimensions = Dimensions.get("window")
+    const insets = useSafeAreaInsets()
 
     useEffect(() => {
       // Start global animation (backdrop)
@@ -243,29 +268,23 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
 
     // Sync overlay animation with state
     useEffect(() => {
-      overlayAnim.value = withTiming(showOverlay && !isClosing ? 1 : 0, {
-        duration: 200,
+      infoAnim.value = withTiming(showInfo && !isClosing ? 1 : 0, {
+        duration: 300,
+        easing: Easing.inOut(Easing.cubic),
       })
-    }, [showOverlay, isClosing])
+    }, [showInfo, isClosing])
 
     const handleClose = async () => {
       // 1. Prepare closing
       setIsClosing(true)
-      
+
       // 2. Hide overlay immediately (via effect)
-      
+      setShowInfo(false)
+
       // 3. Get target origin
       const currentAsset = assets[currentIndex]
       // Ensure we scroll to it first (though onCurrentIndexChange should have handled it mostly)
       onCurrentIndexChange(currentIndex)
-
-      // Small delay to allow layout to settle if it was just scrolled?
-      // In practice, since we call onCurrentIndexChange on swipe, it should be there.
-      // But if we just opened it, it might be fine.
-      
-      // We rely on the parent (GalleryModal) to have the ref ready.
-      // Since `getAssetOrigin` is async (conceptual, though implementation is fast), we await it.
-      // However, `measureInWindow` is callback based.
 
       const origin = await getAssetOrigin(currentAsset.id)
       setClosingOrigin(origin)
@@ -289,8 +308,8 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
       close: handleClose,
     }))
 
-    const toggleOverlay = () => {
-      setShowOverlay((prev) => !prev)
+    const toggleInfo = () => {
+      setShowInfo((prev) => !prev)
     }
 
     const formatSize = (bytes?: number) => {
@@ -306,23 +325,39 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
       opacity: anim.value,
     }))
 
-    // Content (Header/Info) opacity
-    const contentStyle = useAnimatedStyle(() => {
-      // Only show content when fully open (approx)
-      const expandOpacity = interpolate(anim.value, [0.5, 1], [0, 1])
+    // Info Panel Animation
+    // Slides in from Right
+    const infoPanelStyle = useAnimatedStyle(() => {
+      const width = windowDimensions.width * INFO_PANEL_WIDTH_PCT
+      const translateX = interpolate(infoAnim.value, [0, 1], [width, 0])
+      // Also fade
+      const opacity = interpolate(infoAnim.value, [0, 0.5, 1], [0, 0, 1])
+
       return {
-        opacity: expandOpacity * overlayAnim.value,
-        transform: [{ translateY: interpolate(overlayAnim.value, [0, 1], [-20, 0]) }],
-        // changed translate to be controlled by overlayAnim for cleaner toggle
+        transform: [{ translateX }],
+        opacity,
+        width,
       }
     })
+
+    // Header/Bottom Gradient Animation
+    // They just fade in/out, and also shift width for Header
+    const overlayControlsStyle = useAnimatedStyle(() => ({
+      opacity: infoAnim.value,
+      pointerEvents: infoAnim.value > 0.5 ? "auto" : "none",
+      right: interpolate(
+        infoAnim.value,
+        [0, 1],
+        [0, windowDimensions.width * INFO_PANEL_WIDTH_PCT],
+      ),
+    }))
 
     const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
       if (viewableItems.length > 0) {
         const newIndex = viewableItems[0].index
         setCurrentIndex(newIndex)
         if (newIndex !== null && newIndex !== undefined) {
-            onCurrentIndexChange(newIndex)
+          onCurrentIndexChange(newIndex)
         }
       }
     }).current
@@ -331,13 +366,14 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
 
     return (
       <View className="flex-1 bg-transparent absolute inset-0 z-50">
-        <StatusBar hidden={!showOverlay} />
+        <StatusBar hidden={!showInfo} style="light" />
         {/* Dark Backdrop */}
         <Animated.View
-          style={[{ flex: 1, backgroundColor: "#09090b" }, backdropStyle]}
+          style={[{ flex: 1, backgroundColor: "#000000" }, backdropStyle]} // Changed to pure black for better photo viewer feel
           className="absolute inset-0"
         />
 
+        {/* Carousel */}
         <FlatList
           data={assets}
           horizontal
@@ -351,88 +387,166 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
           showsHorizontalScrollIndicator={false}
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
-          scrollEnabled={!isClosing}
+          scrollEnabled={!isClosing} // Maybe disable scroll when info is open? Google Photos allows it.
           renderItem={({ item, index }) => (
             <ScreenshotPage
               asset={item}
               isActive={index === currentIndex}
               windowDimensions={windowDimensions}
-              onTap={toggleOverlay}
+              onTap={toggleInfo}
               onDismiss={handleClose}
-              // Only animate entry for the initially selected item
               shouldAnimateEntry={index === initialIndex}
               origin={index === initialIndex ? origin : null}
               isClosing={isClosing}
               closingOrigin={closingOrigin}
+              isInfoOpen={showInfo} // Pass state
             />
           )}
           keyExtractor={(item) => item.id}
         />
 
-        {/* Overlay UI (Header + Info) - Rendered over the image */}
+        {/* Header Overlay */}
         <SafeAreaView
           className="flex-1 absolute inset-0 pointer-events-box-none"
-          edges={["top", "left", "right"]}
+          edges={["top", "bottom", "left", "right"]}
           pointerEvents="box-none"
           style={{ zIndex: 20 }}
         >
+          {/* Header Controls */}
           <Animated.View
-            style={[{ flex: 1 }, contentStyle]}
-            pointerEvents={showOverlay ? "box-none" : "none"}
+            style={[
+              {
+                position: "absolute",
+                top: 0,
+                left: 0,
+                zIndex: 30,
+                paddingTop: insets.top,
+                backgroundColor: "rgba(0,0,0,0.4)",
+              },
+              overlayControlsStyle,
+            ]}
           >
-            <View className="flex-1 justify-between" pointerEvents="box-none">
-              {/* Header */}
-              <View className="flex-row items-center gap-2 px-4 py-2 bg-zinc-950/50">
-                <Button variant="ghost" size="icon" className="rounded-full" onPress={handleClose}>
-                  <Ionicons name="arrow-back" size={24} color="#a1a1aa" />
-                </Button>
-                <View className="flex-1">
-                  <Text className="text-white text-lg font-medium ml-2">
-                    {currentIndex + 1} / {assets.length}
-                  </Text>
-                </View>
-              </View>
+            <View className="flex-row items-center gap-2 px-4 py-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full bg-black/20"
+                onPress={handleClose}
+              >
+                <Ionicons name="arrow-back" size={24} color="#ffffff" />
+              </Button>
+              <View className="flex-1" />
+              <Button variant="ghost" size="icon" className="rounded-full bg-black/20">
+                <Ionicons name="star-outline" size={24} color="#ffffff" />
+              </Button>
+              <Button variant="ghost" size="icon" className="rounded-full bg-black/20">
+                <Ionicons name="ellipsis-vertical" size={24} color="#ffffff" />
+              </Button>
+            </View>
+          </Animated.View>
 
-              {/* Info Panel */}
-              <View className="bg-zinc-900/90 border-t border-zinc-800 p-6 pb-8 backdrop-blur-md">
-                <Text className="text-lg font-semibold text-white mb-4">Metadata</Text>
-                <View className="gap-4">
+          {/* Info Panel (Right Side) */}
+          <Animated.View
+            style={[
+              {
+                position: "absolute",
+                right: 0,
+                top: 0,
+                bottom: 0,
+                backgroundColor: "#18181b", // zinc-900
+                borderLeftWidth: 1,
+                borderColor: "#27272a", // zinc-800
+              },
+              infoPanelStyle,
+            ]}
+          >
+            <SafeAreaView edges={["bottom", "top"]} className="flex-1 p-4">
+              <View className="flex-1">
+                <View className="flex-row items-center justify-between mb-6 mt-12">
+                  <Text className="text-xl font-bold text-white">情報</Text>
+                </View>
+
+                {/* Editable Description Placeholder */}
+                <View className="mb-6">
+                  <Text className="text-zinc-400 text-base">説明を追加...</Text>
+                </View>
+
+                <View className="gap-6">
                   <View>
-                    <View className="flex-row items-center gap-2 mb-1">
-                      <Ionicons name="calendar-outline" size={14} color="#71717a" />
-                      <Text className="text-zinc-500 text-xs uppercase tracking-wider font-medium">
-                        Timestamp
-                      </Text>
+                    <View className="flex-row items-center gap-2 mb-2">
+                      <Ionicons name="calendar-outline" size={16} color="#a1a1aa" />
+                      <Text className="text-zinc-400 font-medium">日時</Text>
                     </View>
-                    <Text className="text-zinc-300 font-mono text-sm">
+                    <Text className="text-zinc-200 text-base">
                       {new Date(currentAsset.creationTime).toLocaleString()}
                     </Text>
                   </View>
 
                   <View>
-                    <View className="flex-row items-center gap-2 mb-1">
-                      <Ionicons name="resize-outline" size={14} color="#71717a" />
-                      <Text className="text-zinc-500 text-xs uppercase tracking-wider font-medium">
-                        Dimensions
-                      </Text>
+                    <View className="flex-row items-center gap-2 mb-2">
+                      <Ionicons name="image-outline" size={16} color="#a1a1aa" />
+                      <Text className="text-zinc-400 font-medium">詳細</Text>
                     </View>
-                    <Text className="text-zinc-300 font-mono text-sm">
+                    <Text className="text-zinc-200 text-base">
                       {currentAsset.width} x {currentAsset.height}
+                    </Text>
+                    <Text className="text-zinc-400 text-sm mt-1">
+                      {assetInfo ? formatSize(assetInfo.localUri ? undefined : 0) : "Loading..."} •{" "}
+                      {currentAsset.filename}
                     </Text>
                   </View>
 
                   <View>
-                    <View className="flex-row items-center gap-2 mb-1">
-                      <Ionicons name="hardware-chip-outline" size={14} color="#71717a" />
-                      <Text className="text-zinc-500 text-xs uppercase tracking-wider font-medium">
-                        Size
-                      </Text>
+                    <View className="flex-row items-center gap-2 mb-2">
+                      <Ionicons name="location-outline" size={16} color="#a1a1aa" />
+                      <Text className="text-zinc-400 font-medium">位置情報</Text>
                     </View>
-                    <Text className="text-zinc-300 font-mono text-sm">
-                      {assetInfo ? formatSize(assetInfo.localUri ? undefined : 0) : "Loading..."}
-                    </Text>
+                    <View className="h-32 bg-zinc-800 rounded-lg items-center justify-center">
+                      <Ionicons name="map" size={32} color="#3f3f46" />
+                      <Text className="text-zinc-500 text-xs mt-2">Map unavailable</Text>
+                    </View>
                   </View>
                 </View>
+              </View>
+
+              {/* Bottom Actions inside Info Panel? Or separate?
+                      Google Photos has bottom bar actions (Share, Edit, Lens, Delete) separate from Info Panel.
+                      But in our requested UI, let's keep it simple.
+                  */}
+            </SafeAreaView>
+          </Animated.View>
+
+          {/* Bottom Actions Overlay (Separate from Info Panel, shows when Info/Overlay is active) */}
+          <Animated.View
+            style={[
+              {
+                position: "absolute",
+                bottom: 0,
+                left: 0,
+                // right handled by overlayControlsStyle
+                // If Layout Shift moves image to left, these buttons should probably be under the image or centered in the image area?
+                // If InfoPanel is opaque, we should stop at its edge.
+              },
+              overlayControlsStyle,
+            ]}
+            pointerEvents="box-none"
+          >
+            <View className="bg-black/60 backdrop-blur-md pb-8 pt-4 flex-row justify-around items-center border-t border-white/10">
+              <View className="items-center gap-1">
+                <Ionicons name="share-outline" size={20} color="white" />
+                <Text className="text-white text-xs">共有</Text>
+              </View>
+              <View className="items-center gap-1">
+                <Ionicons name="options-outline" size={20} color="white" />
+                <Text className="text-white text-xs">編集</Text>
+              </View>
+              <View className="items-center gap-1">
+                <Ionicons name="scan-outline" size={20} color="white" />
+                <Text className="text-white text-xs">レンズ</Text>
+              </View>
+              <View className="items-center gap-1">
+                <Ionicons name="trash-outline" size={20} color="white" />
+                <Text className="text-white text-xs">ゴミ箱</Text>
               </View>
             </View>
           </Animated.View>

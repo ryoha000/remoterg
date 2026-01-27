@@ -256,19 +256,16 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   }, [])
 
   // Provide measurement for closing animation
-  const getAssetOrigin = useCallback(
-    async (id: string): Promise<AssetOrigin | null> => {
-      const view = itemRefs.get(id)
-      if (!view) return null
+  const getAssetOrigin = useCallback(async (id: string): Promise<AssetOrigin | null> => {
+    const view = itemRefs.get(id)
+    if (!view) return null
 
-      return new Promise((resolve) => {
-        view.measureInWindow((x, y, width, height) => {
-          resolve({ x, y, width, height })
-        })
+    return new Promise((resolve) => {
+      view.measureInWindow((x, y, width, height) => {
+        resolve({ x, y, width, height })
       })
-    },
-    [],
-  )
+    })
+  }, [])
 
   // Scroll to asset in grid (called when swiping between images in detail view)
   const scrollToAsset = useCallback(
@@ -379,7 +376,7 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
                     data={justifiedRows}
                     renderItem={({ item: row }) => (
                       <View style={{ flexDirection: "row", marginBottom: SPACING }}>
-                        {row.items.map((img: JustifiedRow['items'][number]) => (
+                        {row.items.map((img: JustifiedRow["items"][number]) => (
                           <View
                             key={img.asset.id}
                             ref={(view) => {
@@ -424,4 +421,3 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
     </Modal>
   )
 }
-

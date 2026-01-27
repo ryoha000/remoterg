@@ -3,7 +3,14 @@ import { BlurView } from "expo-blur"
 import * as MediaLibrary from "expo-media-library"
 import { StatusBar } from "expo-status-bar"
 import { forwardRef, useImperativeHandle, useEffect, useState, useRef, useMemo } from "react"
-import { View, Image, Text, Dimensions, TouchableWithoutFeedback } from "react-native"
+import {
+  View,
+  Image,
+  Text,
+  Dimensions,
+  TouchableWithoutFeedback,
+  ActivityIndicator,
+} from "react-native"
 import { Gesture, GestureDetector, FlatList } from "react-native-gesture-handler"
 import Animated, {
   useAnimatedStyle,
@@ -18,6 +25,12 @@ import Animated, {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
 import { Button } from "@/components/ui/button"
+import { getAnalysis, getHostId } from "@/lib/db"
+
+import { AnalysisResult } from "../types"
+import { AnalysisViewer } from "./AnalysisViewer"
+
+export type { AnalysisResult }
 
 export interface AssetOrigin {
   x: number
@@ -33,6 +46,9 @@ interface ScreenshotDetailProps {
   onClose: () => void
   getAssetOrigin: (id: string) => Promise<AssetOrigin | null>
   onCurrentIndexChange: (index: number) => void
+  onRequestAnalyze?: (id: string, max_edge?: number) => void
+  analysisResults?: Record<string, AnalysisResult>
+  isAnalyzingMap?: Record<string, boolean>
 }
 
 export interface ScreenshotDetailRef {
@@ -228,9 +244,23 @@ const ScreenshotPage = ({
 }
 
 export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetailProps>(
-  ({ assets, initialIndex, origin, onClose, getAssetOrigin, onCurrentIndexChange }, ref) => {
+  (
+    {
+      assets,
+      initialIndex,
+      origin,
+      onClose,
+      getAssetOrigin,
+      onCurrentIndexChange,
+      onRequestAnalyze,
+      analysisResults,
+      isAnalyzingMap,
+    },
+    ref,
+  ) => {
     const [currentIndex, setCurrentIndex] = useState(initialIndex)
     const [assetInfo, setAssetInfo] = useState<MediaLibrary.AssetInfo | null>(null)
+    const [savedAnalysis, setSavedAnalysis] = useState<AnalysisResult | null>(null)
 
     // Closing state
     const [isClosing, setIsClosing] = useState(false)
@@ -243,6 +273,45 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
     // Info/Overlay state: true = Info Visible, false = Fullscreen
     const [showInfo, setShowInfo] = useState(false)
     // Default to false (Fullscreen) as per "Initially object-fit: contain" request
+
+    const currentAsset = assets[currentIndex]
+
+    // Load persisted analysis & Resolve Host ID
+    const [hostId, setHostId] = useState<string | null>(null)
+
+    useEffect(() => {
+      let active = true
+      const loadData = async () => {
+        // 1. Try to get Host ID from DB map first
+        let resolvedHostId = await getHostId(currentAsset.id)
+
+        // 2. Fallback to filename parsing if not in DB (legacy/backup)
+        if (!resolvedHostId) {
+          resolvedHostId = currentAsset.filename?.replace(/\.[^/.]+$/, "") || currentAsset.id
+        }
+
+        if (active) {
+          setHostId(resolvedHostId)
+        }
+
+        // 3. Load analysis using Local ID
+        const saved = await getAnalysis(currentAsset.id)
+        if (active) {
+          setSavedAnalysis(saved)
+        }
+      }
+      setSavedAnalysis(null) // Reset while loading
+      setHostId(null)
+      loadData()
+      return () => {
+        active = false
+      }
+    }, [currentAsset.id])
+
+    const sessionAnalysis = hostId ? analysisResults?.[hostId] : null
+    const analysis = sessionAnalysis || savedAnalysis
+
+    const isAnalyzing = hostId ? isAnalyzingMap?.[hostId] : false
 
     // Animated value for toggling UI
     const infoAnim = useSharedValue(0)
@@ -361,8 +430,6 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
         }
       }
     }).current
-
-    const currentAsset = assets[currentIndex]
 
     return (
       <View className="flex-1 bg-transparent absolute inset-0 z-50">
@@ -507,6 +574,53 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                     </View>
                   </View>
                 </View>
+
+                {/* AI Analysis */}
+                <View className="mt-8 mb-8">
+                  <View className="flex-row items-center justify-between mb-4">
+                    <Text className="text-white text-base font-bold flex flex-row items-center gap-2">
+                      <Ionicons name="sparkles" size={16} color="#a855f7" /> AI Analysis
+                    </Text>
+                  </View>
+
+                  {analysis ? (
+                    <View className="gap-4">
+                      <AnalysisViewer analysis={analysis} />
+                      {isAnalyzing && (
+                        <View className="flex-row items-center justify-center p-2 opacity-70">
+                          <ActivityIndicator size="small" color="#a855f7" />
+                          <Text className="text-zinc-400 text-xs ml-2">Updating...</Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : isAnalyzing ? (
+                    <View className="items-center justify-center py-8 gap-3">
+                      <ActivityIndicator size="large" color="#a855f7" />
+                      <Text className="text-zinc-500 text-sm animate-pulse">
+                        Analyzing image context...
+                      </Text>
+                    </View>
+                  ) : (
+                    <View className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 items-center gap-3">
+                      <Text className="text-zinc-400 text-sm text-center">
+                        Get insights about the scene, characters, and dialogue using AI.
+                      </Text>
+                      <Button
+                        variant="outline"
+                        className="w-full border-zinc-700 bg-zinc-800"
+                        onPress={() => hostId && onRequestAnalyze?.(hostId, 512)}
+                      >
+                        <View className="flex-row items-center gap-2">
+                          <Ionicons name="sparkles" size={16} color="#c084fc" />
+                          <Text className="text-zinc-200">Analyze Screenshot</Text>
+                        </View>
+                      </Button>
+                    </View>
+                  )}
+                </View>
+
+                {/* Extra space for scrolling */}
+                <View className="h-24" />
               </View>
 
               {/* Bottom Actions inside Info Panel? Or separate?
@@ -539,10 +653,6 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
               <View className="items-center gap-1">
                 <Ionicons name="options-outline" size={20} color="white" />
                 <Text className="text-white text-xs">編集</Text>
-              </View>
-              <View className="items-center gap-1">
-                <Ionicons name="scan-outline" size={20} color="white" />
-                <Text className="text-white text-xs">レンズ</Text>
               </View>
               <View className="items-center gap-1">
                 <Ionicons name="trash-outline" size={20} color="white" />

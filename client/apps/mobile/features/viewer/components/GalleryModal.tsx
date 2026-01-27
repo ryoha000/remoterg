@@ -19,11 +19,19 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
 
-import { AssetOrigin, ScreenshotDetail, ScreenshotDetailRef } from "./ScreenshotDetail"
+import {
+  AssetOrigin,
+  ScreenshotDetail,
+  ScreenshotDetailRef,
+  AnalysisResult,
+} from "./ScreenshotDetail"
 
 interface GalleryModalProps {
   visible: boolean
   onClose: () => void
+  onRequestAnalyze?: (id: string, max_edge?: number) => void
+  analysisResults?: Record<string, AnalysisResult>
+  isAnalyzingMap?: Record<string, boolean>
 }
 
 interface JustifiedRow {
@@ -149,7 +157,13 @@ function useJustifiedLayout(assets: MediaLibrary.Asset[], containerWidth: number
   }, [assets, containerWidth])
 }
 
-export function GalleryModal({ visible, onClose }: GalleryModalProps) {
+export function GalleryModal({
+  visible,
+  onClose,
+  onRequestAnalyze,
+  analysisResults,
+  isAnalyzingMap,
+}: GalleryModalProps) {
   const [permissionResponse, requestPermission] = MediaLibrary.usePermissions()
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([])
   const [selectedAsset, setSelectedAsset] = useState<MediaLibrary.Asset | null>(null)
@@ -413,6 +427,9 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
                 getAssetOrigin={getAssetOrigin}
                 onCurrentIndexChange={scrollToAsset}
                 onClose={() => setSelectedAsset(null)}
+                onRequestAnalyze={onRequestAnalyze}
+                analysisResults={analysisResults}
+                isAnalyzingMap={isAnalyzingMap}
               />
             )}
           </Animated.View>

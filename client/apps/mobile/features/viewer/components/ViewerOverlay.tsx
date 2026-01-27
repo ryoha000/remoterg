@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Text } from "@/components/ui/text"
 import { cn } from "@/lib/utils"
 
+import { AnalysisResult } from "../types"
 import { GalleryModal } from "./GalleryModal"
 
 interface ViewerOverlayProps {
@@ -28,6 +29,9 @@ interface ViewerOverlayProps {
   }
   onInteraction?: () => void
   onRequestScreenshot?: () => void
+  onRequestAnalyze?: (id: string, max_edge?: number) => void
+  analysisResults?: Record<string, AnalysisResult>
+  isAnalyzingMap?: Record<string, boolean>
 }
 
 export function ViewerOverlay({
@@ -38,6 +42,9 @@ export function ViewerOverlay({
   stats,
   onInteraction,
   onRequestScreenshot,
+  onRequestAnalyze,
+  analysisResults,
+  isAnalyzingMap,
 }: ViewerOverlayProps) {
   const [showSettings, setShowSettings] = useState(false)
   const [showDebug, setShowDebug] = useState(false)
@@ -198,7 +205,13 @@ export function ViewerOverlay({
           </View>
         </Animated.View>
       )}
-      <GalleryModal visible={showGallery} onClose={() => setShowGallery(false)} />
+      <GalleryModal
+        visible={showGallery}
+        onClose={() => setShowGallery(false)}
+        onRequestAnalyze={onRequestAnalyze}
+        analysisResults={analysisResults}
+        isAnalyzingMap={isAnalyzingMap}
+      />
     </View>
   )
 }

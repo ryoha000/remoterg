@@ -243,7 +243,7 @@ impl InputService {
     }
 
     async fn handle_analyze_request(&self, id: String, max_edge: u32) -> Result<()> {
-        let file_path = self.screenshot_dir.join(format!("{}.png", id));
+        let file_path = self.screenshot_dir.join(format!("{}.jpeg", id));
         if !file_path.exists() {
             error!("Requested analysis for missing screenshot: {}", id);
             // Optionally send an error response back so client stops waiting

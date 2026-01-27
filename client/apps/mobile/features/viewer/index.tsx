@@ -10,6 +10,15 @@ import { useViewer } from "./hooks/useViewer"
 
 export function ViewerScreen() {
   const flashRef = useRef<ScreenshotFlashHandle>(null)
+  // Analysis state
+  const [analysisResults, setAnalysisResults] = useState<Record<string, any>>({})
+  const [isAnalyzingMap, setIsAnalyzingMap] = useState<Record<string, boolean>>({})
+
+  const onAnalyzeResult = useCallback((id: string, result: any, isPartial: boolean) => {
+    setAnalysisResults((prev) => ({ ...prev, [id]: result }))
+    setIsAnalyzingMap((prev) => ({ ...prev, [id]: isPartial }))
+  }, [])
+
   const {
     sessionId,
     setSessionId,
@@ -19,10 +28,13 @@ export function ViewerScreen() {
     connect,
     disconnect,
     requestScreenshot: requestScreenshotInternal,
+    stats,
+    requestAnalyze,
   } = useViewer({
     onScreenshotSuccess: (uri) => {
       flashRef.current?.showResult(uri)
     },
+    onAnalyzeResult,
   })
 
   // Update flash layout when stream dimensions change
@@ -84,6 +96,9 @@ export function ViewerScreen() {
             }}
             onInteraction={onInteraction}
             onRequestScreenshot={requestScreenshot}
+            onRequestAnalyze={requestAnalyze}
+            analysisResults={analysisResults}
+            isAnalyzingMap={isAnalyzingMap}
           />
         </View>
       ) : (

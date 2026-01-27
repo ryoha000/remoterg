@@ -203,6 +203,16 @@ export function useViewerConnection({ sessionId, onDataChannelMessage }: UseView
     }
   }, [])
 
+  const requestAnalyze = useCallback(
+    (id: string, max_edge: number = 512) => {
+      const msg = JSON.stringify({
+        AnalyzeRequest: { id, max_edge },
+      })
+      sendDataChannelMessage(msg)
+    },
+    [sendDataChannelMessage],
+  )
+
   return {
     isConnected,
     remoteStream,
@@ -211,5 +221,6 @@ export function useViewerConnection({ sessionId, onDataChannelMessage }: UseView
     disconnect,
     pcRef,
     sendDataChannelMessage,
+    requestAnalyze,
   }
 }

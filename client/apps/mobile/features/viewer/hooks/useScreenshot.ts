@@ -5,6 +5,8 @@ import { useState, useRef, useCallback } from "react"
 import { Alert, Platform } from "react-native"
 import ReactNativeBlobUtil from "react-native-blob-util"
 
+import { mapScreenshot } from "@/lib/db"
+
 interface ScreenshotMetadata {
   id: string
   size: number
@@ -72,6 +74,9 @@ export function useScreenshot({ onSuccess }: UseScreenshotProps = {}) {
             onSuccess?.(file.uri)
           } else {
             const asset = await MediaLibrary.createAssetAsync(file.uri)
+            // Map local ID to host ID
+            await mapScreenshot(asset.id, screenshot.id)
+
             const album = await MediaLibrary.getAlbumAsync("RemoteRG")
             if (album) {
               await MediaLibrary.addAssetsToAlbumAsync([asset], album, false)

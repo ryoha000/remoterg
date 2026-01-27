@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons"
 import * as MediaLibrary from "expo-media-library"
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import {
   Modal,
   View,
@@ -9,7 +9,6 @@ import {
   TouchableOpacity,
   Dimensions,
   ActivityIndicator,
-  Alert,
   Animated,
   Easing,
 } from "react-native"
@@ -18,7 +17,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
-import { cn } from "@/lib/utils"
+
 import { AssetOrigin, ScreenshotDetail, ScreenshotDetailRef } from "./ScreenshotDetail"
 
 interface GalleryModalProps {
@@ -26,15 +25,31 @@ interface GalleryModalProps {
   onClose: () => void
 }
 
+interface JustifiedRow {
+  id: string
+  items: {
+    asset: MediaLibrary.Asset
+    width: number
+    height: number
+  }[]
+  height: number
+}
+
+const SPACING = 2
+const TARGET_ROW_HEIGHT = 240
+
 const ThumbnailItem = ({
   item,
+  width,
+  height,
   onPress,
 }: {
   item: MediaLibrary.Asset
+  width: number
+  height: number
   onPress: (asset: MediaLibrary.Asset, origin: AssetOrigin) => void
 }) => {
   const itemRef = useRef<View>(null)
-  const width = Dimensions.get("window").width / 3 - 2
 
   const handlePress = () => {
     itemRef.current?.measureInWindow((x, y, w, h) => {
@@ -46,13 +61,12 @@ const ThumbnailItem = ({
     <TouchableOpacity
       ref={itemRef}
       onPress={handlePress}
-      className="m-[1px] relative"
-      style={{ width, height: width * 0.5625 }}
+      style={{ width, height, marginHorizontal: SPACING / 2 }}
     >
       <Image
         source={{ uri: item.uri }}
         style={{ width: "100%", height: "100%" }}
-        resizeMode="cover"
+        resizeMode="contain"
       />
       <View className="absolute bottom-0 left-0 right-0 p-1 bg-black/40">
         <Text className="text-white/90 text-[10px] font-mono">
@@ -66,6 +80,74 @@ const ThumbnailItem = ({
   )
 }
 
+function useJustifiedLayout(assets: MediaLibrary.Asset[], containerWidth: number) {
+  return useMemo(() => {
+    if (containerWidth === 0) return []
+
+    const rows: JustifiedRow[] = []
+    let currentRowItems: MediaLibrary.Asset[] = []
+    let currentRowAspectRatio = 0
+
+    // Available width removes spacing
+    // We will account for spacing during distribution
+
+    for (const asset of assets) {
+      currentRowItems.push(asset)
+      currentRowAspectRatio += asset.width / asset.height
+
+      const estimatedWidth = currentRowAspectRatio * TARGET_ROW_HEIGHT
+
+      // Decide if we should break the row
+      // Basic logic: if adding this item makes it wider than container,
+      // OR check if we are closer to container width by including it or excluding it.
+      // For simplicity here, if it exceeds container width comfortably, we flush.
+
+      // Actually Flickr/Google algo style:
+      // Accumulate until height needed to match container width is < limit (e.g. not too tall)
+      const heightToMatchWidth =
+        (containerWidth - currentRowItems.length * SPACING) / currentRowAspectRatio
+
+      // If the height is reasonable (not huge), we accept this row.
+      // But usually we accumulate until we cover width, then shrink.
+
+      if (estimatedWidth >= containerWidth) {
+        // Finalize this row
+        // Recalculate exact height to fill width
+        const rowHeight =
+          (containerWidth - currentRowItems.length * SPACING) / currentRowAspectRatio
+
+        rows.push({
+          id: currentRowItems[0].id,
+          items: currentRowItems.map((a) => ({
+            asset: a,
+            width: (a.width / a.height) * rowHeight,
+            height: rowHeight,
+          })),
+          height: rowHeight,
+        })
+
+        currentRowItems = []
+        currentRowAspectRatio = 0
+      }
+    }
+
+    // Handle last row (align left, don't expand)
+    if (currentRowItems.length > 0) {
+      rows.push({
+        id: currentRowItems[0].id + "-last",
+        items: currentRowItems.map((a) => ({
+          asset: a,
+          width: (a.width / a.height) * TARGET_ROW_HEIGHT,
+          height: TARGET_ROW_HEIGHT,
+        })),
+        height: TARGET_ROW_HEIGHT,
+      })
+    }
+
+    return rows
+  }, [assets, containerWidth])
+}
+
 export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   const [permissionResponse, requestPermission] = MediaLibrary.usePermissions()
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([])
@@ -73,13 +155,15 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
   const [selectedAssetOrigin, setSelectedAssetOrigin] = useState<AssetOrigin | null>(null)
   const [loading, setLoading] = useState(false)
   const [hasNoAlbum, setHasNoAlbum] = useState(false)
-  const insets = useSafeAreaInsets()
   const slideAnim = useRef(new Animated.Value(Dimensions.get("window").width)).current
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null) // Ref for detail view
   // Search state
   const [searchQuery, setSearchQuery] = useState("")
 
   const ALBUM_NAME = "RemoteRG" // このアプリで保存した画像のアルバム名
+  const screenWidth = Dimensions.get("window").width
+
+  const justifiedRows = useJustifiedLayout(assets, screenWidth)
 
   useEffect(() => {
     if (visible) {
@@ -162,8 +246,6 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
     }
   }, [visible, permissionResponse, requestPermission])
 
-
-
   const handleAssetSelect = useCallback((asset: MediaLibrary.Asset, origin: AssetOrigin) => {
     setSelectedAssetOrigin(origin)
     setSelectedAsset(asset)
@@ -208,15 +290,10 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
           <SafeAreaView className="flex-1" edges={["top", "left", "right"]}>
             {/* Header */}
             <View className="flex-row items-center gap-2 px-4 py-2 border-b border-zinc-900 bg-zinc-950/50">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full"
-                onPress={handleBack}
-              >
+              <Button variant="ghost" size="icon" className="rounded-full" onPress={handleBack}>
                 <Ionicons name="arrow-back" size={24} color="#a1a1aa" />
               </Button>
-              
+
               <View className="flex-1">
                 <Input
                   placeholder="Search..."
@@ -229,7 +306,6 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
 
             {/* Grid View */}
             <View className="flex-1 bg-zinc-900/30">
-
               {loading ? (
                 <View className="flex-1 items-center justify-center">
                   <ActivityIndicator size="large" color="#a855f7" />
@@ -253,27 +329,35 @@ export function GalleryModal({ visible, onClose }: GalleryModalProps) {
                 </View>
               ) : (
                 <FlatList
-                  data={assets}
-                  renderItem={({ item }) => (
-                    <ThumbnailItem item={item} onPress={handleAssetSelect} />
+                  data={justifiedRows}
+                  renderItem={({ item: row }) => (
+                    <View style={{ flexDirection: "row", marginBottom: SPACING }}>
+                      {row.items.map((img) => (
+                        <ThumbnailItem
+                          key={img.asset.id}
+                          item={img.asset}
+                          width={img.width}
+                          height={img.height}
+                          onPress={handleAssetSelect}
+                        />
+                      ))}
+                    </View>
                   )}
                   keyExtractor={(item) => item.id}
-                  numColumns={3}
-                  contentContainerStyle={{ padding: 1 }}
+                  contentContainerStyle={{ padding: SPACING / 2 }}
                 />
               )}
             </View>
-
-        </SafeAreaView>
-        {selectedAsset && (
-          <ScreenshotDetail
-            ref={screenshotDetailRef}
-            asset={selectedAsset}
-            origin={selectedAssetOrigin}
-            onClose={() => setSelectedAsset(null)}
-          />
-        )}
-      </Animated.View>
+          </SafeAreaView>
+          {selectedAsset && (
+            <ScreenshotDetail
+              ref={screenshotDetailRef}
+              asset={selectedAsset}
+              origin={selectedAssetOrigin}
+              onClose={() => setSelectedAsset(null)}
+            />
+          )}
+        </Animated.View>
       </View>
     </Modal>
   )

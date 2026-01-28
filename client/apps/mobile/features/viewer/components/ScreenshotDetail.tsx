@@ -10,6 +10,7 @@ import {
   Dimensions,
   TouchableWithoutFeedback,
   ActivityIndicator,
+  ScrollView,
 } from "react-native"
 import { Gesture, GestureDetector, FlatList } from "react-native-gesture-handler"
 import Animated, {
@@ -505,8 +506,12 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
               infoPanelStyle,
             ]}
           >
-            <SafeAreaView edges={["bottom", "top"]} className="flex-1 p-4">
-              <View className="flex-1">
+            <SafeAreaView edges={["bottom", "top"]} className="flex-1">
+              <ScrollView
+                className="flex-1"
+                contentContainerStyle={{ padding: 16 }}
+                showsVerticalScrollIndicator={false}
+              >
                 <View className="flex-row items-center justify-between mb-6 mt-12">
                   <Text className="text-xl font-bold text-white">情報</Text>
                 </View>
@@ -596,10 +601,7 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                     </View>
                   )}
                 </View>
-
-                {/* Extra space for scrolling */}
-                <View className="h-24" />
-              </View>
+              </ScrollView>
 
               {/* Bottom Actions inside Info Panel? Or separate?
                       Google Photos has bottom bar actions (Share, Edit, Lens, Delete) separate from Info Panel.

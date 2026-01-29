@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler"
 
 import { useMigration } from "../db/client"
 import "../global.css"
+import { ViewerProvider } from "@/features/viewer/context/ViewerContext"
 
 const queryClient = new QueryClient()
 
@@ -30,10 +31,12 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <Stack screenOptions={{ headerShown: false }} />
-        <PortalHost />
-      </GestureHandlerRootView>
+      <ViewerProvider>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <Stack screenOptions={{ headerShown: false }} />
+          <PortalHost />
+        </GestureHandlerRootView>
+      </ViewerProvider>
     </QueryClientProvider>
   )
 }

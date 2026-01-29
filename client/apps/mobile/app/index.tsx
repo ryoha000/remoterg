@@ -1,5 +1,5 @@
-import { ViewerScreen } from "@/features/viewer"
+import { ConnectScreen } from "@/features/connect"
 
 export default function Index() {
-  return <ViewerScreen />
+  return <ConnectScreen />
 }

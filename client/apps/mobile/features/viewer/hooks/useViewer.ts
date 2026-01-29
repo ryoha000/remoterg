@@ -8,22 +8,30 @@ import { useScreenshot } from "./useScreenshot"
 import { useViewerConnection } from "./useViewerConnection"
 import { useViewerStats } from "./useViewerStats"
 
-interface UseViewerProps {
-  onScreenshotSuccess?: (uri: string) => void
-  onAnalyzeResult?: (id: string, result: any, isPartial: boolean) => void
-}
-
-export function useViewer(props?: UseViewerProps) {
+export function useViewer() {
   const [sessionId, setSessionId] = useState("fixed")
+  const [analysisResults, setAnalysisResults] = useState<Record<string, any>>({})
+  const [isAnalyzingMap, setIsAnalyzingMap] = useState<Record<string, boolean>>({})
+  const [latestScreenshotUri, setLatestScreenshotUri] = useState<string | null>(null)
+
   const analysisBuffers = useRef<Record<string, string>>({})
   const { mutate: saveAnalysis } = useSaveAnalysis()
+
+  const onAnalyzeResult = useCallback((id: string, result: any, isPartial: boolean) => {
+    setAnalysisResults((prev) => ({ ...prev, [id]: result }))
+    setIsAnalyzingMap((prev) => ({ ...prev, [id]: isPartial }))
+  }, [])
 
   const {
     requestScreenshot: requestScreenshotInternal,
     handleMetadata,
     handleChunk,
     isReceiving,
-  } = useScreenshot({ onSuccess: props?.onScreenshotSuccess })
+  } = useScreenshot({
+    onSuccess: (uri) => {
+      setLatestScreenshotUri(uri)
+    },
+  })
 
   const handleDataChannelMessage = useCallback(
     (data: string | ArrayBuffer) => {
@@ -39,35 +47,15 @@ export function useViewer(props?: UseViewerProps) {
             getLocalIds(msg.ANALYZE_RESPONSE.id).then((localIds) => {
               localIds.forEach((localId) => {
                 saveAnalysis({ localId, analysis: result })
-                // We might need to notify UI with Host ID because UI subscribes to Host ID or Local ID?
-                // Currently UI logic uses Host ID (from filename) to subscribe.
-                // But if we want to support multiple local copies of same host ID?
-                // Actually, if we use Host ID for everything in memory, it's easier.
-                // But DB saves by Local ID.
               })
             })
 
-            props?.onAnalyzeResult?.(msg.ANALYZE_RESPONSE.id, result, false)
+            onAnalyzeResult(msg.ANALYZE_RESPONSE.id, result, false)
           } else if (msg.ANALYZE_RESPONSE_CHUNK) {
             const { id, delta } = msg.ANALYZE_RESPONSE_CHUNK
             analysisBuffers.current[id] = (analysisBuffers.current[id] || "") + delta
-
-            // Try to parse partial result or just send raw text if the UI handles stream
-            // The UI expects an object usually.
-            // For now let's just send the raw text if parsing fails?
-            // Or better, let's try to parse if possible, or just ignore until done?
-            // Web implementation updates live.
-            // Let's try to parse "best effort" or just send null if invalid?
-            // Actually, we can just pass the raw buffer to the UI if it wants to show "Generating..."
-            // But we specifically need structured data (Scene, Dialogue).
-            // Let's rely on valid JSON chunks or just wait for complete for now?
-            // No, user wants "AI functionality like web". Web shows streaming.
-            // Web uses `best-effort-json-parser`. I don't have it here.
-            // I'll stick to full response for structure, but maybe just notify "generating" state?
-            // Actually, I can allow the UI to receive the raw text buffer too.
-            // Let's pass the buffer as a rawAnalysisText field or something?
-            // For now, let's keep it simple: notify that there IS an update.
-            props?.onAnalyzeResult?.(id, { raw: analysisBuffers.current[id] }, true)
+            
+            onAnalyzeResult(id, { raw: analysisBuffers.current[id] }, true)
           } else if (msg.ANALYZE_RESPONSE_DONE) {
             const id = msg.ANALYZE_RESPONSE_DONE.id
             const raw = analysisBuffers.current[id]
@@ -82,7 +70,7 @@ export function useViewer(props?: UseViewerProps) {
                   })
                 })
 
-                props?.onAnalyzeResult?.(id, result, false)
+                onAnalyzeResult(id, result, false)
               } catch (e) {
                 console.error("Failed to parse final analysis", e)
               }
@@ -99,7 +87,7 @@ export function useViewer(props?: UseViewerProps) {
         }
       }
     },
-    [handleMetadata, handleChunk, isReceiving, props?.onAnalyzeResult],
+    [handleMetadata, handleChunk, isReceiving, onAnalyzeResult, saveAnalysis],
   )
 
   const {
@@ -145,5 +133,8 @@ export function useViewer(props?: UseViewerProps) {
     requestScreenshot,
     stats,
     requestAnalyze,
+    analysisResults,
+    isAnalyzingMap,
+    latestScreenshotUri,
   }
 }

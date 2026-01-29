@@ -1,41 +1,37 @@
+import { useRouter } from "expo-router"
 import { StatusBar } from "expo-status-bar"
 import { useRef, useEffect, useState, useCallback } from "react"
-import { View, StyleSheet, TouchableWithoutFeedback } from "react-native"
+import { View, StyleSheet } from "react-native"
 
-import { ConnectForm } from "./components/ConnectForm"
 import { ScreenshotFlash, ScreenshotFlashHandle } from "./components/ScreenshotFlash"
 import { VideoPlayer } from "./components/VideoPlayer"
 import { ViewerOverlay } from "./components/ViewerOverlay"
-import { useViewer } from "./hooks/useViewer"
+import { useViewerContext } from "./context/ViewerContext"
 
 export function ViewerScreen() {
   const flashRef = useRef<ScreenshotFlashHandle>(null)
-  // Analysis state
-  const [analysisResults, setAnalysisResults] = useState<Record<string, any>>({})
-  const [isAnalyzingMap, setIsAnalyzingMap] = useState<Record<string, boolean>>({})
-
-  const onAnalyzeResult = useCallback((id: string, result: any, isPartial: boolean) => {
-    setAnalysisResults((prev) => ({ ...prev, [id]: result }))
-    setIsAnalyzingMap((prev) => ({ ...prev, [id]: isPartial }))
-  }, [])
-
+  const router = useRouter()
+  
   const {
     sessionId,
-    setSessionId,
     isConnected,
     remoteStream,
     status,
-    connect,
     disconnect,
     requestScreenshot: requestScreenshotInternal,
     stats,
     requestAnalyze,
-  } = useViewer({
-    onScreenshotSuccess: (uri) => {
-      flashRef.current?.showResult(uri)
-    },
-    onAnalyzeResult,
-  })
+    analysisResults,
+    isAnalyzingMap,
+    latestScreenshotUri,
+  } = useViewerContext()
+
+  // Navigation guard
+  useEffect(() => {
+    if (!isConnected) {
+      router.replace("/")
+    }
+  }, [isConnected, router])
 
   // Update flash layout when stream dimensions change
   useEffect(() => {
@@ -49,6 +45,13 @@ export function ViewerScreen() {
       }
     }
   }, [remoteStream])
+
+  // Flash trigger
+  useEffect(() => {
+    if (latestScreenshotUri) {
+      flashRef.current?.showResult(latestScreenshotUri)
+    }
+  }, [latestScreenshotUri])
 
   const requestScreenshot = useCallback(() => {
     flashRef.current?.triggerFlash()
@@ -78,37 +81,29 @@ export function ViewerScreen() {
     setLastInteraction(Date.now())
   }, [])
 
+  if (!isConnected || !remoteStream) {
+      // Should handle by navigation guard, but for safety return null or loading
+      return <View style={styles.container} />
+  }
+
   return (
     <View style={styles.container}>
       <StatusBar hidden={isConnected && !showOverlay} />
-      {isConnected && remoteStream ? (
-        <View style={styles.videoContainer}>
-          <VideoPlayer stream={remoteStream} onTap={toggleOverlay} />
-          <ViewerOverlay
-            visible={showOverlay}
-            status={status}
-            onDisconnect={disconnect}
-            sessionId={sessionId}
-            stats={{
-              fps: 60, // TODO: Get real stats
-              bitrate: 0, // TODO: Get real stats
-              loss: 0, // TODO: Get real stats
-            }}
-            onInteraction={onInteraction}
-            onRequestScreenshot={requestScreenshot}
-            onRequestAnalyze={requestAnalyze}
-            analysisResults={analysisResults}
-            isAnalyzingMap={isAnalyzingMap}
-          />
-        </View>
-      ) : (
-        <ConnectForm
-          sessionId={sessionId}
-          setSessionId={setSessionId}
+      <View style={styles.videoContainer}>
+        <VideoPlayer stream={remoteStream} onTap={toggleOverlay} />
+        <ViewerOverlay
+          visible={showOverlay}
           status={status}
-          connect={connect}
+          onDisconnect={disconnect}
+          sessionId={sessionId}
+          stats={stats}
+          onInteraction={onInteraction}
+          onRequestScreenshot={requestScreenshot}
+          onRequestAnalyze={requestAnalyze}
+          analysisResults={analysisResults}
+          isAnalyzingMap={isAnalyzingMap}
         />
-      )}
+      </View>
       <ScreenshotFlash ref={flashRef} />
     </View>
   )

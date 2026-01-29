@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm"
 
-import type { AnalysisResult } from "@/features/viewer/types"
+import type { AnalysisResult } from "@/features/gallery/types"
 
 import { db } from "../client"
 import { analysisResults } from "../schema/analysis"

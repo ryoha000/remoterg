@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
-import type { AnalysisResult } from "@/features/viewer/types"
+import type { AnalysisResult } from "@/features/gallery/types"
 
 import { getAnalysis, saveAnalysis } from "../services/analysis-service"
 

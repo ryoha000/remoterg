@@ -18,9 +18,16 @@ interface ConnectFormProps {
   setSessionId: (id: string) => void
   status: string
   connect: () => void
+  onOpenGallery: () => void
 }
 
-export const ConnectForm = ({ sessionId, setSessionId, status, connect }: ConnectFormProps) => {
+export const ConnectForm = ({
+  sessionId,
+  setSessionId,
+  status,
+  connect,
+  onOpenGallery,
+}: ConnectFormProps) => {
   return (
     <View className="flex-1 justify-center p-6 bg-background">
       <Card className="w-full max-w-xl mx-auto">
@@ -43,9 +50,12 @@ export const ConnectForm = ({ sessionId, setSessionId, status, connect }: Connec
           </View>
           {!!status && <Text className="text-xs text-center text-muted-foreground">{status}</Text>}
         </CardContent>
-        <CardFooter>
+        <CardFooter className="flex-col gap-2">
           <Button onPress={connect} className="w-full">
             <Text>Connect</Text>
+          </Button>
+          <Button onPress={onOpenGallery} variant="outline" className="w-full">
+            <Text>View Gallery</Text>
           </Button>
         </CardFooter>
       </Card>

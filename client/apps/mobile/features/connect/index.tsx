@@ -23,6 +23,7 @@ export function ConnectScreen() {
         setSessionId={setSessionId}
         status={status}
         connect={connect}
+        onOpenGallery={() => router.push("/gallery")}
       />
     </View>
   )

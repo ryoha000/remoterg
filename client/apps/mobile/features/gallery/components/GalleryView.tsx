@@ -158,6 +158,7 @@ export function GalleryView({
   const [searchQuery, setSearchQuery] = useState("")
   const flatListRef = useRef<FlatList>(null)
   const itemRefs = useRef<Map<string, View>>(new Map()).current
+  const [assetInfoMap, setAssetInfoMap] = useState<Record<string, MediaLibrary.AssetInfo>>({})
 
   const ALBUM_NAME = "RemoteRG"
   const screenWidth = Dimensions.get("window").width
@@ -230,10 +231,20 @@ export function GalleryView({
 
 
 
-  const handleAssetSelect = useCallback((asset: MediaLibrary.Asset, origin: AssetOrigin) => {
-    setSelectedAssetOrigin(origin)
-    setSelectedAsset(asset)
-  }, [])
+  const handleAssetSelect = useCallback(
+    (asset: MediaLibrary.Asset, origin: AssetOrigin) => {
+      setSelectedAssetOrigin(origin)
+      setSelectedAsset(asset)
+
+      // Prefetch info if not exists
+      if (!assetInfoMap[asset.id]) {
+        MediaLibrary.getAssetInfoAsync(asset).then((info) => {
+          setAssetInfoMap((prev) => ({ ...prev, [asset.id]: info }))
+        })
+      }
+    },
+    [assetInfoMap],
+  )
 
   const getAssetOrigin = useCallback(async (id: string): Promise<AssetOrigin | null> => {
     const view = itemRefs.get(id)
@@ -395,6 +406,10 @@ export function GalleryView({
             onRequestAnalyze={onRequestAnalyze}
             analysisResults={analysisResults}
             isAnalyzingMap={isAnalyzingMap}
+            assetInfoMap={assetInfoMap}
+            onAssetInfoLoaded={(id, info) =>
+              setAssetInfoMap((prev) => ({ ...prev, [id]: info }))
+            }
           />
         )}
       </View>

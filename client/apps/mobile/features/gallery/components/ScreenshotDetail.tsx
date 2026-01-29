@@ -5,13 +5,13 @@ import { StatusBar } from "expo-status-bar"
 import { forwardRef, useImperativeHandle, useEffect, useState, useRef, useMemo } from "react"
 import {
   View,
-  Image,
   Text,
   Dimensions,
   TouchableWithoutFeedback,
   ActivityIndicator,
   ScrollView,
 } from "react-native"
+import { Image } from "expo-image"
 import { Gesture, GestureDetector, FlatList } from "react-native-gesture-handler"
 import Animated, {
   useAnimatedStyle,
@@ -51,6 +51,8 @@ interface ScreenshotDetailProps {
   onRequestAnalyze?: (id: string, max_edge?: number) => void
   analysisResults?: Record<string, AnalysisResult>
   isAnalyzingMap?: Record<string, boolean>
+  assetInfoMap: Record<string, MediaLibrary.AssetInfo>
+  onAssetInfoLoaded: (id: string, info: MediaLibrary.AssetInfo) => void
 }
 
 export interface ScreenshotDetailRef {
@@ -78,6 +80,7 @@ const ScreenshotPage = ({
   isClosing,
   windowDimensions,
   isInfoOpen,
+  uri,
 }: {
   asset: MediaLibrary.Asset
   isActive: boolean
@@ -87,6 +90,7 @@ const ScreenshotPage = ({
   origin?: AssetOrigin | null
   closingOrigin?: AssetOrigin | null
   isClosing: boolean
+  uri?: string
   windowDimensions: { width: number; height: number }
   isInfoOpen: boolean
 }) => {
@@ -235,9 +239,14 @@ const ScreenshotPage = ({
       <GestureDetector gesture={composedGesture}>
         <Animated.View style={[containerStyle, opacityStyle]}>
           <AnimatedImage
-            source={{ uri: asset.uri }}
+            source={{ 
+              uri: uri || asset.uri,
+              width: asset.width,
+              height: asset.height
+            }}
             style={{ width: "100%", height: "100%" }}
-            resizeMode="contain"
+            contentFit="contain"
+            cachePolicy="memory-disk"
           />
         </Animated.View>
       </GestureDetector>
@@ -257,11 +266,12 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
       onRequestAnalyze,
       analysisResults,
       isAnalyzingMap,
+      assetInfoMap,
+      onAssetInfoLoaded,
     },
     ref,
   ) => {
     const [currentIndex, setCurrentIndex] = useState(initialIndex)
-    const [assetInfo, setAssetInfo] = useState<MediaLibrary.AssetInfo | null>(null)
 
     // Closing state
     const [isClosing, setIsClosing] = useState(false)
@@ -276,6 +286,7 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
     // Default to false (Fullscreen) as per "Initially object-fit: contain" request
 
     const currentAsset = assets[currentIndex]
+    const currentAssetInfo = assetInfoMap[currentAsset.id]
 
     // Load persisted analysis & Resolve Host ID
     const { data: dbHostInfo } = useHostId(currentAsset.id)
@@ -308,11 +319,27 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
 
     useEffect(() => {
       const fetchInfo = async () => {
-        const info = await MediaLibrary.getAssetInfoAsync(assets[currentIndex])
-        setAssetInfo(info)
+        // Fetch current and neighbors
+        const indicesToFetch = [currentIndex, currentIndex - 1, currentIndex + 1].filter(
+          (i) => i >= 0 && i < assets.length,
+        )
+
+        for (const i of indicesToFetch) {
+          const asset = assets[i]
+          if (!asset || assetInfoMap[asset.id]) continue
+
+          try {
+            const info = await MediaLibrary.getAssetInfoAsync(asset)
+            if (info) {
+              onAssetInfoLoaded(asset.id, info)
+            }
+          } catch (e) {
+            console.error("Failed to load asset info for", asset.id, e)
+          }
+        }
       }
       fetchInfo()
-    }, [currentIndex, assets])
+    }, [currentIndex, assets, assetInfoMap, onAssetInfoLoaded])
 
     // Sync overlay animation with state
     useEffect(() => {
@@ -434,20 +461,32 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
           scrollEnabled={!isClosing} // Maybe disable scroll when info is open? Google Photos allows it.
-          renderItem={({ item, index }) => (
-            <ScreenshotPage
-              asset={item}
-              isActive={index === currentIndex}
-              windowDimensions={windowDimensions}
-              onTap={toggleInfo}
-              onDismiss={handleClose}
-              shouldAnimateEntry={index === initialIndex}
-              origin={index === initialIndex ? origin : null}
-              isClosing={isClosing}
-              closingOrigin={closingOrigin}
-              isInfoOpen={showInfo} // Pass state
-            />
-          )}
+          extraData={assetInfoMap}
+          renderItem={({ item, index }) => {
+            const isCurrent = index === currentIndex
+            const info = assetInfoMap[item.id]
+            // Use cached info localUri if available, otherwise asset.uri
+            // Only prioritize localUri if we have it.
+            // When isCurrent is true, we try to use the high res one.
+            // Actually, we can use high res for ANY item if we have it loaded.
+            const uri = info?.localUri || info?.uri
+
+             return (
+              <ScreenshotPage
+                asset={item}
+                isActive={isCurrent}
+                windowDimensions={windowDimensions}
+                onTap={toggleInfo}
+                onDismiss={handleClose}
+                shouldAnimateEntry={index === initialIndex}
+                origin={index === initialIndex ? origin : null}
+                isClosing={isClosing}
+                closingOrigin={closingOrigin}
+                isInfoOpen={showInfo} // Pass state
+                uri={uri}
+              />
+            )
+          }}
           keyExtractor={(item) => item.id}
         />
 
@@ -536,7 +575,7 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                       {currentAsset.width} x {currentAsset.height}
                     </Text>
                     <Text className="text-zinc-400 text-sm mt-1">
-                      {assetInfo ? formatSize(assetInfo.localUri ? undefined : 0) : "Loading..."} •{" "}
+                      {currentAssetInfo ? formatSize(currentAssetInfo.localUri ? undefined : 0) : "Loading..."} •{" "}
                       {currentAsset.filename}
                     </Text>
                   </View>

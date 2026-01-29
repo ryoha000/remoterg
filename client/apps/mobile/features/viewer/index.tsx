@@ -11,7 +11,7 @@ import { useViewerContext } from "./context/ViewerContext"
 export function ViewerScreen() {
   const flashRef = useRef<ScreenshotFlashHandle>(null)
   const router = useRouter()
-  
+
   const {
     sessionId,
     isConnected,
@@ -82,8 +82,8 @@ export function ViewerScreen() {
   }, [])
 
   if (!isConnected || !remoteStream) {
-      // Should handle by navigation guard, but for safety return null or loading
-      return <View style={styles.container} />
+    // Should handle by navigation guard, but for safety return null or loading
+    return <View style={styles.container} />
   }
 
   return (

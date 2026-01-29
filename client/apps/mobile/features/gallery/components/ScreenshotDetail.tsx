@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons"
 import { BlurView } from "expo-blur"
+import { Image } from "expo-image"
 import * as MediaLibrary from "expo-media-library"
 import { StatusBar } from "expo-status-bar"
 import { forwardRef, useImperativeHandle, useEffect, useState, useRef, useMemo } from "react"
@@ -11,7 +12,6 @@ import {
   ActivityIndicator,
   ScrollView,
 } from "react-native"
-import { Image } from "expo-image"
 import { Gesture, GestureDetector, FlatList } from "react-native-gesture-handler"
 import Animated, {
   useAnimatedStyle,
@@ -239,10 +239,10 @@ const ScreenshotPage = ({
       <GestureDetector gesture={composedGesture}>
         <Animated.View style={[containerStyle, opacityStyle]}>
           <AnimatedImage
-            source={{ 
+            source={{
               uri: uri || asset.uri,
               width: asset.width,
-              height: asset.height
+              height: asset.height,
             }}
             style={{ width: "100%", height: "100%" }}
             contentFit="contain"
@@ -439,7 +439,7 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
 
     return (
       <View className="flex-1 bg-transparent absolute inset-0 z-50">
-        <StatusBar hidden={!showInfo} style="light" />
+        <StatusBar hidden={!showInfo} />
         {/* Dark Backdrop */}
         <Animated.View
           style={[{ flex: 1, backgroundColor: "#000000" }, backdropStyle]} // Changed to pure black for better photo viewer feel
@@ -471,7 +471,7 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
             // Actually, we can use high res for ANY item if we have it loaded.
             const uri = info?.localUri || info?.uri
 
-             return (
+            return (
               <ScreenshotPage
                 asset={item}
                 isActive={isCurrent}
@@ -575,8 +575,10 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                       {currentAsset.width} x {currentAsset.height}
                     </Text>
                     <Text className="text-zinc-400 text-sm mt-1">
-                      {currentAssetInfo ? formatSize(currentAssetInfo.localUri ? undefined : 0) : "Loading..."} •{" "}
-                      {currentAsset.filename}
+                      {currentAssetInfo
+                        ? formatSize(currentAssetInfo.localUri ? undefined : 0)
+                        : "Loading..."}{" "}
+                      • {currentAsset.filename}
                     </Text>
                   </View>
 

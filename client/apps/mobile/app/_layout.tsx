@@ -4,9 +4,10 @@ import { Stack } from "expo-router"
 import { Text, View } from "react-native"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
 
-import { useMigration } from "../db/client"
-import "../global.css"
 import { ViewerProvider } from "@/features/viewer/context/ViewerContext"
+
+import "../global.css"
+import { useMigration } from "../db/client"
 
 const queryClient = new QueryClient()
 

@@ -2,9 +2,9 @@ import { useRouter } from "expo-router"
 import { useEffect } from "react"
 import { View } from "react-native"
 
-import { ConnectForm } from "./components/ConnectForm"
-
 import { useViewerContext } from "@/features/viewer/context/ViewerContext"
+
+import { ConnectForm } from "./components/ConnectForm"
 
 export function ConnectScreen() {
   const router = useRouter()

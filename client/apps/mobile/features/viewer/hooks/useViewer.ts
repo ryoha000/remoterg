@@ -54,7 +54,7 @@ export function useViewer() {
           } else if (msg.ANALYZE_RESPONSE_CHUNK) {
             const { id, delta } = msg.ANALYZE_RESPONSE_CHUNK
             analysisBuffers.current[id] = (analysisBuffers.current[id] || "") + delta
-            
+
             onAnalyzeResult(id, { raw: analysisBuffers.current[id] }, true)
           } else if (msg.ANALYZE_RESPONSE_DONE) {
             const id = msg.ANALYZE_RESPONSE_DONE.id

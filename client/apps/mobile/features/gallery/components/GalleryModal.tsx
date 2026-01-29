@@ -1,11 +1,5 @@
 import { useRef, useEffect } from "react"
-import {
-  Modal,
-  View,
-  Dimensions,
-  Animated,
-  Easing,
-} from "react-native"
+import { Modal, View, Dimensions, Animated, Easing } from "react-native"
 
 import { AnalysisResult } from "../types"
 import { GalleryView } from "./GalleryView"

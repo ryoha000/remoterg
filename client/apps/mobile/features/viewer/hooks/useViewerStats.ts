@@ -29,7 +29,7 @@ export function useViewerStats(pcRef: RefObject<RTCPeerConnection | null>, isCon
 
             if (lastTimestamp > 0) {
               const duration = (now - lastTimestamp) / 1000
-              const bitrate = (bytes - lastBytesReceived) * 8 / duration / 1000 // kbps
+              const bitrate = ((bytes - lastBytesReceived) * 8) / duration / 1000 // kbps
 
               setStats({
                 fps: report.framesPerSecond || 0,

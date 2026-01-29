@@ -1,14 +1,9 @@
 import { Ionicons } from "@expo/vector-icons"
-import * as MediaLibrary from "expo-media-library"
-import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import {
-  View,
-  FlatList,
-  TouchableOpacity,
-  Dimensions,
-  ActivityIndicator,
-} from "react-native"
 import { Image } from "expo-image"
+import * as MediaLibrary from "expo-media-library"
+import { StatusBar } from "expo-status-bar"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { View, FlatList, TouchableOpacity, Dimensions, ActivityIndicator } from "react-native"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaView } from "react-native-safe-area-context"
 
@@ -197,13 +192,13 @@ export function GalleryView({
             first: 50,
             after: cursor || undefined,
           })
-          
+
           if (cursor) {
             setAssets((prev) => [...prev, ...result.assets])
           } else {
             setAssets(result.assets)
           }
-          
+
           setHasNextPage(result.hasNextPage)
           setEndCursor(result.endCursor)
         }
@@ -228,8 +223,6 @@ export function GalleryView({
       loadAssets(endCursor)
     }
   }
-
-
 
   const handleAssetSelect = useCallback(
     (asset: MediaLibrary.Asset, origin: AssetOrigin) => {
@@ -312,6 +305,7 @@ export function GalleryView({
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View className="flex-1 bg-zinc-950">
+        <StatusBar hidden />
         <SafeAreaView className="flex-1" edges={["top", "left", "right"]}>
           {/* Header */}
           <View className="flex-row items-center gap-2 px-4 py-2 border-b border-zinc-900 bg-zinc-950/50">
@@ -407,9 +401,7 @@ export function GalleryView({
             analysisResults={analysisResults}
             isAnalyzingMap={isAnalyzingMap}
             assetInfoMap={assetInfoMap}
-            onAssetInfoLoaded={(id, info) =>
-              setAssetInfoMap((prev) => ({ ...prev, [id]: info }))
-            }
+            onAssetInfoLoaded={(id, info) => setAssetInfoMap((prev) => ({ ...prev, [id]: info }))}
           />
         )}
       </View>

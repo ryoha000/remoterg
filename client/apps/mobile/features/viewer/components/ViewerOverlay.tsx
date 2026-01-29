@@ -14,8 +14,8 @@ import { Button } from "@/components/ui/button"
 import { Text } from "@/components/ui/text"
 import { cn } from "@/lib/utils"
 
-import { AnalysisResult } from "../../gallery/types"
 import { GalleryModal } from "../../gallery/components/GalleryModal"
+import { AnalysisResult } from "../../gallery/types"
 
 interface ViewerOverlayProps {
   visible: boolean

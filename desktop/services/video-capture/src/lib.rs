@@ -67,14 +67,31 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         debug!("on_frame_arrived called");
 
         // FrameBufferを取得してRGBAデータを読み取る
-        let frame_buffer = frame.buffer()?;
+        let mut frame_buffer = frame.buffer()?;
+
+        let row_pitch = frame_buffer.row_pitch() as usize;
+        let width = frame_buffer.width() as usize;
+        let height = frame_buffer.height() as usize;
 
         // パディングなしのバッファを取得
-        let mut buffer = Vec::new();
-        let _ = frame_buffer.as_nopadding_buffer(&mut buffer);
+        // 4Kモニタなどでストライド（row_pitch）が width * 4 と一致しない場合があるため、
+        // as_nopadding_buffer ではなく手動で行ごとにコピーする
+        let raw_buffer = frame_buffer.as_raw_buffer();
+        let row_size = width * 4;
 
-        let src_width = frame_buffer.width();
-        let src_height = frame_buffer.height();
+        let mut buffer = Vec::with_capacity(row_size * height);
+
+        for y in 0..height {
+            let start = y * row_pitch;
+            let end = start + row_size;
+            
+            if end <= raw_buffer.len() {
+                buffer.extend_from_slice(&raw_buffer[start..end]);
+            }
+        }
+
+        let src_width = width as u32;
+        let src_height = height as u32;
 
         // リサイズが必要かチェック
         let (dst_width, dst_height) = match &self.config.size {

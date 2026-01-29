@@ -13,6 +13,9 @@ interface ScreenshotMetadata {
   format: string
   received: number
   chunks: Uint8Array[]
+  window_title?: string
+  process_path?: string
+  process_name?: string
 }
 
 interface UseScreenshotProps {
@@ -36,6 +39,9 @@ export function useScreenshot({ onSuccess }: UseScreenshotProps = {}) {
     id: string
     format: string
     chunks: Uint8Array[]
+    window_title?: string
+    process_path?: string
+    process_name?: string
   }) => {
     try {
       // 1. Combine chunks
@@ -63,7 +69,7 @@ export function useScreenshot({ onSuccess }: UseScreenshotProps = {}) {
           if (Platform.OS === "android") {
             const mimeType = screenshot.format === "png" ? "image/png" : "image/jpeg"
 
-            await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
+            const contentUri = await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
               {
                 name: screenshot.id,
                 parentFolder: "RemoteRG",
@@ -72,11 +78,42 @@ export function useScreenshot({ onSuccess }: UseScreenshotProps = {}) {
               "Image",
               file.uri,
             )
+
+            console.log("Saved to MediaStore, contentUri:", contentUri)
+
+            // Extract ID from contentUri (e.g. content://media/external/images/media/123)
+            // The ID is usually the last segment
+            const assetId = contentUri.split("/").pop()
+
+            if (assetId) {
+              await mapScreenshot({
+                localId: assetId,
+                hostId: screenshot.id,
+                metadata: {
+                  windowTitle: screenshot.window_title,
+                  processPath: screenshot.process_path,
+                  processName: screenshot.process_name,
+                },
+              })
+            } else {
+              console.warn("Could not extract asset ID from contentUri:", contentUri)
+              // Fallback? If we can't get ID, we can't map it easily without search.
+              // But typically contentUri ends in ID.
+            }
+
             onSuccess?.(file.uri)
           } else {
             const asset = await MediaLibrary.createAssetAsync(file.uri)
             // Map local ID to host ID
-            await mapScreenshot({ localId: asset.id, hostId: screenshot.id })
+            await mapScreenshot({
+              localId: asset.id,
+              hostId: screenshot.id,
+              metadata: {
+                windowTitle: screenshot.window_title,
+                processPath: screenshot.process_path,
+                processName: screenshot.process_name,
+              },
+            })
 
             const album = await MediaLibrary.getAlbumAsync("RemoteRG")
             if (album) {

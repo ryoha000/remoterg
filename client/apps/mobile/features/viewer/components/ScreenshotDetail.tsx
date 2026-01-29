@@ -278,11 +278,11 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
     const currentAsset = assets[currentIndex]
 
     // Load persisted analysis & Resolve Host ID
-    const { data: dbHostId } = useHostId(currentAsset.id)
+    const { data: dbHostInfo } = useHostId(currentAsset.id)
     const hostId = useMemo(() => {
-      if (dbHostId) return dbHostId
+      if (dbHostInfo) return dbHostInfo.hostId
       return currentAsset.filename?.replace(/\.[^/.]+$/, "") || currentAsset.id
-    }, [dbHostId, currentAsset])
+    }, [dbHostInfo, currentAsset])
 
     // Load analysis using Local ID
     const { data: savedAnalysis } = useAnalysis(currentAsset.id)
@@ -540,6 +540,31 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                       {currentAsset.filename}
                     </Text>
                   </View>
+
+                  {/* Window Info */}
+                  {(dbHostInfo?.windowTitle || dbHostInfo?.processName) && (
+                    <View>
+                      <View className="flex-row items-center gap-2 mb-2">
+                        <Ionicons name="desktop-outline" size={16} color="#a1a1aa" />
+                        <Text className="text-zinc-400 font-medium">アプリケーション</Text>
+                      </View>
+                      {dbHostInfo.windowTitle && (
+                        <Text className="text-zinc-200 text-base">{dbHostInfo.windowTitle}</Text>
+                      )}
+                      {dbHostInfo.processName && (
+                        <Text className="text-zinc-400 text-sm mt-1">{dbHostInfo.processName}</Text>
+                      )}
+                      {dbHostInfo.processPath && (
+                        <Text
+                          className="text-zinc-500 text-xs mt-1"
+                          numberOfLines={1}
+                          ellipsizeMode="middle"
+                        >
+                          {dbHostInfo.processPath}
+                        </Text>
+                      )}
+                    </View>
+                  )}
                 </View>
 
                 {/* AI Analysis */}

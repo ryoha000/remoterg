@@ -20,8 +20,16 @@ export const useLocalIds = (hostId: string) => {
 
 export const useMapScreenshot = () => {
   return useMutation({
-    mutationFn: async ({ localId, hostId }: { localId: string; hostId: string }) => {
-      await mapScreenshot(localId, hostId)
+    mutationFn: async ({
+      localId,
+      hostId,
+      metadata,
+    }: {
+      localId: string
+      hostId: string
+      metadata?: { windowTitle?: string; processPath?: string; processName?: string }
+    }) => {
+      await mapScreenshot(localId, hostId, metadata)
     },
   })
 }

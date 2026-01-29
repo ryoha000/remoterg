@@ -299,6 +299,9 @@ pub struct ScreenshotMetadataPayload {
     pub width: u32,
     pub height: u32,
     pub size: u32,
+    pub window_title: Option<String>,
+    pub process_path: Option<String>,
+    pub process_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

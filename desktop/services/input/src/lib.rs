@@ -11,6 +11,8 @@ use core_types::{
     CaptureMessage, DataChannelMessage, Frame, OutgoingDataChannelMessage, ScreenshotMetadataPayload,
 };
 
+use window_info::WindowInfoProvider;
+
 use std::path::PathBuf;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -28,6 +30,7 @@ pub struct InputService {
     tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
     screenshot_dir: PathBuf,
     target_hwnd: u64,
+    window_info_provider: WindowInfoProvider,
 }
 
 const PROMPT: &str = r#"以下のJSONスキーマに従って、スクリーンショットの解析結果を出力してください。
@@ -76,6 +79,7 @@ impl InputService {
             tagger_cmd_tx,
             screenshot_dir,
             target_hwnd,
+            window_info_provider: WindowInfoProvider::new(),
         }
     }
 
@@ -198,6 +202,15 @@ impl InputService {
         info!("Saved screenshot to: {:?}", file_path);
         // ----------------------
 
+        // Create Window Metadata
+        let window_info = match self.window_info_provider.get_info(self.target_hwnd) {
+            Ok(info) => Some(info),
+            Err(e) => {
+                error!("Failed to get window info for hwnd {}: {}", self.target_hwnd, e);
+                None
+            }
+        };
+
         let metadata = DataChannelMessage::ScreenshotMetadata {
             payload: ScreenshotMetadataPayload {
                 id: id.clone(),
@@ -206,6 +219,9 @@ impl InputService {
                 width,
                 height,
                 size: total_size,
+                window_title: window_info.as_ref().map(|i| i.title.clone()),
+                process_path: window_info.as_ref().map(|i| i.process_path.clone()),
+                process_name: window_info.as_ref().map(|i| i.process_name.clone()),
             },
         };
 

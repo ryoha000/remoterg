@@ -18,6 +18,7 @@ members = [
   "video-stream",
   "tagger-setup",
   "tagger",
+  "window-info",
 ]
 
 resolver = "2"

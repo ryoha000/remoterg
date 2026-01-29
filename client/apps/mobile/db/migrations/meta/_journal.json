@@ -8,6 +8,20 @@
       "when": 1769543245631,
       "tag": "0000_marvelous_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1769709412796,
+      "tag": "0001_amused_firebrand",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1769709646873,
+      "tag": "0002_lush_shard",
+      "breakpoints": true
     }
   ]
 }

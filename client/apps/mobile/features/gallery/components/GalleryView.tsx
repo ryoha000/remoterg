@@ -4,11 +4,11 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import {
   View,
   FlatList,
-  Image,
   TouchableOpacity,
   Dimensions,
   ActivityIndicator,
 } from "react-native"
+import { Image } from "expo-image"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaView } from "react-native-safe-area-context"
 
@@ -71,7 +71,9 @@ const ThumbnailItem = ({
       <Image
         source={{ uri: item.uri }}
         style={{ width: "100%", height: "100%" }}
-        resizeMode="contain"
+        contentFit="cover"
+        transition={200}
+        cachePolicy="memory-disk"
       />
       <View className="absolute bottom-0 left-0 right-0 p-1 bg-black/40">
         <Text className="text-white/90 text-[10px] font-mono">
@@ -146,8 +148,12 @@ export function GalleryView({
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([])
   const [selectedAsset, setSelectedAsset] = useState<MediaLibrary.Asset | null>(null)
   const [selectedAssetOrigin, setSelectedAssetOrigin] = useState<AssetOrigin | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [hasNoAlbum, setHasNoAlbum] = useState(false)
+  const [endCursor, setEndCursor] = useState<string | null>(null)
+  const [hasNextPage, setHasNextPage] = useState(true)
+
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const flatListRef = useRef<FlatList>(null)
@@ -156,41 +162,71 @@ export function GalleryView({
   const ALBUM_NAME = "RemoteRG"
   const screenWidth = Dimensions.get("window").width
 
-  const justifiedRows = useJustifiedLayout(assets, screenWidth)
+  const filteredAssets = useMemo(() => {
+    if (!searchQuery) return assets
+    const query = searchQuery.toLowerCase()
+    return assets.filter((asset) => asset.filename.toLowerCase().includes(query))
+  }, [assets, searchQuery])
 
-  const loadAssets = useCallback(async () => {
-    if (permissionResponse?.status !== "granted") {
-      return
-    }
+  const justifiedRows = useJustifiedLayout(filteredAssets, screenWidth)
 
-    setLoading(true)
-    setHasNoAlbum(false)
-    try {
-      const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME)
-      if (!album) {
-        setHasNoAlbum(true)
-        setAssets([])
-      } else {
-        const result = await MediaLibrary.getAssetsAsync({
-          album: album,
-          mediaType: "photo",
-          sortBy: ["creationTime"],
-          first: 100,
-        })
-        setAssets(result.assets)
+  const loadAssets = useCallback(
+    async (cursor?: string | null) => {
+      if (permissionResponse?.status !== "granted") {
+        return
       }
-    } catch (e) {
-      console.error("Failed to load assets", e)
-    } finally {
-      setLoading(false)
-    }
-  }, [permissionResponse])
+
+      if (cursor) {
+        setLoadingMore(true)
+      } else {
+        setIsLoading(true)
+        setHasNoAlbum(false)
+      }
+
+      try {
+        const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME)
+        if (!album) {
+          setHasNoAlbum(true)
+          setAssets([])
+        } else {
+          const result = await MediaLibrary.getAssetsAsync({
+            album: album,
+            mediaType: "photo",
+            sortBy: ["creationTime"],
+            first: 50,
+            after: cursor || undefined,
+          })
+          
+          if (cursor) {
+            setAssets((prev) => [...prev, ...result.assets])
+          } else {
+            setAssets(result.assets)
+          }
+          
+          setHasNextPage(result.hasNextPage)
+          setEndCursor(result.endCursor)
+        }
+      } catch (e) {
+        console.error("Failed to load assets", e)
+      } finally {
+        setIsLoading(false)
+        setLoadingMore(false)
+      }
+    },
+    [permissionResponse],
+  )
 
   useEffect(() => {
     if (permissionResponse?.status === "granted") {
-      loadAssets()
+      loadAssets(null)
     }
   }, [permissionResponse, loadAssets])
+
+  const handleLoadMore = () => {
+    if (!loadingMore && hasNextPage && endCursor && !searchQuery) {
+      loadAssets(endCursor)
+    }
+  }
 
 
 
@@ -284,7 +320,7 @@ export function GalleryView({
 
           {/* Grid View */}
           <View className="flex-1 bg-zinc-900/30">
-            {loading ? (
+            {isLoading ? (
               <View className="flex-1 items-center justify-center">
                 <ActivityIndicator size="large" color="#a855f7" />
               </View>
@@ -298,7 +334,7 @@ export function GalleryView({
                   {"\n"}スクリーンショットを撮影するとここに表示されます。
                 </Text>
               </View>
-            ) : assets.length === 0 ? (
+            ) : filteredAssets.length === 0 ? (
               <View className="flex-1 items-center justify-center p-8 gap-4">
                 <View className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center">
                   <Ionicons name="images-outline" size={32} color="#3f3f46" />
@@ -334,6 +370,15 @@ export function GalleryView({
                 initialNumToRender={5}
                 maxToRenderPerBatch={5}
                 windowSize={5}
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={
+                  loadingMore ? (
+                    <View className="py-4">
+                      <ActivityIndicator size="small" color="#a855f7" />
+                    </View>
+                  ) : null
+                }
               />
             )}
           </View>

@@ -46,8 +46,8 @@ impl VideoStreamService {
     ) -> Result<()> {
         info!("VideoStreamService started");
 
-        // エンコーダーをセットアップ
-        let (encode_job_slot, mut encode_result_rx) = self.video_encoder_factory.setup();
+        // エンコード結果を集約するチャネル
+        let (encode_result_tx, mut encode_result_rx) = mpsc::unbounded_channel();
 
         // キーフレーム要求フラグ
         let keyframe_requested = Arc::new(AtomicBool::new(false));
@@ -137,7 +137,7 @@ impl VideoStreamService {
         let frame_router_handle = tokio::spawn(async move {
             frame_processor::run_frame_router(
                 self.frame_rx,
-                encode_job_slot,
+                encode_result_tx,
                 self.video_encoder_factory.clone(),
                 global_encode_enable_for_router, // エンコード可否はここで制御
                 keyframe_requested_clone,

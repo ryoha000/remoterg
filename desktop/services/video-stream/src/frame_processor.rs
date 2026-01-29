@@ -51,14 +51,14 @@ impl FrameStats {
 /// フレームルーター: フレームをエンコーダーに転送する非同期タスク
 pub async fn run_frame_router(
     mut frame_rx: tokio::sync::mpsc::Receiver<Frame>,
-    initial_encode_job_slot: Arc<EncodeJobSlot>,
+    result_tx: tokio::sync::mpsc::UnboundedSender<core_types::EncodeResult>,
     encoder_factory: Arc<dyn VideoEncoderFactory>,
     connection_ready: Arc<AtomicBool>,
     keyframe_requested: Arc<AtomicBool>,
 ) {
     info!("Frame router started");
 
-    let mut encode_job_slot = Some(initial_encode_job_slot);
+    let mut encode_job_slot: Option<Arc<EncodeJobSlot>> = None;
     let mut current_width: u32 = 0;
     let mut current_height: u32 = 0;
     let mut last_frame_ts: Option<u64> = None;
@@ -129,6 +129,30 @@ pub async fn run_frame_router(
                 );
                 current_width = frame.width;
                 current_height = frame.height;
+                
+                // 初回起動時もエンコーダーを作成・転送タスク起動が必要
+                // ただし、以前の実装では VideoStreamService で作られたものを渡されていた。
+                // 今回はここで作る必要がある。
+                // (current_width == 0 && current_height == 0) のパスに来るのは、
+                // encode_job_slot が空の場合のみ（初回）。
+                
+                if encode_job_slot.is_none() {
+                    info!("Initializing encoder for the first time");
+                    let (new_slot, mut new_rx) = encoder_factory.setup();
+                    
+                    // 結果転送タスクを起動
+                    let result_tx_clone = result_tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(res) = new_rx.recv().await {
+                            if result_tx_clone.send(res).is_err() {
+                                break;
+                            }
+                        }
+                    });
+
+                    encode_job_slot = Some(new_slot);
+                }
+
                 // 最初のキーフレームを要求
                 keyframe_requested.store(true, Ordering::Relaxed);
             } else {
@@ -145,8 +169,18 @@ pub async fn run_frame_router(
                 drop(encode_job_slot.take());
 
                 // 新しいencoderワーカーを起動
-                // TODO: 解像度変更時のencode_result_rx破棄問題を修正する必要がある
-                let (new_slot, _new_rx) = encoder_factory.setup();
+                let (new_slot, mut new_rx) = encoder_factory.setup();
+                
+                // 結果転送タスクを起動
+                let result_tx_clone = result_tx.clone();
+                tokio::spawn(async move {
+                    while let Some(res) = new_rx.recv().await {
+                        if result_tx_clone.send(res).is_err() {
+                            break;
+                        }
+                    }
+                });
+
                 encode_job_slot = Some(new_slot);
 
                 current_width = frame.width;

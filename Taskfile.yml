@@ -27,3 +27,7 @@ tasks:
     dir: "client/apps/web"
     cmds:
       - pnpm exec tsx scripts/e2e-test.ts
+  android:
+    dir: "client/apps/mobile"
+    cmds:
+      - pnpm run android

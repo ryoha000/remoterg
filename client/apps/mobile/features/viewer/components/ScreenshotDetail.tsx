@@ -516,11 +516,6 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                   <Text className="text-xl font-bold text-white">情報</Text>
                 </View>
 
-                {/* Editable Description Placeholder */}
-                <View className="mb-6">
-                  <Text className="text-zinc-400 text-base">説明を追加...</Text>
-                </View>
-
                 <View className="gap-6">
                   <View>
                     <View className="flex-row items-center gap-2 mb-2">
@@ -544,17 +539,6 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                       {assetInfo ? formatSize(assetInfo.localUri ? undefined : 0) : "Loading..."} •{" "}
                       {currentAsset.filename}
                     </Text>
-                  </View>
-
-                  <View>
-                    <View className="flex-row items-center gap-2 mb-2">
-                      <Ionicons name="location-outline" size={16} color="#a1a1aa" />
-                      <Text className="text-zinc-400 font-medium">位置情報</Text>
-                    </View>
-                    <View className="h-32 bg-zinc-800 rounded-lg items-center justify-center">
-                      <Ionicons name="map" size={32} color="#3f3f46" />
-                      <Text className="text-zinc-500 text-xs mt-2">Map unavailable</Text>
-                    </View>
                   </View>
                 </View>
 

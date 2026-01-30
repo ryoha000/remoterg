@@ -398,23 +398,10 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
       close: handleClose,
     }))
 
-    const handleDelete = () => {
-      Alert.alert(
-        "画像を削除",
-        "このスクリーンショットを削除してもよろしいですか？",
-        [
-          { text: "キャンセル", style: "cancel" },
-          {
-            text: "削除",
-            style: "destructive",
-            onPress: async () => {
-                if (onDelete) {
-                    await onDelete(currentAsset.id)
-                }
-            }
-          },
-        ]
-      )
+    const handleDelete = async () => {
+      if (onDelete) {
+        await onDelete(currentAsset.id)
+      }
     }
 
     const toggleInfo = () => {

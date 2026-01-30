@@ -3,7 +3,7 @@ import { Image } from "expo-image"
 import * as MediaLibrary from "expo-media-library"
 import { StatusBar } from "expo-status-bar"
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { View, FlatList, TouchableOpacity, Dimensions, ActivityIndicator } from "react-native"
+import { View, FlatList, TouchableOpacity, Dimensions, ActivityIndicator, SectionList } from "react-native"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaView } from "react-native-safe-area-context"
 
@@ -38,6 +38,12 @@ interface JustifiedRow {
 
 const SPACING = 2
 const TARGET_ROW_HEIGHT = 240
+
+interface DateSection {
+  title: string
+  date: Date
+  data: JustifiedRow[]
+}
 
 const ThumbnailItem = ({
   item,
@@ -83,54 +89,133 @@ const ThumbnailItem = ({
   )
 }
 
-function useJustifiedLayout(assets: MediaLibrary.Asset[], containerWidth: number) {
-  return useMemo(() => {
-    if (containerWidth === 0) return []
+function formatDateHeader(date: Date): string {
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate())
 
-    const rows: JustifiedRow[] = []
-    let currentRowItems: MediaLibrary.Asset[] = []
-    let currentRowAspectRatio = 0
+  if (target.getTime() === today.getTime()) {
+    return "今日"
+  }
+  if (target.getTime() === yesterday.getTime()) {
+    return "昨日"
+  }
+
+  // If within the last 7 days, show day of week
+  const diffTime = Math.abs(today.getTime() - target.getTime())
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+  if (diffDays < 7) {
+    const days = ["日", "月", "火", "水", "木", "金", "土"]
+    return `${days[target.getDay()]}曜日`
+  }
+
+  // If this year, show Month Day
+  if (target.getFullYear() === today.getFullYear()) {
+    return `${target.getMonth() + 1}月${target.getDate()}日`
+  }
+
+  // Otherwise show Year Month Day
+  return `${target.getFullYear()}年${target.getMonth() + 1}月${target.getDate()}日`
+}
+
+function useJustifiedLayoutWithDates(
+  assets: MediaLibrary.Asset[],
+  containerWidth: number,
+): DateSection[] {
+  return useMemo(() => {
+    if (containerWidth === 0 || assets.length === 0) return []
+
+    // Group assets by date
+    const assetsByDate = new Map<string, MediaLibrary.Asset[]>()
 
     for (const asset of assets) {
-      currentRowItems.push(asset)
-      currentRowAspectRatio += asset.width / asset.height
+      const date = new Date(asset.creationTime)
+      const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
 
-      const estimatedWidth = currentRowAspectRatio * TARGET_ROW_HEIGHT
-      const heightToMatchWidth =
-        (containerWidth - currentRowItems.length * SPACING) / currentRowAspectRatio
-
-      if (estimatedWidth >= containerWidth) {
-        const rowHeight =
-          (containerWidth - currentRowItems.length * SPACING) / currentRowAspectRatio
-
-        rows.push({
-          id: currentRowItems[0].id,
-          items: currentRowItems.map((a) => ({
-            asset: a,
-            width: (a.width / a.height) * rowHeight,
-            height: rowHeight,
-          })),
-          height: rowHeight,
-        })
-
-        currentRowItems = []
-        currentRowAspectRatio = 0
+      if (!assetsByDate.has(dateKey)) {
+        assetsByDate.set(dateKey, [])
       }
+      assetsByDate.get(dateKey)?.push(asset)
     }
 
-    if (currentRowItems.length > 0) {
-      rows.push({
-        id: currentRowItems[0].id + "-last",
-        items: currentRowItems.map((a) => ({
-          asset: a,
-          width: (a.width / a.height) * TARGET_ROW_HEIGHT,
+    // Sort dates descending
+    const sortedDates = Array.from(assetsByDate.keys()).sort((a, b) => {
+      const dateA = new Date(a.replace(/-/g, "/")) // Fix for some JS environments
+      const dateB = new Date(b.replace(/-/g, "/"))
+      // Convert to timestamps manually if needed, but Date subtraction usually works
+      const timeA = new Date(
+        parseInt(a.split("-")[0]),
+        parseInt(a.split("-")[1]),
+        parseInt(a.split("-")[2]),
+      ).getTime()
+      const timeB = new Date(
+        parseInt(b.split("-")[0]),
+        parseInt(b.split("-")[1]),
+        parseInt(b.split("-")[2]),
+      ).getTime()
+
+      return timeB - timeA
+    })
+
+    const sections: DateSection[] = []
+
+    for (const dateKey of sortedDates) {
+      const dateAssets = assetsByDate.get(dateKey) || []
+      const rows: JustifiedRow[] = []
+      let currentRowItems: MediaLibrary.Asset[] = []
+      let currentRowAspectRatio = 0
+
+      // Justified layout logic for this section
+      for (const asset of dateAssets) {
+        currentRowItems.push(asset)
+        currentRowAspectRatio += asset.width / asset.height
+
+        const estimatedWidth = currentRowAspectRatio * TARGET_ROW_HEIGHT
+
+        if (estimatedWidth >= containerWidth) {
+          const rowHeight =
+            (containerWidth - currentRowItems.length * SPACING) / currentRowAspectRatio
+
+          rows.push({
+            id: currentRowItems[0].id,
+            items: currentRowItems.map((a) => ({
+              asset: a,
+              width: (a.width / a.height) * rowHeight,
+              height: rowHeight,
+            })),
+            height: rowHeight,
+          })
+
+          currentRowItems = []
+          currentRowAspectRatio = 0
+        }
+      }
+
+      if (currentRowItems.length > 0) {
+        rows.push({
+          id: currentRowItems[0].id + "-last",
+          items: currentRowItems.map((a) => ({
+            asset: a,
+            width: (a.width / a.height) * TARGET_ROW_HEIGHT,
+            height: TARGET_ROW_HEIGHT,
+          })),
           height: TARGET_ROW_HEIGHT,
-        })),
-        height: TARGET_ROW_HEIGHT,
+        })
+      }
+
+      // Reconstruct date object from key to be safe
+      const [year, month, day] = dateKey.split("-").map(Number)
+
+      sections.push({
+        title: formatDateHeader(new Date(year, month, day)),
+        date: new Date(year, month, day),
+        data: rows,
       })
     }
 
-    return rows
+    return sections
   }, [assets, containerWidth])
 }
 
@@ -153,7 +238,11 @@ export function GalleryView({
 
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const flatListRef = useRef<FlatList>(null)
+  // const flatListRef = useRef<FlatList>(null) // Use SectionList ref if needed, but scrollToAsset logic needs update
+  // We'll skip scrollToAsset implementation for now as it's complex with SectionList
+  // or implement a basic version if critical.
+  const sectionListRef = useRef<import("react-native").SectionList>(null)
+
   const itemRefs = useRef<Map<string, View>>(new Map()).current
   const [assetInfoMap, setAssetInfoMap] = useState<Record<string, MediaLibrary.AssetInfo>>({})
 
@@ -166,7 +255,7 @@ export function GalleryView({
     return assets.filter((asset) => asset.filename.toLowerCase().includes(query))
   }, [assets, searchQuery])
 
-  const justifiedRows = useJustifiedLayout(filteredAssets, screenWidth)
+  const sections = useJustifiedLayoutWithDates(filteredAssets, screenWidth)
 
   const loadAssets = useCallback(
     async (cursor?: string | null) => {
@@ -284,24 +373,26 @@ export function GalleryView({
 
   const scrollToAsset = useCallback(
     (index: number) => {
-      let rowIndex = 0
+      const asset = filteredAssets[index]
+      if (!asset) return
 
-      for (let i = 0; i < justifiedRows.length; i++) {
-        const row = justifiedRows[i]
-        const rowHasItem = row.items.some((item) => item.asset.id === assets[index].id)
-        if (rowHasItem) {
-          rowIndex = i
-          break
+      for (let s = 0; s < sections.length; s++) {
+        const section = sections[s]
+        for (let r = 0; r < section.data.length; r++) {
+          const row = section.data[r]
+          if (row.items.some((item) => item.asset.id === asset.id)) {
+            sectionListRef.current?.scrollToLocation({
+              sectionIndex: s,
+              itemIndex: r,
+              viewOffset: 0,
+              animated: false,
+            })
+            return
+          }
         }
       }
-
-      flatListRef.current?.scrollToIndex({
-        index: rowIndex,
-        animated: false,
-        viewPosition: 0.5,
-      })
     },
-    [justifiedRows, assets],
+    [sections, filteredAssets],
   )
 
   const handleDeleteAsset = useCallback(
@@ -322,9 +413,10 @@ export function GalleryView({
         // 4. Handle selection if needed
         if (selectedAsset?.id === id) {
           // Find next asset to show
-          const currentIndex = assets.findIndex((a) => a.id === id)
+          // We use filteredAssets to determine the next logical asset in the current context
+          const currentIndex = filteredAssets.findIndex((a) => a.id === id)
           if (currentIndex !== -1) {
-            const nextAsset = assets[currentIndex + 1] || assets[currentIndex - 1]
+            const nextAsset = filteredAssets[currentIndex + 1] || filteredAssets[currentIndex - 1]
             if (nextAsset) {
               setSelectedAsset(nextAsset)
               // We might need to update origin, but for now just switching asset is enough
@@ -342,7 +434,7 @@ export function GalleryView({
         // Ideally show error toast
       }
     },
-    [assets, selectedAsset],
+    [assets, filteredAssets, selectedAsset],
   )
 
   const handleBack = () => {
@@ -423,9 +515,10 @@ export function GalleryView({
                 <Text className="text-zinc-500 text-center">画像がありません。</Text>
               </View>
             ) : (
-              <FlatList
-                ref={flatListRef}
-                data={justifiedRows}
+              <SectionList
+                ref={sectionListRef}
+                sections={sections}
+                keyExtractor={(item) => item.id}
                 renderItem={({ item: row }) => (
                   <View style={{ flexDirection: "row", marginBottom: SPACING }}>
                     {row.items.map((img: JustifiedRow["items"][number]) => (
@@ -446,8 +539,13 @@ export function GalleryView({
                     ))}
                   </View>
                 )}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={{ padding: SPACING / 2 }}
+                renderSectionHeader={({ section: { title } }) => (
+                  <View className="bg-zinc-950/90 py-4 px-2 backdrop-blur-sm">
+                    <Text className="text-zinc-400 font-medium text-sm">{title}</Text>
+                  </View>
+                )}
+                stickySectionHeadersEnabled={true}
+                contentContainerStyle={{ paddingBottom: 20 }}
                 initialNumToRender={5}
                 maxToRenderPerBatch={5}
                 windowSize={5}
@@ -467,8 +565,8 @@ export function GalleryView({
         {selectedAsset && (
           <ScreenshotDetail
             ref={screenshotDetailRef}
-            assets={assets}
-            initialIndex={assets.findIndex((a) => a.id === selectedAsset.id)}
+            assets={filteredAssets}
+            initialIndex={filteredAssets.findIndex((a) => a.id === selectedAsset.id)}
             origin={selectedAssetOrigin}
             getAssetOrigin={getAssetOrigin}
             onCurrentIndexChange={scrollToAsset}

@@ -2,6 +2,26 @@ import { eq, desc, sql } from "drizzle-orm"
 
 import { db } from "../client"
 import { screenshotMap } from "../schema/screenshots"
+import { analysisResults } from "../schema/analysis"
+
+export const deleteScreenshot = async (localId: string) => {
+  try {
+    await db.transaction(async (tx) => {
+      // Delete from screenshotMap
+      await tx.delete(screenshotMap).where(eq(screenshotMap.localId, localId))
+      
+      // Delete from analysisResults (if exists)
+      await tx.delete(analysisResults).where(eq(analysisResults.localId, localId))
+    })
+  } catch (error) {
+    console.error("Failed to delete screenshot metadata", error)
+    // We don't throw here to avoid blocking filesystem deletion if DB fails, 
+    // but ideally they should be in sync. 
+    // For now, let's allow the UI to proceed even if DB cleanup has partial issues,
+    // though transaction ensures atomicity of DB operations.
+    throw error
+  }
+}
 
 export const mapScreenshot = async (
   localId: string,

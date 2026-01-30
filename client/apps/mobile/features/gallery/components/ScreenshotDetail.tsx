@@ -11,6 +11,7 @@ import {
   TouchableWithoutFeedback,
   ActivityIndicator,
   ScrollView,
+  Alert,
 } from "react-native"
 import { Gesture, GestureDetector, FlatList } from "react-native-gesture-handler"
 import Animated, {
@@ -53,6 +54,7 @@ interface ScreenshotDetailProps {
   isAnalyzingMap?: Record<string, boolean>
   assetInfoMap: Record<string, MediaLibrary.AssetInfo>
   onAssetInfoLoaded: (id: string, info: MediaLibrary.AssetInfo) => void
+  onDelete?: (id: string) => Promise<void>
 }
 
 export interface ScreenshotDetailRef {
@@ -268,6 +270,7 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
       isAnalyzingMap,
       assetInfoMap,
       onAssetInfoLoaded,
+      onDelete,
     },
     ref,
   ) => {
@@ -285,18 +288,30 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
     const [showInfo, setShowInfo] = useState(false)
     // Default to false (Fullscreen) as per "Initially object-fit: contain" request
 
+    // Safety: Clamp index if assets change (e.g. deletion)
+    useEffect(() => {
+        if (currentIndex >= assets.length && assets.length > 0) {
+            setCurrentIndex(assets.length - 1)
+        }
+    }, [assets.length, currentIndex])
+
     const currentAsset = assets[currentIndex]
-    const currentAssetInfo = assetInfoMap[currentAsset.id]
+    
+    // Guard against undefined asset is handled by checks below
+    // if (!currentAsset) return null
+
+    const currentAssetInfo = currentAsset ? assetInfoMap[currentAsset.id] : undefined
 
     // Load persisted analysis & Resolve Host ID
-    const { data: dbHostInfo } = useHostId(currentAsset.id)
+    const { data: dbHostInfo } = useHostId(currentAsset?.id ?? "")
     const hostId = useMemo(() => {
+      if (!currentAsset) return null
       if (dbHostInfo) return dbHostInfo.hostId
       return currentAsset.filename?.replace(/\.[^/.]+$/, "") || currentAsset.id
     }, [dbHostInfo, currentAsset])
 
     // Load analysis using Local ID
-    const { data: savedAnalysis } = useAnalysis(currentAsset.id)
+    const { data: savedAnalysis } = useAnalysis(currentAsset?.id ?? "")
 
     const sessionAnalysis = hostId ? analysisResults?.[hostId] : null
     const analysis = sessionAnalysis || savedAnalysis
@@ -383,6 +398,25 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
       close: handleClose,
     }))
 
+    const handleDelete = () => {
+      Alert.alert(
+        "画像を削除",
+        "このスクリーンショットを削除してもよろしいですか？",
+        [
+          { text: "キャンセル", style: "cancel" },
+          {
+            text: "削除",
+            style: "destructive",
+            onPress: async () => {
+                if (onDelete) {
+                    await onDelete(currentAsset.id)
+                }
+            }
+          },
+        ]
+      )
+    }
+
     const toggleInfo = () => {
       setShowInfo((prev) => !prev)
     }
@@ -436,6 +470,8 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
         }
       }
     }).current
+
+    if (!currentAsset) return null
 
     return (
       <View className="flex-1 bg-transparent absolute inset-0 z-50">
@@ -685,7 +721,9 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
                 <Text className="text-white text-xs">編集</Text>
               </View>
               <View className="items-center gap-1">
-                <Ionicons name="trash-outline" size={20} color="white" />
+                <Button variant="ghost" size="icon" onPress={handleDelete}>
+                   <Ionicons name="trash-outline" size={20} color="white" />
+                </Button>
                 <Text className="text-white text-xs">ゴミ箱</Text>
               </View>
             </View>

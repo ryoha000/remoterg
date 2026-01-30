@@ -77,14 +77,6 @@ const ThumbnailItem = ({
         transition={200}
         cachePolicy="memory-disk"
       />
-      <View className="absolute bottom-0 left-0 right-0 p-1 bg-black/40">
-        <Text className="text-white/90 text-[10px] font-mono">
-          {new Date(item.creationTime).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </Text>
-      </View>
     </TouchableOpacity>
   )
 }

@@ -1,4 +1,5 @@
 import { PortalHost } from "@rn-primitives/portal"
+import Toast from "react-native-toast-message"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Stack } from "expo-router"
 import { Text, View } from "react-native"
@@ -36,6 +37,7 @@ export default function RootLayout() {
         <GestureHandlerRootView style={{ flex: 1 }}>
           <Stack screenOptions={{ headerShown: false }} />
           <PortalHost />
+          <Toast />
         </GestureHandlerRootView>
       </ViewerProvider>
     </QueryClientProvider>

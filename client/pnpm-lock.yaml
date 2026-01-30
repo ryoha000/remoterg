@@ -146,6 +146,9 @@ importers:
       react-native-share:
         specifier: ^12.2.4
         version: 12.2.4
+      react-native-toast-message:
+        specifier: ^2.3.3
+        version: 2.3.3(react-native@0.81.5(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react-native-web:
         specifier: ~0.21.0
         version: 0.21.2(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -6751,6 +6754,12 @@ packages:
   react-native-share@12.2.4:
     resolution: {integrity: sha512-H9q9lXcB322jMMMQ3xAg2QFux2gznJzztcNnycK4iqL/XjDGULf/MWkdwBXUfEEhl6ydnGmhP6huRMRYiyIGng==}
     engines: {node: '>=16'}
+
+  react-native-toast-message@2.3.3:
+    resolution: {integrity: sha512-4IIUHwUPvKHu4gjD0Vj2aGQzqPATiblL1ey8tOqsxOWRPGGu52iIbL8M/mCz4uyqecvPdIcMY38AfwRuUADfQQ==}
+    peerDependencies:
+      react: '*'
+      react-native: '*'
 
   react-native-web@0.21.2:
     resolution: {integrity: sha512-SO2t9/17zM4iEnFvlu2DA9jqNbzNhoUP+AItkoCOyFmDMOhUnBBznBDCYN92fGdfAkfQlWzPoez6+zLxFNsZEg==}
@@ -15001,6 +15010,11 @@ snapshots:
       warn-once: 0.1.1
 
   react-native-share@12.2.4: {}
+
+  react-native-toast-message@2.3.3(react-native@0.81.5(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
+    dependencies:
+      react: 19.1.0
+      react-native: 0.81.5(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.1.0)
 
   react-native-web@0.21.2(react-dom@19.1.0(react@19.1.0))(react@19.1.0):
     dependencies:

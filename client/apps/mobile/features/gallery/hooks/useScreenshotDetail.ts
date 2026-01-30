@@ -161,45 +161,40 @@ export const useScreenshotDetail = ({
   }
 
   const handleTwitterShare = async () => {
-    try {
-      if (!currentAsset) return
-      const uri = currentAsset.uri
-      if (!uri) return
+    if (!currentAsset) return
+    const uri = currentAsset.uri
+    if (!uri) return
 
-      if (Platform.OS === "android") {
-        const cacheDir = FileSystem.cacheDirectory
-        if (!cacheDir) {
-          throw new Error("Cache directory not available")
-        }
-
-        // 拡張子を元のファイルに合わせる（重要）
-        const cacheFileUri = `${cacheDir}twitter-share-tmp.png`
-
-        // 1. キャッシュディレクトリにコピー（既にある場合は上書き）
-        await FileSystem.copyAsync({
-          from: uri,
-          to: cacheFileUri,
-        })
-
-        // 2. Base64に変換せず、ファイルURIをそのまま渡す
-        // react-native-share は 'file://' 形式を期待しています
-        await Share.shareSingle({
-          title: "Share via Twitter",
-          url: cacheFileUri, // 'data:image/...' ではなく 'file://...'
-          type: "image/png", // 実際の形式に合わせる
-          social: Social.Twitter,
-        })
-      } else {
-        // iOS
-        await Share.shareSingle({
-          title: "Share via Twitter",
-          url: uri,
-          social: Social.Twitter,
-        })
+    if (Platform.OS === "android") {
+      const cacheDir = FileSystem.cacheDirectory
+      if (!cacheDir) {
+        throw new Error("Cache directory not available")
       }
-    } catch (e: any) {
-      console.error("Twitter share failed", e)
-      Alert.alert("Share Error", `Failed to share: ${e.message || e}`)
+
+      // 拡張子を元のファイルに合わせる（重要）
+      const cacheFileUri = `${cacheDir}twitter-share-tmp.png`
+
+      // 1. キャッシュディレクトリにコピー（既にある場合は上書き）
+      await FileSystem.copyAsync({
+        from: uri,
+        to: cacheFileUri,
+      })
+
+      // 2. Base64に変換せず、ファイルURIをそのまま渡す
+      // react-native-share は 'file://' 形式を期待しています
+      await Share.shareSingle({
+        title: "Share via Twitter",
+        url: cacheFileUri, // 'data:image/...' ではなく 'file://...'
+        type: "image/png", // 実際の形式に合わせる
+        social: Social.Twitter,
+      })
+    } else {
+      // iOS
+      await Share.shareSingle({
+        title: "Share via Twitter",
+        url: uri,
+        social: Social.Twitter,
+      })
     }
   }
 

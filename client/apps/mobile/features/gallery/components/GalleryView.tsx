@@ -389,41 +389,36 @@ export function GalleryView({
 
   const handleDeleteAsset = useCallback(
     async (id: string) => {
-      try {
-        // 1. Delete from MediaLibrary
-        const assetToDelete = assets.find((a) => a.id === id)
-        if (assetToDelete) {
-          await MediaLibrary.deleteAssetsAsync([assetToDelete])
-        }
+      // 1. Delete from MediaLibrary
+      const assetToDelete = assets.find((a) => a.id === id)
+      if (assetToDelete) {
+        await MediaLibrary.deleteAssetsAsync([assetToDelete])
+      }
 
-        // 2. Delete from DB
-        await deleteScreenshot(id)
+      // 2. Delete from DB
+      await deleteScreenshot(id)
 
-        // 3. Update local state
-        setAssets((prev) => prev.filter((a) => a.id !== id))
+      // 3. Update local state
+      setAssets((prev) => prev.filter((a) => a.id !== id))
 
-        // 4. Handle selection if needed
-        if (selectedAsset?.id === id) {
-          // Find next asset to show
-          // We use filteredAssets to determine the next logical asset in the current context
-          const currentIndex = filteredAssets.findIndex((a) => a.id === id)
-          if (currentIndex !== -1) {
-            const nextAsset = filteredAssets[currentIndex + 1] || filteredAssets[currentIndex - 1]
-            if (nextAsset) {
-              setSelectedAsset(nextAsset)
-              // We might need to update origin, but for now just switching asset is enough
-              // The detail view will re-render with new asset
-            } else {
-              // No more assets
-              setSelectedAsset(null)
-            }
+      // 4. Handle selection if needed
+      if (selectedAsset?.id === id) {
+        // Find next asset to show
+        // We use filteredAssets to determine the next logical asset in the current context
+        const currentIndex = filteredAssets.findIndex((a) => a.id === id)
+        if (currentIndex !== -1) {
+          const nextAsset = filteredAssets[currentIndex + 1] || filteredAssets[currentIndex - 1]
+          if (nextAsset) {
+            setSelectedAsset(nextAsset)
+            // We might need to update origin, but for now just switching asset is enough
+            // The detail view will re-render with new asset
           } else {
+            // No more assets
             setSelectedAsset(null)
           }
+        } else {
+          setSelectedAsset(null)
         }
-      } catch (e) {
-        console.error("Failed to delete asset", e)
-        // Ideally show error toast
       }
     },
     [assets, filteredAssets, selectedAsset],

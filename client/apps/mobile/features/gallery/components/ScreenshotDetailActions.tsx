@@ -31,19 +31,19 @@ export const ScreenshotDetailActions = ({
     >
       <View className="bg-black/60 backdrop-blur-md pb-8 pt-4 flex-row justify-around items-center border-t border-white/10">
         <View className="items-center gap-1">
-          <Button variant="ghost" size="icon" onPress={onTwitterShare}>
+          <Button variant="ghost" size="icon" onPress={onTwitterShare} className="active:bg-white/20">
             <Ionicons name="logo-twitter" size={20} color="white" />
           </Button>
           <Text className="text-white text-xs">Twitter</Text>
         </View>
         <View className="items-center gap-1">
-          <Button variant="ghost" size="icon" onPress={onGenericShare}>
+          <Button variant="ghost" size="icon" onPress={onGenericShare} className="active:bg-white/20">
             <Ionicons name="share-outline" size={20} color="white" />
           </Button>
           <Text className="text-white text-xs">共有</Text>
         </View>
         <View className="items-center gap-1">
-          <Button variant="ghost" size="icon" onPress={onDelete}>
+          <Button variant="ghost" size="icon" onPress={onDelete} className="active:bg-white/20">
             <Ionicons name="trash-outline" size={20} color="white" />
           </Button>
           <Text className="text-white text-xs">ゴミ箱</Text>

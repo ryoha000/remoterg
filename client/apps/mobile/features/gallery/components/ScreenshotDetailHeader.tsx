@@ -32,16 +32,16 @@ export const ScreenshotDetailHeader = ({ onClose, style }: ScreenshotDetailHeade
         <Button
           variant="ghost"
           size="icon"
-          className="rounded-full bg-black/20"
+          className="rounded-full bg-black/20 active:bg-white/20"
           onPress={onClose}
         >
           <Ionicons name="arrow-back" size={24} color="#ffffff" />
         </Button>
         <View className="flex-1" />
-        <Button variant="ghost" size="icon" className="rounded-full bg-black/20">
+        <Button variant="ghost" size="icon" className="rounded-full bg-black/20 active:bg-white/20">
           <Ionicons name="star-outline" size={24} color="#ffffff" />
         </Button>
-        <Button variant="ghost" size="icon" className="rounded-full bg-black/20">
+        <Button variant="ghost" size="icon" className="rounded-full bg-black/20 active:bg-white/20">
           <Ionicons name="ellipsis-vertical" size={24} color="#ffffff" />
         </Button>
       </View>

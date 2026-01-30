@@ -1,7 +1,9 @@
 import { Ionicons } from "@expo/vector-icons"
 import { BlurView } from "expo-blur"
+import * as FileSystem from "expo-file-system/legacy"
 import { Image } from "expo-image"
 import * as MediaLibrary from "expo-media-library"
+import * as Sharing from "expo-sharing"
 import { StatusBar } from "expo-status-bar"
 import { forwardRef, useImperativeHandle, useEffect, useState, useRef, useMemo } from "react"
 import {
@@ -12,6 +14,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
+  Platform,
 } from "react-native"
 import { Gesture, GestureDetector, FlatList } from "react-native-gesture-handler"
 import Animated, {
@@ -25,6 +28,7 @@ import Animated, {
   Extrapolation,
 } from "react-native-reanimated"
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
+import Share, { Social } from "react-native-share"
 
 import { Button } from "@/components/ui/button"
 import { useAnalysis } from "@/db/queries/use-analysis"
@@ -290,13 +294,13 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
 
     // Safety: Clamp index if assets change (e.g. deletion)
     useEffect(() => {
-        if (currentIndex >= assets.length && assets.length > 0) {
-            setCurrentIndex(assets.length - 1)
-        }
+      if (currentIndex >= assets.length && assets.length > 0) {
+        setCurrentIndex(assets.length - 1)
+      }
     }, [assets.length, currentIndex])
 
     const currentAsset = assets[currentIndex]
-    
+
     // Guard against undefined asset is handled by checks below
     // if (!currentAsset) return null
 
@@ -401,6 +405,55 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
     const handleDelete = async () => {
       if (onDelete) {
         await onDelete(currentAsset.id)
+      }
+    }
+
+    const handleTwitterShare = async () => {
+      try {
+        const uri = currentAsset.uri
+        if (!uri) return
+
+        if (Platform.OS === "android") {
+          const cacheDir = FileSystem.cacheDirectory
+          if (!cacheDir) {
+            throw new Error("Cache directory not available")
+          }
+
+          // 拡張子を元のファイルに合わせる（重要）
+          const cacheFileUri = `${cacheDir}twitter-share-tmp.png`
+
+          // 1. キャッシュディレクトリにコピー（既にある場合は上書き）
+          await FileSystem.copyAsync({
+            from: uri,
+            to: cacheFileUri,
+          })
+
+          // 2. Base64に変換せず、ファイルURIをそのまま渡す
+          // react-native-share は 'file://' 形式を期待しています
+          await Share.shareSingle({
+            title: "Share via Twitter",
+            url: cacheFileUri, // 'data:image/...' ではなく 'file://...'
+            type: "image/png", // 実際の形式に合わせる
+            social: Social.Twitter,
+          })
+        } else {
+          // iOS
+          await Share.shareSingle({
+            title: "Share via Twitter",
+            url: uri,
+            social: Social.Twitter,
+          })
+        }
+      } catch (e) {
+        console.error("Twitter share failed", e)
+        Alert.alert("Share Error", `Failed to share: ${e.message || e}`)
+      }
+    }
+
+    const handleGenericShare = async () => {
+      const uri = currentAsset.uri
+      if (uri) {
+        await Sharing.shareAsync(uri)
       }
     }
 
@@ -700,16 +753,20 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
           >
             <View className="bg-black/60 backdrop-blur-md pb-8 pt-4 flex-row justify-around items-center border-t border-white/10">
               <View className="items-center gap-1">
-                <Ionicons name="share-outline" size={20} color="white" />
+                <Button variant="ghost" size="icon" onPress={handleTwitterShare}>
+                  <Ionicons name="logo-twitter" size={20} color="white" />
+                </Button>
+                <Text className="text-white text-xs">Twitter</Text>
+              </View>
+              <View className="items-center gap-1">
+                <Button variant="ghost" size="icon" onPress={handleGenericShare}>
+                  <Ionicons name="share-outline" size={20} color="white" />
+                </Button>
                 <Text className="text-white text-xs">共有</Text>
               </View>
               <View className="items-center gap-1">
-                <Ionicons name="options-outline" size={20} color="white" />
-                <Text className="text-white text-xs">編集</Text>
-              </View>
-              <View className="items-center gap-1">
                 <Button variant="ghost" size="icon" onPress={handleDelete}>
-                   <Ionicons name="trash-outline" size={20} color="white" />
+                  <Ionicons name="trash-outline" size={20} color="white" />
                 </Button>
                 <Text className="text-white text-xs">ゴミ箱</Text>
               </View>

@@ -10,15 +10,15 @@ import { SafeAreaView } from "react-native-safe-area-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
+import { getScreenshotsByTitle, deleteScreenshot } from "@/db/services/screenshot-service"
 
+import { GameFilterList } from "./GameFilterList"
 import {
   AssetOrigin,
   ScreenshotDetail,
   ScreenshotDetailRef,
   AnalysisResult,
 } from "./ScreenshotDetail"
-import { GameFilterList } from "./GameFilterList"
-import { getScreenshotsByTitle, deleteScreenshot } from "@/db/services/screenshot-service"
 
 interface GalleryViewProps {
   onBack: () => void
@@ -190,25 +190,26 @@ export function GalleryView({
           const localIds = await getScreenshotsByTitle(selectedGameTitle, limit, offset)
 
           if (localIds.length === 0 && offset === 0) {
-             setAssets([])
-             setHasNextPage(false)
-             setEndCursor(null)
+            setAssets([])
+            setHasNextPage(false)
+            setEndCursor(null)
           } else {
             // Fetch asset info for each ID
             // We use Promise.all to fetch in parallel
-            const assetPromises = localIds.map(id => MediaLibrary.getAssetInfoAsync(id))
-            const fetchedAssets = (await Promise.all(assetPromises)).filter(a => a !== null) as MediaLibrary.Asset[]
-            
+            const assetPromises = localIds.map((id) => MediaLibrary.getAssetInfoAsync(id))
+            const fetchedAssets = (await Promise.all(assetPromises)).filter(
+              (a) => a !== null,
+            ) as MediaLibrary.Asset[]
+
             if (cursor) {
               setAssets((prev) => [...prev, ...fetchedAssets])
             } else {
               setAssets(fetchedAssets)
             }
-            
+
             setHasNextPage(localIds.length === limit)
             setEndCursor((offset + limit).toString())
           }
-
         } else {
           // Normal Album Mode
           const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME)
@@ -304,44 +305,46 @@ export function GalleryView({
     [justifiedRows, assets],
   )
 
-  const handleDeleteAsset = useCallback(async (id: string) => {
-    try {
-      // 1. Delete from MediaLibrary
-      const assetToDelete = assets.find(a => a.id === id)
-      if (assetToDelete) {
-        await MediaLibrary.deleteAssetsAsync([assetToDelete])
-      }
-      
-      // 2. Delete from DB
-      await deleteScreenshot(id)
+  const handleDeleteAsset = useCallback(
+    async (id: string) => {
+      try {
+        // 1. Delete from MediaLibrary
+        const assetToDelete = assets.find((a) => a.id === id)
+        if (assetToDelete) {
+          await MediaLibrary.deleteAssetsAsync([assetToDelete])
+        }
 
-      // 3. Update local state
-      setAssets(prev => prev.filter(a => a.id !== id))
-      
-      // 4. Handle selection if needed
-      if (selectedAsset?.id === id) {
+        // 2. Delete from DB
+        await deleteScreenshot(id)
+
+        // 3. Update local state
+        setAssets((prev) => prev.filter((a) => a.id !== id))
+
+        // 4. Handle selection if needed
+        if (selectedAsset?.id === id) {
           // Find next asset to show
-          const currentIndex = assets.findIndex(a => a.id === id)
+          const currentIndex = assets.findIndex((a) => a.id === id)
           if (currentIndex !== -1) {
-              const nextAsset = assets[currentIndex + 1] || assets[currentIndex - 1]
-              if (nextAsset) {
-                  setSelectedAsset(nextAsset)
-                   // We might need to update origin, but for now just switching asset is enough
-                  // The detail view will re-render with new asset
-              } else {
-                  // No more assets
-                  setSelectedAsset(null)
-              }
-          } else {
+            const nextAsset = assets[currentIndex + 1] || assets[currentIndex - 1]
+            if (nextAsset) {
+              setSelectedAsset(nextAsset)
+              // We might need to update origin, but for now just switching asset is enough
+              // The detail view will re-render with new asset
+            } else {
+              // No more assets
               setSelectedAsset(null)
+            }
+          } else {
+            setSelectedAsset(null)
           }
+        }
+      } catch (e) {
+        console.error("Failed to delete asset", e)
+        // Ideally show error toast
       }
-
-    } catch (e) {
-      console.error("Failed to delete asset", e)
-      // Ideally show error toast
-    }
-  }, [assets, selectedAsset])
+    },
+    [assets, selectedAsset],
+  )
 
   const handleBack = () => {
     if (selectedAsset) {
@@ -395,10 +398,7 @@ export function GalleryView({
           </View>
 
           {/* Filter List */}
-          <GameFilterList
-            selectedTitle={selectedGameTitle}
-            onSelectTitle={setSelectedGameTitle}
-          />
+          <GameFilterList selectedTitle={selectedGameTitle} onSelectTitle={setSelectedGameTitle} />
 
           {/* Grid View */}
           <View className="flex-1 bg-zinc-900/30">

@@ -13,11 +13,10 @@ import { Text } from "@/components/ui/text"
 import { getScreenshotsByTitle, deleteScreenshot } from "@/db/services/screenshot-service"
 
 import { GameFilterList } from "./GameFilterList"
+import { AnalysisResult, AssetOrigin } from "../types"
 import {
-  AssetOrigin,
   ScreenshotDetail,
   ScreenshotDetailRef,
-  AnalysisResult,
 } from "./ScreenshotDetail"
 
 interface GalleryViewProps {

@@ -21,3 +21,10 @@ export interface AnalysisResult {
   dialogue?: Dialogue
   characters?: Character[]
 }
+
+export interface AssetOrigin {
+  x: number
+  y: number
+  width: number
+  height: number
+}

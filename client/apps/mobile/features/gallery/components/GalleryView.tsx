@@ -17,6 +17,8 @@ import {
   ScreenshotDetailRef,
   AnalysisResult,
 } from "./ScreenshotDetail"
+import { GameFilterList } from "./GameFilterList"
+import { getScreenshotsByTitle } from "@/db/services/screenshot-service"
 
 interface GalleryViewProps {
   onBack: () => void
@@ -148,6 +150,7 @@ export function GalleryView({
   const [hasNoAlbum, setHasNoAlbum] = useState(false)
   const [endCursor, setEndCursor] = useState<string | null>(null)
   const [hasNextPage, setHasNextPage] = useState(true)
+  const [selectedGameTitle, setSelectedGameTitle] = useState<string | null>(null)
 
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null)
   const [searchQuery, setSearchQuery] = useState("")
@@ -180,27 +183,56 @@ export function GalleryView({
       }
 
       try {
-        const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME)
-        if (!album) {
-          setHasNoAlbum(true)
-          setAssets([])
-        } else {
-          const result = await MediaLibrary.getAssetsAsync({
-            album: album,
-            mediaType: "photo",
-            sortBy: ["creationTime"],
-            first: 50,
-            after: cursor || undefined,
-          })
+        if (selectedGameTitle) {
+          // Filtered Mode
+          const offset = cursor ? parseInt(cursor) : 0
+          const limit = 50
+          const localIds = await getScreenshotsByTitle(selectedGameTitle, limit, offset)
 
-          if (cursor) {
-            setAssets((prev) => [...prev, ...result.assets])
+          if (localIds.length === 0 && offset === 0) {
+             setAssets([])
+             setHasNextPage(false)
+             setEndCursor(null)
           } else {
-            setAssets(result.assets)
+            // Fetch asset info for each ID
+            // We use Promise.all to fetch in parallel
+            const assetPromises = localIds.map(id => MediaLibrary.getAssetInfoAsync(id))
+            const fetchedAssets = (await Promise.all(assetPromises)).filter(a => a !== null) as MediaLibrary.Asset[]
+            
+            if (cursor) {
+              setAssets((prev) => [...prev, ...fetchedAssets])
+            } else {
+              setAssets(fetchedAssets)
+            }
+            
+            setHasNextPage(localIds.length === limit)
+            setEndCursor((offset + limit).toString())
           }
 
-          setHasNextPage(result.hasNextPage)
-          setEndCursor(result.endCursor)
+        } else {
+          // Normal Album Mode
+          const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME)
+          if (!album) {
+            setHasNoAlbum(true)
+            setAssets([])
+          } else {
+            const result = await MediaLibrary.getAssetsAsync({
+              album: album,
+              mediaType: "photo",
+              sortBy: ["creationTime"],
+              first: 50,
+              after: cursor || undefined,
+            })
+
+            if (cursor) {
+              setAssets((prev) => [...prev, ...result.assets])
+            } else {
+              setAssets(result.assets)
+            }
+
+            setHasNextPage(result.hasNextPage)
+            setEndCursor(result.endCursor)
+          }
         }
       } catch (e) {
         console.error("Failed to load assets", e)
@@ -209,14 +241,14 @@ export function GalleryView({
         setLoadingMore(false)
       }
     },
-    [permissionResponse],
+    [permissionResponse, selectedGameTitle],
   )
 
   useEffect(() => {
     if (permissionResponse?.status === "granted") {
       loadAssets(null)
     }
-  }, [permissionResponse, loadAssets])
+  }, [permissionResponse, loadAssets, selectedGameTitle])
 
   const handleLoadMore = () => {
     if (!loadingMore && hasNextPage && endCursor && !searchQuery) {
@@ -322,6 +354,12 @@ export function GalleryView({
               />
             </View>
           </View>
+
+          {/* Filter List */}
+          <GameFilterList
+            selectedTitle={selectedGameTitle}
+            onSelectTitle={setSelectedGameTitle}
+          />
 
           {/* Grid View */}
           <View className="flex-1 bg-zinc-900/30">

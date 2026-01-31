@@ -45,6 +45,8 @@ export const ScreenshotDetailInfoPanel = ({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
   }
 
+
+  
   return (
     <Animated.View
       style={[
@@ -77,7 +79,20 @@ export const ScreenshotDetailInfoPanel = ({
                 <Text className="text-zinc-400 font-medium">日時</Text>
               </View>
               <Text className="text-zinc-200 text-base">
-                {new Date(currentAsset.creationTime).toLocaleString()}
+                {(() => {
+                  const timeMs =
+                    currentAsset.creationTime > 0
+                      ? currentAsset.creationTime * 1000
+                      : currentAsset.modificationTime
+                  const date = new Date(timeMs)
+                  const year = date.getFullYear()
+                  const month = (date.getMonth() + 1).toString().padStart(2, "0")
+                  const day = date.getDate().toString().padStart(2, "0")
+                  const hours = date.getHours().toString().padStart(2, "0")
+                  const minutes = date.getMinutes().toString().padStart(2, "0")
+                  const seconds = date.getSeconds().toString().padStart(2, "0")
+                  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`
+                })()}
               </Text>
             </View>
 

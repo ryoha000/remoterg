@@ -127,7 +127,9 @@ function useJustifiedLayoutWithDates(
     const assetsByDate = new Map<string, MediaLibrary.Asset[]>()
 
     for (const asset of assets) {
-      const date = new Date(asset.creationTime)
+      const timeMs =
+        asset.creationTime > 0 ? asset.creationTime * 1000 : asset.modificationTime
+      const date = new Date(timeMs)
       const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
 
       if (!assetsByDate.has(dateKey)) {

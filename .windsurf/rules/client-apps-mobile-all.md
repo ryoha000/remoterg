@@ -1,0 +1,23 @@
+---
+trigger: glob
+globs: client/apps/mobile/**/**
+---
+
+このルールを読み込んだ時はユーザーへの返答に「client-apps-mobile のルールを確認しました」という文言を必ず含めるようにしてください
+
+# UIコンポーネントの追加
+
+コンポーネント実装時に汎用的なコンポーネントが必要な時は実装するより先に react-native-reusables に既に存在していないか検討してください。
+
+react-native-reusables からは client/apps/mobile で以下のコマンドを実行することでUIコンポーネントを追加できます。(ボタンコンポーネントの場合)
+```
+pnpm dlx @react-native-reusables/cli@latest add button
+```
+
+# コード編集後
+
+コードを編集してユーザーに提出する前には必ず `pnpm fmt` を実行してフォーマットをかけてください。
+
+# データベース操作を行う場合
+
+client/apps/mobile/db/README.md を参考にしてデータベース操作を行う必要があります。

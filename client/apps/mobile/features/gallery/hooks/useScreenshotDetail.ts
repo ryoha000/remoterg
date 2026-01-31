@@ -9,6 +9,7 @@ import Share, { Social } from "react-native-share"
 
 import { useAnalysis } from "@/db/queries/use-analysis"
 import { useHostId } from "@/db/queries/use-screenshots"
+import { isFavorite, toggleFavorite } from "@/db/services/screenshot-service"
 
 import { AnalysisResult, AssetOrigin } from "../types"
 
@@ -39,6 +40,7 @@ export const useScreenshotDetail = ({
   onDelete,
 }: UseScreenshotDetailProps) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
+  const [isCurrentFavorite, setIsCurrentFavorite] = useState(false)
 
   // Closing state
   const [isClosing, setIsClosing] = useState(false)
@@ -58,15 +60,28 @@ export const useScreenshotDetail = ({
   const windowDimensions = Dimensions.get("window")
   const insets = useSafeAreaInsets()
 
+  const currentAsset = assets[currentIndex]
+  const currentAssetInfo = currentAsset ? assetInfoMap[currentAsset.id] : undefined
+
+  // Load favorite status when current asset changes
+  useEffect(() => {
+    const checkFavorite = async () => {
+      if (!currentAsset) {
+        setIsCurrentFavorite(false)
+        return
+      }
+      const favorite = await isFavorite(currentAsset.id)
+      setIsCurrentFavorite(favorite)
+    }
+    checkFavorite()
+  }, [currentAsset])
+
   // Safety: Clamp index if assets change (e.g. deletion)
   useEffect(() => {
     if (currentIndex >= assets.length && assets.length > 0) {
       setCurrentIndex(assets.length - 1)
     }
   }, [assets.length, currentIndex])
-
-  const currentAsset = assets[currentIndex]
-  const currentAssetInfo = currentAsset ? assetInfoMap[currentAsset.id] : undefined
 
   // Load persisted analysis & Resolve Host ID
   const { data: dbHostInfo } = useHostId(currentAsset?.id ?? "")
@@ -206,6 +221,12 @@ export const useScreenshotDetail = ({
     }
   }
 
+  const handleToggleFavorite = async () => {
+    if (!currentAsset) return
+    const newStatus = await toggleFavorite(currentAsset.id)
+    setIsCurrentFavorite(newStatus)
+  }
+
   const toggleInfo = () => {
     setShowInfo((prev) => !prev)
   }
@@ -241,6 +262,7 @@ export const useScreenshotDetail = ({
     handleGenericShare,
     toggleInfo,
     onViewableItemsChanged,
-    setCurrentIndex, // exposed if needed
+    isCurrentFavorite,
+    handleToggleFavorite,
   }
 }

@@ -1,18 +1,25 @@
-import { Ionicons } from "@expo/vector-icons"
-import { ViewStyle, StyleProp } from "react-native"
-import { View } from "react-native"
-import Animated, { AnimatedStyle } from "react-native-reanimated"
-import { useSafeAreaInsets } from "react-native-safe-area-context"
+import { Ionicons } from "@expo/vector-icons";
+import { ViewStyle, StyleProp } from "react-native";
+import { View } from "react-native";
+import Animated, { AnimatedStyle } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/ui/button";
 
 interface ScreenshotDetailHeaderProps {
-  onClose: () => void
-  style?: StyleProp<AnimatedStyle<ViewStyle>>
+  onClose: () => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
+  style?: StyleProp<AnimatedStyle<ViewStyle>>;
 }
 
-export const ScreenshotDetailHeader = ({ onClose, style }: ScreenshotDetailHeaderProps) => {
-  const insets = useSafeAreaInsets()
+export const ScreenshotDetailHeader = ({
+  onClose,
+  isFavorite = false,
+  onToggleFavorite,
+  style,
+}: ScreenshotDetailHeaderProps) => {
+  const insets = useSafeAreaInsets();
 
   return (
     <Animated.View
@@ -38,13 +45,19 @@ export const ScreenshotDetailHeader = ({ onClose, style }: ScreenshotDetailHeade
           <Ionicons name="arrow-back" size={24} color="#ffffff" />
         </Button>
         <View className="flex-1" />
-        <Button variant="ghost" size="icon" className="rounded-full bg-black/20 active:bg-white/20">
-          <Ionicons name="star-outline" size={24} color="#ffffff" />
-        </Button>
-        <Button variant="ghost" size="icon" className="rounded-full bg-black/20 active:bg-white/20">
-          <Ionicons name="ellipsis-vertical" size={24} color="#ffffff" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="rounded-full active:bg-white/20"
+          onPress={onToggleFavorite}
+        >
+          <Ionicons
+            name={isFavorite ? "heart" : "heart-outline"}
+            size={24}
+            color={isFavorite ? "#f91980" : "#ffffff"}
+          />
         </Button>
       </View>
     </Animated.View>
-  )
-}
+  );
+};

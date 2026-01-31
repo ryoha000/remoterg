@@ -56,6 +56,8 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
       handleGenericShare,
       toggleInfo,
       onViewableItemsChanged,
+      isCurrentFavorite,
+      handleToggleFavorite,
     } = useScreenshotDetail(props)
 
     useImperativeHandle(ref, () => ({
@@ -150,7 +152,12 @@ export const ScreenshotDetail = forwardRef<ScreenshotDetailRef, ScreenshotDetail
           pointerEvents="box-none"
           style={{ zIndex: 20 }}
         >
-          <ScreenshotDetailHeader onClose={handleClose} style={overlayControlsStyle} />
+          <ScreenshotDetailHeader
+            onClose={handleClose}
+            isFavorite={isCurrentFavorite}
+            onToggleFavorite={handleToggleFavorite}
+            style={overlayControlsStyle}
+          />
 
           <ScreenshotDetailInfoPanel
             currentAsset={currentAsset}

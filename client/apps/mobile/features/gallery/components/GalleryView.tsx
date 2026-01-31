@@ -17,7 +17,11 @@ import { SafeAreaView } from "react-native-safe-area-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
-import { getScreenshotsByTitle, deleteScreenshot } from "@/db/services/screenshot-service"
+import {
+  getScreenshotsByTitle,
+  deleteScreenshot,
+  getFavoriteLocalIds,
+} from "@/db/services/screenshot-service"
 
 import { AnalysisResult, AssetOrigin } from "../types"
 import { GameFilterList } from "./GameFilterList"
@@ -233,6 +237,7 @@ export function GalleryView({
   const [endCursor, setEndCursor] = useState<string | null>(null)
   const [hasNextPage, setHasNextPage] = useState(true)
   const [selectedGameTitle, setSelectedGameTitle] = useState<string | null>(null)
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
 
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null)
   const [searchQuery, setSearchQuery] = useState("")
@@ -244,14 +249,22 @@ export function GalleryView({
   const itemRefs = useRef<Map<string, View>>(new Map()).current
   const [assetInfoMap, setAssetInfoMap] = useState<Record<string, MediaLibrary.AssetInfo>>({})
 
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set())
+
   const ALBUM_NAME = "RemoteRG"
   const screenWidth = Dimensions.get("window").width
 
   const filteredAssets = useMemo(() => {
-    if (!searchQuery) return assets
-    const query = searchQuery.toLowerCase()
-    return assets.filter((asset) => asset.filename.toLowerCase().includes(query))
-  }, [assets, searchQuery])
+    let result = assets
+    if (showFavoritesOnly) {
+      result = result.filter((asset) => favoriteIds.has(asset.id))
+    }
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase()
+      result = result.filter((asset) => asset.filename.toLowerCase().includes(query))
+    }
+    return result
+  }, [assets, searchQuery, showFavoritesOnly, favoriteIds])
 
   const sections = useJustifiedLayoutWithDates(filteredAssets, screenWidth)
 
@@ -330,6 +343,14 @@ export function GalleryView({
     },
     [permissionResponse, selectedGameTitle],
   )
+
+  useEffect(() => {
+    const loadFavorites = async () => {
+      const ids = await getFavoriteLocalIds()
+      setFavoriteIds(new Set(ids))
+    }
+    loadFavorites()
+  }, [selectedAsset])
 
   useEffect(() => {
     if (permissionResponse?.status === "granted") {
@@ -482,7 +503,26 @@ export function GalleryView({
           </View>
 
           {/* Filter List */}
-          <GameFilterList selectedTitle={selectedGameTitle} onSelectTitle={setSelectedGameTitle} />
+          <View className="flex-row items-center bg-zinc-950/30">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="rounded-full ml-2 active:bg-white/20"
+              onPress={() => setShowFavoritesOnly(!showFavoritesOnly)}
+            >
+              <Ionicons
+                name={showFavoritesOnly ? "heart" : "heart-outline"}
+                size={20}
+                color={showFavoritesOnly ? "#f91980" : "#a1a1aa"}
+              />
+            </Button>
+            <View className="flex-1">
+              <GameFilterList
+                selectedTitle={selectedGameTitle}
+                onSelectTitle={setSelectedGameTitle}
+              />
+            </View>
+          </View>
 
           {/* Grid View */}
           <View className="flex-1 bg-zinc-900/30">

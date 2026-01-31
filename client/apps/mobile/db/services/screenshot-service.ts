@@ -2,6 +2,7 @@ import { eq, desc, sql } from "drizzle-orm"
 
 import { db } from "../client"
 import { analysisResults } from "../schema/analysis"
+import { screenshotFavorites } from "../schema/favorites"
 import { screenshotMap } from "../schema/screenshots"
 
 export const deleteScreenshot = async (localId: string) => {
@@ -26,7 +27,11 @@ export const deleteScreenshot = async (localId: string) => {
 export const mapScreenshot = async (
   localId: string,
   hostId: string,
-  metadata?: { windowTitle?: string; processPath?: string; processName?: string },
+  metadata?: {
+    windowTitle?: string
+    processPath?: string
+    processName?: string
+  },
 ) => {
   try {
     await db
@@ -140,6 +145,53 @@ export const getScreenshotsByTitle = async (
     return result.map((r) => r.localId)
   } catch (error) {
     console.error("Failed to get screenshots by title", error)
+    return []
+  }
+}
+
+export const toggleFavorite = async (localId: string): Promise<boolean> => {
+  try {
+    const existing = await db
+      .select()
+      .from(screenshotFavorites)
+      .where(eq(screenshotFavorites.localId, localId))
+      .limit(1)
+
+    if (existing.length > 0) {
+      await db.delete(screenshotFavorites).where(eq(screenshotFavorites.localId, localId))
+      return false
+    } else {
+      await db.insert(screenshotFavorites).values({ localId })
+      return true
+    }
+  } catch (error) {
+    console.error("Failed to toggle favorite", error)
+    throw error
+  }
+}
+
+export const isFavorite = async (localId: string): Promise<boolean> => {
+  try {
+    const result = await db
+      .select()
+      .from(screenshotFavorites)
+      .where(eq(screenshotFavorites.localId, localId))
+      .limit(1)
+    return result.length > 0
+  } catch (error) {
+    console.error("Failed to check favorite status", error)
+    return false
+  }
+}
+
+export const getFavoriteLocalIds = async (): Promise<string[]> => {
+  try {
+    const result = await db
+      .select({ localId: screenshotFavorites.localId })
+      .from(screenshotFavorites)
+    return result.map((r) => r.localId)
+  } catch (error) {
+    console.error("Failed to get favorite local IDs", error)
     return []
   }
 }

@@ -1,16 +1,16 @@
-import { Ionicons } from "@expo/vector-icons";
-import { ViewStyle, StyleProp } from "react-native";
-import { View } from "react-native";
-import Animated, { AnimatedStyle } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons"
+import { ViewStyle, StyleProp } from "react-native"
+import { View } from "react-native"
+import Animated, { AnimatedStyle } from "react-native-reanimated"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/button"
 
 interface ScreenshotDetailHeaderProps {
-  onClose: () => void;
-  isFavorite?: boolean;
-  onToggleFavorite?: () => void;
-  style?: StyleProp<AnimatedStyle<ViewStyle>>;
+  onClose: () => void
+  isFavorite?: boolean
+  onToggleFavorite?: () => void
+  style?: StyleProp<AnimatedStyle<ViewStyle>>
 }
 
 export const ScreenshotDetailHeader = ({
@@ -19,7 +19,7 @@ export const ScreenshotDetailHeader = ({
   onToggleFavorite,
   style,
 }: ScreenshotDetailHeaderProps) => {
-  const insets = useSafeAreaInsets();
+  const insets = useSafeAreaInsets()
 
   return (
     <Animated.View
@@ -59,5 +59,5 @@ export const ScreenshotDetailHeader = ({
         </Button>
       </View>
     </Animated.View>
-  );
-};
+  )
+}

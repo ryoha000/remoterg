@@ -184,6 +184,28 @@ export const isFavorite = async (localId: string): Promise<boolean> => {
   }
 }
 
+export const getLatestScreenshotPerTitle = async (): Promise<
+  { windowTitle: string; localId: string }[]
+> => {
+  try {
+    const rawQuery = sql`
+      SELECT ${screenshotMap.windowTitle}, ${screenshotMap.localId}
+      FROM ${screenshotMap}
+      WHERE ${screenshotMap.windowTitle} != ''
+      GROUP BY ${screenshotMap.windowTitle}
+      ORDER BY MAX(rowid) DESC
+    `
+    const rawResult = await db.all(rawQuery)
+    return rawResult.map((r: any) => ({
+      windowTitle: r.window_title as string,
+      localId: r.local_id as string,
+    }))
+  } catch (error) {
+    console.error("Failed to get latest screenshot per title", error)
+    return []
+  }
+}
+
 export const getFavoriteLocalIds = async (): Promise<string[]> => {
   try {
     const result = await db

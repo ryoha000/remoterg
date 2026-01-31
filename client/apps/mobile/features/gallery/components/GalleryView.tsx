@@ -21,11 +21,17 @@ import {
   getScreenshotsByTitle,
   deleteScreenshot,
   getFavoriteLocalIds,
+  getLatestScreenshotPerTitle,
 } from "@/db/services/screenshot-service"
 
 import { AnalysisResult, AssetOrigin } from "../types"
-import { GameFilterList } from "./GameFilterList"
 import { ScreenshotDetail, ScreenshotDetailRef } from "./ScreenshotDetail"
+
+interface TitleCard {
+  title: string
+  localId: string
+  thumbnailUri?: string
+}
 
 interface GalleryViewProps {
   onBack: () => void
@@ -131,8 +137,7 @@ function useJustifiedLayoutWithDates(
     const assetsByDate = new Map<string, MediaLibrary.Asset[]>()
 
     for (const asset of assets) {
-      const timeMs =
-        asset.creationTime > 0 ? asset.creationTime * 1000 : asset.modificationTime
+      const timeMs = asset.creationTime > 0 ? asset.creationTime * 1000 : asset.modificationTime
       const date = new Date(timeMs)
       const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
 
@@ -238,6 +243,8 @@ export function GalleryView({
   const [hasNextPage, setHasNextPage] = useState(true)
   const [selectedGameTitle, setSelectedGameTitle] = useState<string | null>(null)
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
+  const [titleCards, setTitleCards] = useState<TitleCard[]>([])
+  const [titleCardThumbnails, setTitleCardThumbnails] = useState<Record<string, string>>({})
 
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null)
   const [searchQuery, setSearchQuery] = useState("")
@@ -351,6 +358,34 @@ export function GalleryView({
     }
     loadFavorites()
   }, [selectedAsset])
+
+  useEffect(() => {
+    const loadTitleCards = async () => {
+      if (permissionResponse?.status !== "granted") return
+      try {
+        const titles = await getLatestScreenshotPerTitle()
+        const cards: TitleCard[] = []
+        const thumbnails: Record<string, string> = {}
+
+        for (const { windowTitle, localId } of titles) {
+          try {
+            const assetInfo = await MediaLibrary.getAssetInfoAsync(localId)
+            if (assetInfo) {
+              cards.push({ title: windowTitle, localId })
+              thumbnails[windowTitle] = assetInfo.uri
+            }
+          } catch (e) {
+            // Skip if asset not found
+          }
+        }
+        setTitleCards(cards)
+        setTitleCardThumbnails(thumbnails)
+      } catch (e) {
+        console.error("Failed to load title cards", e)
+      }
+    }
+    loadTitleCards()
+  }, [permissionResponse, assets])
 
   useEffect(() => {
     if (permissionResponse?.status === "granted") {
@@ -502,12 +537,11 @@ export function GalleryView({
             </View>
           </View>
 
-          {/* Filter List */}
-          <View className="flex-row items-center bg-zinc-950/30">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="rounded-full ml-2 active:bg-white/20"
+          {/* Title Cards Filter */}
+          <View className="bg-zinc-950/30">
+            {/* Favorites Toggle */}
+            <TouchableOpacity
+              className="flex-row items-center gap-2 px-4 py-3 active:bg-white/5"
               onPress={() => setShowFavoritesOnly(!showFavoritesOnly)}
             >
               <Ionicons
@@ -515,13 +549,78 @@ export function GalleryView({
                 size={20}
                 color={showFavoritesOnly ? "#f91980" : "#a1a1aa"}
               />
-            </Button>
-            <View className="flex-1">
-              <GameFilterList
-                selectedTitle={selectedGameTitle}
-                onSelectTitle={setSelectedGameTitle}
-              />
-            </View>
+              <Text
+                className={`text-sm font-medium ${
+                  showFavoritesOnly ? "text-pink-500" : "text-zinc-400"
+                }`}
+              >
+                お気に入りのみを表示
+              </Text>
+            </TouchableOpacity>
+
+            {/* Selected Title Indicator */}
+            {selectedGameTitle && (
+              <View className="flex-row items-center px-4 py-2 border-b border-zinc-800">
+                <Text className="text-zinc-400 text-sm">絞り込み中:</Text>
+                <Text className="text-white text-sm font-medium ml-2 flex-1" numberOfLines={1}>
+                  {selectedGameTitle}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setSelectedGameTitle(null)}
+                  className="p-1 active:bg-white/10 rounded-full"
+                >
+                  <Ionicons name="close-circle" size={20} color="#71717a" />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Title Cards Grid */}
+            {!selectedGameTitle && titleCards.length > 0 && (
+              <View className="px-4 py-3">
+                <View
+                  style={{
+                    flexDirection: "row",
+                    flexWrap: "wrap",
+                    gap: 12,
+                  }}
+                >
+                  {titleCards.map((card) => (
+                    <TouchableOpacity
+                      key={card.title}
+                      onPress={() => setSelectedGameTitle(card.title)}
+                      style={{
+                        width: (screenWidth - 32 - 12) / 2,
+                        height: 120,
+                        borderRadius: 12,
+                        overflow: "hidden",
+                      }}
+                      className="active:opacity-80"
+                    >
+                      {titleCardThumbnails[card.title] ? (
+                        <Image
+                          source={{ uri: titleCardThumbnails[card.title] }}
+                          style={{ width: "100%", height: "100%" }}
+                          contentFit="cover"
+                        />
+                      ) : (
+                        <View className="w-full h-full bg-zinc-800" />
+                      )}
+                      <View
+                        className="absolute inset-0 bg-black/50"
+                        style={{
+                          justifyContent: "flex-end",
+                          padding: 12,
+                        }}
+                      >
+                        <Text className="text-white font-medium text-sm" numberOfLines={2}>
+                          {card.title}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
           </View>
 
           {/* Grid View */}

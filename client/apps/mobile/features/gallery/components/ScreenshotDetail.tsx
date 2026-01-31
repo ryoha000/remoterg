@@ -1,17 +1,17 @@
+import * as MediaLibrary from "expo-media-library"
+import { StatusBar } from "expo-status-bar"
 import { forwardRef, useImperativeHandle } from "react"
 import { View } from "react-native"
-import { StatusBar } from "expo-status-bar"
 import { FlatList } from "react-native-gesture-handler"
 import Animated, { useAnimatedStyle, interpolate } from "react-native-reanimated"
 import { SafeAreaView } from "react-native-safe-area-context"
-import * as MediaLibrary from "expo-media-library"
 
 import { useScreenshotDetail } from "../hooks/useScreenshotDetail"
-import { ScreenshotPage } from "./ScreenshotPage"
+import { AnalysisResult, AssetOrigin } from "../types"
+import { ScreenshotDetailActions } from "./ScreenshotDetailActions"
 import { ScreenshotDetailHeader } from "./ScreenshotDetailHeader"
 import { ScreenshotDetailInfoPanel } from "./ScreenshotDetailInfoPanel"
-import { ScreenshotDetailActions } from "./ScreenshotDetailActions"
-import { AnalysisResult, AssetOrigin } from "../types"
+import { ScreenshotPage } from "./ScreenshotPage"
 
 const INFO_PANEL_WIDTH_PCT = 0.35
 

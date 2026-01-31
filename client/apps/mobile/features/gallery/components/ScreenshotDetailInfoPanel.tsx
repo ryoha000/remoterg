@@ -1,6 +1,6 @@
-import { View, Text, ActivityIndicator, ScrollView, ViewStyle, StyleProp } from "react-native"
-import * as MediaLibrary from "expo-media-library"
 import { Ionicons } from "@expo/vector-icons"
+import * as MediaLibrary from "expo-media-library"
+import { View, Text, ActivityIndicator, ScrollView, ViewStyle, StyleProp } from "react-native"
 import Animated, { AnimatedStyle } from "react-native-reanimated"
 import { SafeAreaView } from "react-native-safe-area-context"
 
@@ -17,12 +17,14 @@ interface ScreenshotDetailInfoPanelProps {
   hostId: string | null
   onRequestAnalyze?: (id: string, max_edge?: number) => void
   style?: StyleProp<AnimatedStyle<ViewStyle>>
-  dbHostInfo?: {
-    hostId: string
-    windowTitle: string | null
-    processName: string | null
-    processPath: string | null
-  } | undefined
+  dbHostInfo?:
+    | {
+        hostId: string
+        windowTitle: string | null
+        processName: string | null
+        processPath: string | null
+      }
+    | undefined
 }
 
 export const ScreenshotDetailInfoPanel = ({

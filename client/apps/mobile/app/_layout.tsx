@@ -1,9 +1,9 @@
 import { PortalHost } from "@rn-primitives/portal"
-import Toast from "react-native-toast-message"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Stack } from "expo-router"
 import { Text, View } from "react-native"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
+import Toast from "react-native-toast-message"
 
 import { ViewerProvider } from "@/features/viewer/context/ViewerContext"
 

@@ -3,7 +3,14 @@ import { Image } from "expo-image"
 import * as MediaLibrary from "expo-media-library"
 import { StatusBar } from "expo-status-bar"
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { View, FlatList, TouchableOpacity, Dimensions, ActivityIndicator, SectionList } from "react-native"
+import {
+  View,
+  FlatList,
+  TouchableOpacity,
+  Dimensions,
+  ActivityIndicator,
+  SectionList,
+} from "react-native"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { SafeAreaView } from "react-native-safe-area-context"
 
@@ -12,12 +19,9 @@ import { Input } from "@/components/ui/input"
 import { Text } from "@/components/ui/text"
 import { getScreenshotsByTitle, deleteScreenshot } from "@/db/services/screenshot-service"
 
-import { GameFilterList } from "./GameFilterList"
 import { AnalysisResult, AssetOrigin } from "../types"
-import {
-  ScreenshotDetail,
-  ScreenshotDetailRef,
-} from "./ScreenshotDetail"
+import { GameFilterList } from "./GameFilterList"
+import { ScreenshotDetail, ScreenshotDetailRef } from "./ScreenshotDetail"
 
 interface GalleryViewProps {
   onBack: () => void

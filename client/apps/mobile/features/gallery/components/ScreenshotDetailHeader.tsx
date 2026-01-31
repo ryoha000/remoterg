@@ -1,6 +1,6 @@
+import { Ionicons } from "@expo/vector-icons"
 import { ViewStyle, StyleProp } from "react-native"
 import { View } from "react-native"
-import { Ionicons } from "@expo/vector-icons"
 import Animated, { AnimatedStyle } from "react-native-reanimated"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 

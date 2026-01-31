@@ -1,5 +1,5 @@
-import { View, Text, ViewStyle, StyleProp } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
+import { View, Text, ViewStyle, StyleProp } from "react-native"
 import Animated, { AnimatedStyle } from "react-native-reanimated"
 import Toast from "react-native-toast-message"
 
@@ -38,12 +38,12 @@ export const ScreenshotDetailActions = ({
       // Android scoped storage deletion permission denial often looks like:
       // "Call to function 'ExpoMediaLibrary.deleteAssetsAsync' has been rejected. -> Caused by: User didn't grant write permission to requested files."
       if (message.includes("User didn't grant") || message.includes("permission")) {
-         Toast.show({
-            type: "error",
-            text1: "削除がキャンセルされました",
-            text2: "削除するには、表示される確認ダイアログで「許可」を選択してください。",
-          })
-         return
+        Toast.show({
+          type: "error",
+          text1: "削除がキャンセルされました",
+          text2: "削除するには、表示される確認ダイアログで「許可」を選択してください。",
+        })
+        return
       }
 
       Toast.show({
@@ -68,13 +68,23 @@ export const ScreenshotDetailActions = ({
     >
       <View className="bg-black/60 backdrop-blur-md pb-8 pt-4 flex-row justify-around items-center border-t border-white/10">
         <View className="items-center gap-1">
-          <Button variant="ghost" size="icon" onPress={handleTwitterShare} className="active:bg-white/20">
+          <Button
+            variant="ghost"
+            size="icon"
+            onPress={handleTwitterShare}
+            className="active:bg-white/20"
+          >
             <Ionicons name="logo-twitter" size={20} color="white" />
           </Button>
           <Text className="text-white text-xs">Twitter</Text>
         </View>
         <View className="items-center gap-1">
-          <Button variant="ghost" size="icon" onPress={onGenericShare} className="active:bg-white/20">
+          <Button
+            variant="ghost"
+            size="icon"
+            onPress={onGenericShare}
+            className="active:bg-white/20"
+          >
             <Ionicons name="share-outline" size={20} color="white" />
           </Button>
           <Text className="text-white text-xs">共有</Text>

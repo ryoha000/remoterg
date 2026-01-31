@@ -1,7 +1,7 @@
-import { useEffect } from "react"
-import { View } from "react-native"
 import { Image } from "expo-image"
 import * as MediaLibrary from "expo-media-library"
+import { useEffect } from "react"
+import { View } from "react-native"
 import { Gesture, GestureDetector } from "react-native-gesture-handler"
 import Animated, {
   useAnimatedStyle,

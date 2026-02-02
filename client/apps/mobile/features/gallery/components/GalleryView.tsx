@@ -24,8 +24,10 @@ import {
   getLatestScreenshotPerTitle,
 } from "@/db/services/screenshot-service"
 
+import { useFilteredAssets } from "../hooks/useFilteredAssets"
 import { AnalysisResult, AssetOrigin } from "../types"
 import { ScreenshotDetail, ScreenshotDetailRef } from "./ScreenshotDetail"
+import { SearchPanel, SearchFilters } from "./SearchPanel"
 
 interface TitleCard {
   title: string
@@ -242,15 +244,11 @@ export function GalleryView({
   const [endCursor, setEndCursor] = useState<string | null>(null)
   const [hasNextPage, setHasNextPage] = useState(true)
   const [selectedGameTitle, setSelectedGameTitle] = useState<string | null>(null)
-  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
+  const [searchFilters, setSearchFilters] = useState<SearchFilters>({})
   const [titleCards, setTitleCards] = useState<TitleCard[]>([])
   const [titleCardThumbnails, setTitleCardThumbnails] = useState<Record<string, string>>({})
 
   const screenshotDetailRef = useRef<ScreenshotDetailRef>(null)
-  const [searchQuery, setSearchQuery] = useState("")
-  // const flatListRef = useRef<FlatList>(null) // Use SectionList ref if needed, but scrollToAsset logic needs update
-  // We'll skip scrollToAsset implementation for now as it's complex with SectionList
-  // or implement a basic version if critical.
   const sectionListRef = useRef<import("react-native").SectionList>(null)
 
   const itemRefs = useRef<Map<string, View>>(new Map()).current
@@ -261,17 +259,7 @@ export function GalleryView({
   const ALBUM_NAME = "RemoteRG"
   const screenWidth = Dimensions.get("window").width
 
-  const filteredAssets = useMemo(() => {
-    let result = assets
-    if (showFavoritesOnly) {
-      result = result.filter((asset) => favoriteIds.has(asset.id))
-    }
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase()
-      result = result.filter((asset) => asset.filename.toLowerCase().includes(query))
-    }
-    return result
-  }, [assets, searchQuery, showFavoritesOnly, favoriteIds])
+  const filteredAssets = useFilteredAssets(assets, searchFilters, favoriteIds)
 
   const sections = useJustifiedLayoutWithDates(filteredAssets, screenWidth)
 
@@ -394,7 +382,7 @@ export function GalleryView({
   }, [permissionResponse, loadAssets, selectedGameTitle])
 
   const handleLoadMore = () => {
-    if (!loadingMore && hasNextPage && endCursor && !searchQuery) {
+    if (!loadingMore && hasNextPage && endCursor && !searchFilters.text) {
       loadAssets(endCursor)
     }
   }
@@ -528,36 +516,16 @@ export function GalleryView({
             </Button>
 
             <View className="flex-1">
-              <Input
+              <SearchPanel
+                value={searchFilters}
+                onChange={setSearchFilters}
                 placeholder="Search..."
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                className="h-10 bg-zinc-900 border-zinc-800 text-white placeholder:text-zinc-500"
               />
             </View>
           </View>
 
           {/* Title Cards Filter */}
           <View className="bg-zinc-950/30">
-            {/* Favorites Toggle */}
-            <TouchableOpacity
-              className="flex-row items-center gap-2 px-4 py-3 active:bg-white/5"
-              onPress={() => setShowFavoritesOnly(!showFavoritesOnly)}
-            >
-              <Ionicons
-                name={showFavoritesOnly ? "heart" : "heart-outline"}
-                size={20}
-                color={showFavoritesOnly ? "#f91980" : "#a1a1aa"}
-              />
-              <Text
-                className={`text-sm font-medium ${
-                  showFavoritesOnly ? "text-pink-500" : "text-zinc-400"
-                }`}
-              >
-                お気に入りのみを表示
-              </Text>
-            </TouchableOpacity>
-
             {/* Selected Title Indicator */}
             {selectedGameTitle && (
               <View className="flex-row items-center px-4 py-2 border-b border-zinc-800">

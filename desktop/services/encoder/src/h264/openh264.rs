@@ -156,6 +156,7 @@ fn start_encode_worker() -> (
                             duration,
                             width: encode_width,
                             height: encode_height,
+                            frame_id: 0,
                         })
                         .is_err()
                     {

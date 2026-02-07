@@ -3,3 +3,4 @@ video-capture/tests/artifacts/**
 tests/artifacts/**
 *.local
 assets/**
+trace-*.json

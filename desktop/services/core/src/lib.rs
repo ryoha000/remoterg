@@ -53,6 +53,7 @@ pub struct Frame {
     pub height: u32,
     pub data: Arc<Vec<u8>>,
     pub windows_timespan: u64,
+    pub id: u64,
 }
 
 /// ビデオコーデックの種類
@@ -81,6 +82,7 @@ pub struct EncodeJob {
     pub timestamp: u64,
     pub enqueue_at: Instant,
     pub request_keyframe: bool,
+    pub frame_id: u64,
 }
 
 /// エンコード結果
@@ -91,6 +93,7 @@ pub struct EncodeResult {
     pub duration: Duration,
     pub width: u32,
     pub height: u32,
+    pub frame_id: u64,
 }
 
 /// エンコードジョブスロットのシャットダウンエラー

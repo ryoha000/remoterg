@@ -102,6 +102,7 @@ pub async fn run_frame_router(
                     stats.frames_dropped_not_ready
                 );
             }
+            tracing::trace!(name: "frame_drop", reason = "connection_not_ready", frame_id = frame.id);
             continue;
         }
 
@@ -110,7 +111,8 @@ pub async fn run_frame_router(
             Level::DEBUG,
             "process_frame",
             width = frame.width,
-            height = frame.height
+            height = frame.height,
+            frame_id = frame.id
         );
         let _process_frame_guard = process_frame_span.enter();
 
@@ -191,9 +193,10 @@ pub async fn run_frame_router(
 
         // エンコードジョブ送信を span で計測
         if let Some(job_slot) = encode_job_slot.as_ref() {
-            let queue_encode_job_span = span!(Level::DEBUG, "queue_encode_job");
+            let queue_encode_job_span = span!(Level::DEBUG, "queue_encode_job", frame_id = frame.id);
             let _queue_encode_job_guard = queue_encode_job_span.enter();
             let job_send_start = Instant::now();
+
 
             // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
             let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);
@@ -213,6 +216,7 @@ pub async fn run_frame_router(
                 timestamp: frame.windows_timespan,
                 enqueue_at: pipeline_start,
                 request_keyframe,
+                frame_id: frame.id,
             });
 
             let job_send_dur = job_send_start.elapsed();
@@ -230,6 +234,7 @@ pub async fn run_frame_router(
                     stats.frames_dropped_no_encoder
                 );
             }
+            tracing::trace!(name: "frame_drop", reason = "no_encoder", frame_id = frame.id);
         }
 
         drop(_process_frame_guard);

@@ -380,6 +380,7 @@ mod tests {
                         timestamp: frame.windows_timespan,
                         enqueue_at: Instant::now(),
                         request_keyframe: false,
+                        frame_id: frame.id,
                     };
 
                     job_slot.set(job);
@@ -569,6 +570,7 @@ mod tests {
                 timestamp: frame.windows_timespan,
                 enqueue_at: Instant::now(),
                 request_keyframe: false,
+                frame_id: frame.id,
             };
 
             job_slot.set(job);

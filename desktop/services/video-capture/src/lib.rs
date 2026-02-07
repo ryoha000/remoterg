@@ -43,6 +43,7 @@ struct CaptureHandler {
     screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
     last_captured_frame: Arc<Mutex<Option<Frame>>>,
     config: CaptureConfig,
+    frame_counter: u64,
 }
 
 impl GraphicsCaptureApiHandler for CaptureHandler {
@@ -56,6 +57,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             screenshot_tx: ctx.flags.screenshot_tx.clone(),
             last_captured_frame: ctx.flags.last_captured_frame.clone(),
             config: ctx.flags.config.clone(),
+            frame_counter: 0,
         })
     }
 
@@ -65,6 +67,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         _capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
         debug!("on_frame_arrived called");
+
+        self.frame_counter += 1;
+        let frame_id = self.frame_counter;
 
         // FrameBufferを取得してRGBAデータを読み取る
         let mut frame_buffer = frame.buffer()?;
@@ -106,7 +111,11 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             width = dst_width,
             height = dst_height,
             src_width = src_width,
-            src_height = src_height
+            width = dst_width,
+            height = dst_height,
+            src_width = src_width,
+            src_height = src_height,
+            frame_id = frame_id
         );
         let _frame_guard = frame_span.enter();
 
@@ -133,6 +142,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             height: dst_height,
             data: final_data.clone(),
             windows_timespan,
+            id: frame_id,
         };
 
         // 最新フレームをキャッシュ（スクリーンショット用）
@@ -152,7 +162,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         }
 
         // フレーム送信を span で計測
-        let send_span = span!(Level::DEBUG, "send_frame");
+        let send_span = span!(Level::DEBUG, "send_frame", frame_id = frame_id);
         let _send_guard = send_span.enter();
 
         // tokio::sync::mpscを使って非同期送信（try_sendで詰まってる場合はドロップ）
@@ -160,9 +170,11 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             Ok(_) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
                 debug!("Frame dropped (channel full)");
+                tracing::trace!(name: "frame_drop", reason = "channel_full", frame_id = frame_id);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 error!("Failed to send frame: channel closed");
+                tracing::trace!(name: "frame_drop", reason = "channel_closed", frame_id = frame_id);
             }
         }
 

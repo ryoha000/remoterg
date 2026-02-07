@@ -245,6 +245,7 @@ impl CaptureService {
                 .unwrap()
                 .as_nanos() as u64
                 / 100,
+            id: frame_index,
         }
     }
 }

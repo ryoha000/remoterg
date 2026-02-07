@@ -200,6 +200,7 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
                             timestamp: black_box(timestamp),
                             enqueue_at: black_box(Instant::now()),
                             request_keyframe: false,
+                            frame_id: i as u64,
                         };
                         job_slot.set(job);
                         rx.recv().await.unwrap();

@@ -6,6 +6,7 @@ use tokio::pin;
 use tokio::sync::mpsc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 use audio_capture;
 use audio_capture_mock;
@@ -97,7 +98,20 @@ async fn main() -> Result<()> {
 
     // ログ設定
     let filter = EnvFilter::new(&args.log_level);
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    
+    // tracing-chrome layer setup (output to trace-timestamp.json)
+    let (chrome_layer, _guard) = tracing_chrome::ChromeLayerBuilder::new()
+        .include_args(true)
+        .build();
+
+    tracing_subscriber::registry()
+        .with(chrome_layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stdout)
+                .with_filter(filter)
+        )
+        .init();
 
     info!("Starting RemoteRG Host Daemon");
     info!(

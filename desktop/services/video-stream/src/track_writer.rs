@@ -25,7 +25,8 @@ pub async fn write_encoded_sample(
         width = result.width,
         height = result.height,
         sample_size = sample_size,
-        is_keyframe = result.is_keyframe
+        is_keyframe = result.is_keyframe,
+        frame_id = result.frame_id
     );
     let _write_sample_guard = write_sample_span.enter();
 

@@ -56,6 +56,7 @@ mod tests {
             timestamp,
             enqueue_at: Instant::now(),
             request_keyframe,
+            frame_id: 0,
         }
     }
 

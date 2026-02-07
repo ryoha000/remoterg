@@ -209,14 +209,10 @@ pub fn start_mf_encode_workers() -> (
             }
         };
 
-        // エンコーダーと前処理器の作成
-        let width = encode_width;
-        let height = encode_height;
+
 
         let mut preprocessor = match VideoProcessorPreprocessor::create(
             d3d_resources.clone(),
-            encode_width,
-            encode_height,
         ) {
             Ok(preproc) => preproc,
             Err(e) => {
@@ -225,7 +221,7 @@ pub fn start_mf_encode_workers() -> (
             }
         };
 
-        let encoder = match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height)
+        let mut encoder = match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height)
         {
             Ok(enc) => enc,
             Err(e) => {
@@ -299,14 +295,29 @@ pub fn start_mf_encode_workers() -> (
                             }
                         };
 
-                        let job_width = (job.width / 2) * 2;
-                        let job_height = (job.height / 2) * 2;
+                        let job_width = job.width;
+                        let job_height = job.height;
+                        
+                        // エンコード解像度は2の倍数に調整
+                        let encode_width = (job_width / 2) * 2;
+                        let encode_height = (job_height / 2) * 2;
+
+                        // エンコーダーの解像度を更新
+                        if let Err(e) = encoder.resize(encode_width, encode_height) {
+                            warn!("MF encoder worker: failed to resize encoder: {}", e);
+                            encode_failures += 1;
+                            input_meta_queue.pop_back();
+                            continue;
+                        }
 
                         // 前処理（RGBA → NV12 テクスチャ）
+                        // src: job_width/height, dst: encode_width/height
                         let nv12_texture = match preprocessor.process(
                             &job.rgba,
-                            width,
-                            height,
+                            job_width,
+                            job_height,
+                            encode_width,
+                            encode_height,
                             frame_timestamp,
                         ) {
                             Ok(texture) => texture,
@@ -338,8 +349,8 @@ pub fn start_mf_encode_workers() -> (
                         // メタ情報をキューに保存
                         input_meta_queue.push_back(InputFrameMeta {
                             duration,
-                            width: job_width,
-                            height: job_height,
+                            width: encode_width,
+                            height: encode_height,
                         });
 
                         // DXGI サーフェスバッファを作成

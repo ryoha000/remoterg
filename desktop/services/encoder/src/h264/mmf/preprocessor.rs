@@ -26,8 +26,6 @@ use crate::h264::mmf::d3d::D3D11Resources;
 pub struct VideoProcessorPreprocessor {
     transform: IMFTransform,
     d3d_resources: D3D11Resources,
-    width: u32,
-    height: u32,
     rgba_texture: Option<ID3D11Texture2D>,
     bgra_texture: Option<ID3D11Texture2D>,
     output_texture: Option<ID3D11Texture2D>,
@@ -38,7 +36,7 @@ pub struct VideoProcessorPreprocessor {
 
 impl VideoProcessorPreprocessor {
     /// Video Processor MFT を作成
-    pub fn create(d3d_resources: D3D11Resources, width: u32, height: u32) -> Result<Self> {
+    pub fn create(d3d_resources: D3D11Resources) -> Result<Self> {
         unsafe {
             let transform = crate::h264::mmf::mf::find_video_processor()
                 .context("Failed to find Video Processor MFT")?;
@@ -46,11 +44,9 @@ impl VideoProcessorPreprocessor {
             // D3D マネージャーを設定
             d3d_resources.setup_mft(&transform)?;
 
-            let mut preprocessor = Self {
+            let preprocessor = Self {
                 transform,
                 d3d_resources,
-                width,
-                height,
                 rgba_texture: None,
                 bgra_texture: None,
                 output_texture: None,
@@ -59,17 +55,14 @@ impl VideoProcessorPreprocessor {
                 compute_shader: None,
             };
 
-            // メディアタイプを設定
-            preprocessor
-                .setup_media_types(width, height)
-                .context("Failed to setup media types")?;
+            // メディアタイプは process() で設定されるためここでは設定しない
 
             Ok(preprocessor)
         }
     }
 
     /// メディアタイプを設定
-    fn setup_media_types(&mut self, width: u32, height: u32) -> Result<()> {
+    fn setup_media_types(&mut self, src_width: u32, src_height: u32, dst_width: u32, dst_height: u32) -> Result<()> {
         unsafe {
             // 入力メディアタイプ（BGRA）
             let input_media_type = MFCreateMediaType()
@@ -92,7 +85,7 @@ impl VideoProcessorPreprocessor {
                 .ok()
                 .context("Failed to set input subtype")?;
 
-            let frame_size = ((width as u64) << 32) | (height as u64);
+            let frame_size = ((src_width as u64) << 32) | (src_height as u64);
             input_media_type
                 .SetUINT64(
                     &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE,
@@ -144,10 +137,11 @@ impl VideoProcessorPreprocessor {
                 .ok()
                 .context("Failed to set output subtype")?;
 
+            let output_frame_size = ((dst_width as u64) << 32) | (dst_height as u64);
             output_media_type
                 .SetUINT64(
                     &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE,
-                    frame_size,
+                    output_frame_size,
                 )
                 .ok()
                 .context("Failed to set output frame size")?;
@@ -188,21 +182,7 @@ impl VideoProcessorPreprocessor {
         }
     }
 
-    /// 解像度が変更された場合に再設定
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
-        if self.width != width || self.height != height {
-            self.width = width;
-            self.height = height;
-            self.rgba_texture = None;
-            self.bgra_texture = None;
-            self.output_texture = None;
-            self.rgba_srv = None;
-            self.bgra_uav = None;
-            self.setup_media_types(width, height)
-                .context("Failed to resize Video Processor")?;
-        }
-        Ok(())
-    }
+
 
     /// Compute Shaderを作成
     fn create_compute_shader(&mut self) -> Result<()> {
@@ -333,7 +313,9 @@ impl VideoProcessorPreprocessor {
             let texture = self.rgba_texture.as_ref().unwrap();
 
             // CPU から GPU へデータをアップロード
-            let row_pitch = width * 4; // RGBA = 4 bytes per pixel
+            // RGBA = 4 bytes per pixel
+            // width は src_width なので、入力画像のストライドと一致するはず
+            let row_pitch = width * 4;
             let depth_pitch = row_pitch * height;
 
             self.d3d_resources.context.UpdateSubresource(
@@ -516,27 +498,56 @@ impl VideoProcessorPreprocessor {
     pub fn process(
         &mut self,
         rgba_data: &[u8],
-        width: u32,
-        height: u32,
+        src_width: u32,
+        src_height: u32,
+        dst_width: u32,
+        dst_height: u32,
         timestamp: i64,
     ) -> Result<ID3D11Texture2D> {
         unsafe {
-            // 解像度が変更された場合は再設定
-            self.resize(width, height)?;
+            // 必要に応じてリソースを再確保・メディアタイプ再設定
+            // 簡易的に、既存のテクスチャサイズと異なれば再設定とする
+             let needs_reconfigure = self.output_texture.is_none() || {
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                if let Some(tex) = &self.output_texture {
+                    tex.GetDesc(&mut desc);
+                    desc.Width != dst_width || desc.Height != dst_height
+                } else {
+                    true
+                }
+            } || {
+                 let mut desc = D3D11_TEXTURE2D_DESC::default();
+                 if let Some(tex) = &self.rgba_texture {
+                     tex.GetDesc(&mut desc);
+                     desc.Width != src_width || desc.Height != src_height
+                 } else {
+                     true
+                 }
+            };
 
-            // RGBA を D3D11 テクスチャにアップロード
-            let rgba_texture = self.upload_rgba_to_texture(rgba_data, width, height)?;
+            if needs_reconfigure {
+                self.rgba_texture = None;
+                self.bgra_texture = None;
+                self.output_texture = None;
+                self.rgba_srv = None;
+                self.bgra_uav = None;
+                self.setup_media_types(src_width, src_height, dst_width, dst_height)
+                    .context("Failed to setup media types in process")?;
+            }
 
-            // BGRA テクスチャを作成
-            let bgra_texture = self.create_bgra_texture(width, height)?;
+            // RGBA を D3D11 テクスチャにアップロード (src dimensions)
+            let rgba_texture = self.upload_rgba_to_texture(rgba_data, src_width, src_height)?;
 
-            // GPU側でRGBA→BGRA変換を行う
-            self.convert_rgba_to_bgra(&rgba_texture, &bgra_texture, width, height)?;
+            // BGRA テクスチャを作成 (src dimensions)
+            let bgra_texture = self.create_bgra_texture(src_width, src_height)?;
+
+            // GPU側でRGBA→BGRA変換を行う (src dimensions)
+            self.convert_rgba_to_bgra(&rgba_texture, &bgra_texture, src_width, src_height)?;
 
             let input_texture = bgra_texture;
 
-            // NV12 出力テクスチャを作成
-            let output_texture = self.create_output_texture(width, height)?;
+            // NV12 出力テクスチャを作成 (dst dimensions)
+            let output_texture = self.create_output_texture(dst_width, dst_height)?;
 
             // DXGI サーフェスバッファを作成
             // MFCreateDXGISurfaceBufferの最初のパラメータはID3D11Texture2DインターフェースのIIDを指定する必要がある
@@ -545,8 +556,8 @@ impl VideoProcessorPreprocessor {
                     .map_err(|e| {
                         anyhow::anyhow!(
                     "Failed to create DXGI surface buffer (format=ARGB32, width={}, height={}): {}",
-                    width,
-                    height,
+                    dst_width,
+                    dst_height,
                     e
                 )
                     })?;

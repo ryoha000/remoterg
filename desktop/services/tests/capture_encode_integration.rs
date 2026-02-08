@@ -3,7 +3,7 @@
 mod tests {
     use anyhow::{Context, Result};
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
-    use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+    use encoder::windows::h264::MediaFoundationH264EncoderFactory;
     use std::path::PathBuf;
     use std::sync::Once;
     use std::time::{Duration, Instant};
@@ -350,7 +350,6 @@ mod tests {
         // パイプライン処理: キャプチャしながら逐次エンコード
         let capture_start = Instant::now();
         let mut frame_count = 0;
-        let mut last_frame_ts: Option<u64> = None;
         let mut first_frame: Option<Frame> = None;
         let mut last_frame: Option<Frame> = None;
         let mut width = 0u32;
@@ -369,8 +368,6 @@ mod tests {
                     last_frame = Some(frame.clone());
                     frame_count += 1;
 
-                    // タイムスタンプを更新（エンコーダー側で duration を計算するため、ここでは更新のみ）
-                    last_frame_ts = Some(frame.windows_timespan);
 
                     // EncodeJobを作成して即座に送信
                     let job = EncodeJob {
@@ -447,11 +444,14 @@ mod tests {
         // CaptureServiceが停止するまで少し待つ
         tokio::time::sleep(Duration::from_millis(500)).await;
 
+        // エンコードジョブの送信完了を通知（シャットダウン）
+        job_slot.shutdown();
+
         println!("すべてのエンコードジョブを送信しました。結果を待機中...");
 
         // エンコード結果の受信タスクが完了するまで待つ
         let (encoded_count, total_video_duration) =
-            timeout(Duration::from_secs(120), result_receiver_handle)
+            timeout(Duration::from_secs(60), result_receiver_handle)
                 .await
                 .context("エンコード結果の受信がタイムアウト")?
                 .context("エンコード結果の受信タスクが失敗")?;
@@ -556,11 +556,8 @@ mod tests {
         // フレームを順次エンコード
         println!("フレームをエンコード中...");
         let encode_start = Instant::now();
-        let mut last_frame_ts: Option<u64> = None;
 
         for (idx, frame) in frames.into_iter().enumerate() {
-            // タイムスタンプを更新（エンコーダー側で duration を計算するため、ここでは更新のみ）
-            last_frame_ts = Some(frame.windows_timespan);
 
             // EncodeJobを作成（frame.dataをmoveで渡す）
             let job = EncodeJob {

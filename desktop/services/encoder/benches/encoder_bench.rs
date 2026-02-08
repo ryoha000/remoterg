@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "h264")]
-use encoder::h264::openh264::OpenH264EncoderFactory;
+use encoder::cpu::h264::encoder::OpenH264EncoderFactory;
 
 #[cfg(all(feature = "h264", windows))]
-use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+use encoder::windows::h264::MediaFoundationH264EncoderFactory;
 
 /// フレーム生成パターンの種類
 #[allow(dead_code)]
@@ -225,10 +225,6 @@ fn bench_mmf(c: &mut Criterion) {
     let factory = MediaFoundationH264EncoderFactory::new();
 
     // MMFが利用可能でない場合はスキップ
-    if !factory.use_media_foundation() {
-        eprintln!("Media Foundation is not available, skipping MMF benchmarks");
-        return;
-    }
 
     // 複数フレームの連続エンコード（1080pのみ、代表的なパターン）
     bench_encoder_multiple_frames(c, "mmf", &factory, 1920, 1080, FramePattern::Noise);

@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{info, span, warn, Level};
 
-use super::{annexb, rgba_to_yuv};
+use crate::utils::{annexb, rgba_to_yuv};
 
 /// OpenH264 ファクトリ
 pub struct OpenH264EncoderFactory;

@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = ["h264"]
 h264 = ["openh264", "rayon", "windows", "libyuv-sys"]
+av1 = ["windows"]
 
 [dependencies]
 anyhow = { workspace = true }

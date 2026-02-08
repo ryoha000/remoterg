@@ -4,7 +4,7 @@ use std::mem::ManuallyDrop;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
-use tracing::{debug, info, warn, span, Level};
+use tracing::{debug, info, warn};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
@@ -166,7 +166,6 @@ struct InputFrameMeta {
     duration: Duration,
     width: u32,
     height: u32,
-    frame_id: u64,
 }
 
 /// Media Foundationエンコードワーカーを起動
@@ -201,46 +200,37 @@ pub fn start_mf_encode_workers() -> (
         let encode_width = (first_job.width / 2) * 2;
         let encode_height = (first_job.height / 2) * 2;
 
-        let init_span = span!(Level::DEBUG, "mf_encoder_init");
-        let _init_guard = init_span.enter();
-
         // D3D11 リソースの作成
-        let d3d_resources = {
-            let resource_span = span!(Level::DEBUG, "d3d_create_resources");
-            let _resource_guard = resource_span.enter();
-            match D3D11Resources::create() {
-                Ok(resources) => resources,
-                Err(e) => {
-                    warn!("MF encoder worker: failed to create D3D11 resources: {}", e);
-                    return;
-                }
+        let d3d_resources = match D3D11Resources::create() {
+            Ok(resources) => resources,
+            Err(e) => {
+                warn!("MF encoder worker: failed to create D3D11 resources: {}", e);
+                return;
             }
         };
 
-        let mut preprocessor = {
-            let preproc_span = span!(Level::DEBUG, "preproc_create");
-            let _preproc_guard = preproc_span.enter();
-            match VideoProcessorPreprocessor::create(
-                d3d_resources.clone(),
-            ) {
-                Ok(preproc) => preproc,
-                Err(e) => {
-                    warn!("MF encoder worker: failed to create preprocessor: {}", e);
-                    return;
-                }
+        // エンコーダーと前処理器の作成
+        let width = encode_width;
+        let height = encode_height;
+
+        let mut preprocessor = match VideoProcessorPreprocessor::create(
+            d3d_resources.clone(),
+            encode_width,
+            encode_height,
+        ) {
+            Ok(preproc) => preproc,
+            Err(e) => {
+                warn!("MF encoder worker: failed to create preprocessor: {}", e);
+                return;
             }
         };
 
-        let mut encoder = {
-            let encoder_span = span!(Level::DEBUG, "encoder_create");
-            let _encoder_guard = encoder_span.enter();
-            match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height)
-            {
-                Ok(enc) => enc,
-                Err(e) => {
-                    warn!("MF encoder worker: failed to create encoder: {}", e);
-                    return;
-                }
+        let encoder = match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height)
+        {
+            Ok(enc) => enc,
+            Err(e) => {
+                warn!("MF encoder worker: failed to create encoder: {}", e);
+                return;
             }
         };
 
@@ -253,16 +243,10 @@ pub fn start_mf_encode_workers() -> (
         }
 
         // ストリーミングを開始
-        {
-            let stream_span = span!(Level::DEBUG, "encoder_start_streaming");
-            let _stream_guard = stream_span.enter();
-            if let Err(e) = encoder.start_streaming() {
-                warn!("MF encoder worker: failed to start streaming: {}", e);
-                return;
-            }
+        if let Err(e) = encoder.start_streaming() {
+            warn!("MF encoder worker: failed to start streaming: {}", e);
+            return;
         }
-        
-        drop(_init_guard);
 
         // 最初のフレームを処理
         let mut pending_job = Some(first_job);
@@ -272,24 +256,20 @@ pub fn start_mf_encode_workers() -> (
         loop {
             unsafe {
                 // イベントを待機
-                let event = {
-                    let wait_span = span!(Level::TRACE, "wait_for_event");
-                    let _guard = wait_span.enter();
-                    match encoder.event_generator().GetEvent(MF_EVENT_FLAG_NONE) {
-                        Ok(event) => event,
-                        Err(e) => {
-                            warn!(
-                                "MF encoder worker: failed to get event: {} (HRESULT: {:?})",
-                                e,
-                                e.code()
-                            );
-                            encode_failures += 1;
-                            // エラーが続く場合は終了
-                            if encode_failures > 10 {
-                                break;
-                            }
-                            continue;
+                let event = match encoder.event_generator().GetEvent(MF_EVENT_FLAG_NONE) {
+                    Ok(event) => event,
+                    Err(e) => {
+                        warn!(
+                            "MF encoder worker: failed to get event: {} (HRESULT: {:?})",
+                            e,
+                            e.code()
+                        );
+                        encode_failures += 1;
+                        // エラーが続く場合は終了
+                        if encode_failures > 10 {
+                            break;
                         }
+                        continue;
                     }
                 };
 
@@ -319,57 +299,25 @@ pub fn start_mf_encode_workers() -> (
                             }
                         };
 
-                        let job_width = job.width;
-                        let job_height = job.height;
-
-                        // 詳細な処理内訳を計測するスパンを開始
-                        let handle_input_span = span!(
-                            Level::DEBUG,
-                            "handle_need_input",
-                            frame_id = job.frame_id
-                        );
-                        let _handle_input_guard = handle_input_span.enter();
-                        
-                        // エンコード解像度は2の倍数に調整
-                        let encode_width = (job_width / 2) * 2;
-                        let encode_height = (job_height / 2) * 2;
-
-                        // エンコーダーの解像度を更新
-                        if let Err(e) = encoder.resize(encode_width, encode_height) {
-                            warn!("MF encoder worker: failed to resize encoder: {}", e);
-                            encode_failures += 1;
-                            input_meta_queue.pop_back();
-                            continue;
-                        }
+                        let job_width = (job.width / 2) * 2;
+                        let job_height = (job.height / 2) * 2;
 
                         // 前処理（RGBA → NV12 テクスチャ）
-                        // src: job_width/height, dst: encode_width/height
-                        let nv12_texture = {
-                            let preprocess_span = span!(
-                                Level::DEBUG,
-                                "preprocess",
-                                frame_id = job.frame_id
-                            );
-                            let _guard = preprocess_span.enter();
-
-                            match preprocessor.process(
-                                &job.rgba,
-                                job_width,
-                                job_height,
-                                encode_width,
-                                encode_height,
-                                frame_timestamp,
-                            ) {
-                                Ok(texture) => texture,
-                                Err(e) => {
-                                    warn!(
-                                            "MF encoder worker: preprocess failed for {}x{} frame: {} (HRESULT: {:?})",
-                                            job.width, job.height, e, e.source()
-                                        );
-                                    encode_failures += 1;
-                                    input_meta_queue.pop_back(); // メタ情報も削除
-                                    continue;
-                                }
+                        let nv12_texture = match preprocessor.process(
+                            &job.rgba,
+                            width,
+                            height,
+                            frame_timestamp,
+                        ) {
+                            Ok(texture) => texture,
+                            Err(e) => {
+                                warn!(
+                                        "MF encoder worker: preprocess failed for {}x{} frame: {} (HRESULT: {:?})",
+                                        job.width, job.height, e, e.source()
+                                    );
+                                encode_failures += 1;
+                                input_meta_queue.pop_back(); // メタ情報も削除
+                                continue;
                             }
                         };
 
@@ -390,36 +338,26 @@ pub fn start_mf_encode_workers() -> (
                         // メタ情報をキューに保存
                         input_meta_queue.push_back(InputFrameMeta {
                             duration,
-                            width: encode_width,
-                            height: encode_height,
-                            frame_id: job.frame_id,
+                            width: job_width,
+                            height: job_height,
                         });
 
                         // DXGI サーフェスバッファを作成
-                        let input_buffer = {
-                             let buffer_create_span = span!(
-                                Level::DEBUG,
-                                "buffer_create",
-                                frame_id = job.frame_id
-                            );
-                            let _guard = buffer_create_span.enter();
-                            
-                            match MFCreateDXGISurfaceBuffer(
-                                &ID3D11Texture2D::IID,
-                                &nv12_texture,
-                                0,
-                                false,
-                            ) {
-                                Ok(buffer) => buffer,
-                                Err(e) => {
-                                    warn!(
-                                        "MF encoder worker: failed to create DXGI surface buffer: {}",
-                                        e
-                                    );
-                                    encode_failures += 1;
-                                    input_meta_queue.pop_back(); // メタ情報も削除
-                                    continue;
-                                }
+                        let input_buffer = match MFCreateDXGISurfaceBuffer(
+                            &ID3D11Texture2D::IID,
+                            &nv12_texture,
+                            0,
+                            false,
+                        ) {
+                            Ok(buffer) => buffer,
+                            Err(e) => {
+                                warn!(
+                                    "MF encoder worker: failed to create DXGI surface buffer: {}",
+                                    e
+                                );
+                                encode_failures += 1;
+                                input_meta_queue.pop_back(); // メタ情報も削除
+                                continue;
                             }
                         };
 
@@ -468,30 +406,21 @@ pub fn start_mf_encode_workers() -> (
                         }
 
                         // ProcessInput を呼び出す
-                        {
-                            let process_input_span = span!(
-                                Level::DEBUG,
-                                "process_input",
-                                frame_id = job.frame_id
+                        if let Err(e) = encoder.transform().ProcessInput(0, &input_sample, 0) {
+                            warn!(
+                                "MF encoder worker: ProcessInput failed for {}x{} frame: {} (HRESULT: {:?})",
+                                job_width, job_height, e, e.code()
                             );
-                            let _guard = process_input_span.enter();
-                            
-                            if let Err(e) = encoder.transform().ProcessInput(0, &input_sample, 0) {
+                            encode_failures += 1;
+                            input_meta_queue.pop_back();
+                            // エラーが続く場合は警告を出力
+                            if encode_failures > 5 {
                                 warn!(
-                                    "MF encoder worker: ProcessInput failed for {}x{} frame: {} (HRESULT: {:?})",
-                                    job_width, job_height, e, e.code()
+                                    "MF encoder worker: ProcessInput failures exceeded threshold ({} failures)",
+                                    encode_failures
                                 );
-                                encode_failures += 1;
-                                input_meta_queue.pop_back();
-                                // エラーが続く場合は警告を出力
-                                if encode_failures > 5 {
-                                    warn!(
-                                        "MF encoder worker: ProcessInput failures exceeded threshold ({} failures)",
-                                        encode_failures
-                                    );
-                                }
-                                continue;
                             }
+                            continue;
                         }
 
                         frame_timestamp += sample_duration_hns;
@@ -508,22 +437,9 @@ pub fn start_mf_encode_workers() -> (
                         let mut status: u32 = 0;
 
                         let mut output_buffers = [output_data_buffer];
-                        
-                        let process_output_result = {
-                            let expected_frame_id = input_meta_queue.front().map(|m| m.frame_id).unwrap_or(0);
-                            let process_output_span = span!(
-                                Level::DEBUG,
-                                "process_output",
-                                frame_id = expected_frame_id
-                            );
-                            let _guard = process_output_span.enter();
-                            
-                            encoder
-                                .transform()
-                                .ProcessOutput(0, &mut output_buffers, &mut status)
-                        };
-
-                        match process_output_result
+                        match encoder
+                            .transform()
+                            .ProcessOutput(0, &mut output_buffers, &mut status)
                         {
                             Ok(_) => {
                                 if let Some(sample) = output_buffers[0].pSample.take() {
@@ -647,7 +563,6 @@ pub fn start_mf_encode_workers() -> (
                                             duration: meta.duration,
                                             width: meta.width,
                                             height: meta.height,
-                                            frame_id: meta.frame_id,
                                         })
                                         .is_err()
                                     {

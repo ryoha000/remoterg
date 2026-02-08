@@ -17,7 +17,9 @@ use core_types::{
     SignalingResponse, TaggerCommand, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
 };
 #[cfg(feature = "h264")]
-use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+use encoder::windows::h264::MediaFoundationH264EncoderFactory;
+#[cfg(feature = "av1")]
+use encoder::windows::av1::MediaFoundationAV1EncoderFactory;
 use input::InputService;
 use signaling::SignalingClient;
 use video_capture;
@@ -176,6 +178,13 @@ async fn main() -> Result<()> {
             VideoCodec::H264,
             // Arc::new(OpenH264EncoderFactory::new()),
             Arc::new(MediaFoundationH264EncoderFactory::new()),
+        );
+    }
+    #[cfg(feature = "av1")]
+    {
+        encoder_factories.insert(
+            VideoCodec::AV1,
+            Arc::new(MediaFoundationAV1EncoderFactory::new()),
         );
     }
 

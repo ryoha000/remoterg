@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use webrtc_rs::api::interceptor_registry::register_default_interceptors;
-use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
+use webrtc_rs::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_AV1, MIME_TYPE_OPUS};
 use webrtc_rs::api::setting_engine::SettingEngine;
 use webrtc_rs::api::APIBuilder;
 use webrtc_rs::data_channel::data_channel_message::DataChannelMessage as RTCDataChannelMessage;
@@ -74,6 +74,7 @@ pub fn format_ice_candidate(candidate: &RTCIceCandidate) -> String {
 pub fn codec_to_mime_type(codec: VideoCodec) -> String {
     match codec {
         VideoCodec::H264 => MIME_TYPE_H264.to_owned(),
+        VideoCodec::AV1 => MIME_TYPE_AV1.to_owned(),
     }
 }
 

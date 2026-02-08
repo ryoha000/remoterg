@@ -3,7 +3,7 @@ use std::mem::ManuallyDrop;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11ComputeShader, ID3D11ShaderResourceView, ID3D11UnorderedAccessView,
-    D3D11_BIND_UNORDERED_ACCESS,
+    D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_SHARED,
 };
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
@@ -20,7 +20,7 @@ use windows::Win32::Media::MediaFoundation::{
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE,
 };
 
-use crate::h264::mmf::d3d::D3D11Resources;
+use crate::windows::utils::d3d::D3D11Resources;
 
 /// Video Processor MFT による前処理（RGBA → BGRA → NV12 + リサイズ）
 pub struct VideoProcessorPreprocessor {
@@ -38,7 +38,7 @@ impl VideoProcessorPreprocessor {
     /// Video Processor MFT を作成
     pub fn create(d3d_resources: D3D11Resources) -> Result<Self> {
         unsafe {
-            let transform = crate::h264::mmf::mf::find_video_processor()
+            let transform = crate::windows::utils::mf::find_video_processor()
                 .context("Failed to find Video Processor MFT")?;
 
             // D3D マネージャーを設定
@@ -477,14 +477,13 @@ impl VideoProcessorPreprocessor {
                     Usage: D3D11_USAGE_DEFAULT,
                     BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
                     CPUAccessFlags: 0,
-                    MiscFlags: 0,
+                    MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32,
                 };
 
                 let mut texture: Option<ID3D11Texture2D> = None;
                 self.d3d_resources
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))
-                    .ok()
                     .context("Failed to create output texture")?;
 
                 self.output_texture = texture;
@@ -547,7 +546,7 @@ impl VideoProcessorPreprocessor {
             let input_texture = bgra_texture;
 
             // NV12 出力テクスチャを作成 (dst dimensions)
-            let output_texture = self.create_output_texture(dst_width, dst_height)?;
+            let _output_texture = self.create_output_texture(dst_width, dst_height)?;
 
             // DXGI サーフェスバッファを作成
             // MFCreateDXGISurfaceBufferの最初のパラメータはID3D11Texture2DインターフェースのIIDを指定する必要がある
@@ -582,6 +581,7 @@ impl VideoProcessorPreprocessor {
                 .ProcessInput(0, &input_sample, 0)
                 .ok()
                 .context("Failed to process input in Video Processor")?;
+
 
             // ProcessOutput で NV12 テクスチャを取得
             // 非同期MFTの場合、ProcessOutputをループで呼び出して
@@ -652,7 +652,23 @@ impl VideoProcessorPreprocessor {
             }
 
             // Video Processor MFTが提供したテクスチャを返すか、フォールバックとして事前に作成したテクスチャを返す
-            Ok(output_texture_result.unwrap_or(output_texture))
+            // Video Processor から出力が得られた場合、それを output_texture にコピーして返す
+            if let Some(vp_texture) = output_texture_result {
+                use windows::Win32::Graphics::Direct3D11::ID3D11Resource;
+
+                let target_texture = self.output_texture.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Output texture not initialized"))?;
+
+                let src_resource: ID3D11Resource = vp_texture.cast()
+                    .context("Failed to cast VP texture to ID3D11Resource")?;
+                let dst_resource: ID3D11Resource = target_texture.cast()
+                    .context("Failed to cast target texture to ID3D11Resource")?;
+
+                self.d3d_resources.context.CopyResource(&dst_resource, &src_resource);
+                Ok(target_texture.clone())
+            } else {
+                 Err(anyhow::anyhow!("Video Processor did not return any output texture"))
+            }        
         }
     }
 }

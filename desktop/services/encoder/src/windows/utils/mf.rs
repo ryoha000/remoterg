@@ -61,7 +61,6 @@ fn enumerate_mfts(
     Ok(transform_sources)
 }
 
-/// 非同期ハードウェアエンコーダー MFT を検索
 pub unsafe fn find_async_encoder(output_subtype: windows::core::GUID) -> Result<IMFTransform> {
     let input_type = MFT_REGISTER_TYPE_INFO {
         guidMajorType: MFMediaType_Video,
@@ -82,70 +81,68 @@ pub unsafe fn find_async_encoder(output_subtype: windows::core::GUID) -> Result<
         Some(&output_type),
     )?;
 
+    if mfactivate_list.is_empty() {
+        return Err(anyhow::anyhow!("No async H.264 encoder MFT found"));
+    }
 
     // 最初のMFTをアクティベート
-    if let Some(activate) = mfactivate_list.first() {
-        let transform: IMFTransform = activate
+    let activate = mfactivate_list
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No async H.264 encoder MFT found"))?;
+
+    let transform: IMFTransform = activate
         .ActivateObject()
         .ok()
-        .context("Failed to activate async encoder MFT")?;
-        return Ok(transform);
-    }
-    
-    // Strict search failed, try fallback: Enumerate all hardware/async encoders and check capabilities manually
-    // specific to NVIDIA AV1 which might not register types correctly
-    let all_encoders = enumerate_mfts(
-        &MFT_CATEGORY_VIDEO_ENCODER,
-        MFT_ENUM_FLAG(MFT_ENUM_FLAG_ASYNCMFT.0 | 0x00000001), // Hardware removed to allow software fallback
-        None,
-        None,
-    )?;
+        .context("Failed to activate async H.264 encoder MFT")?;
 
-    if all_encoders.is_empty() {
-         return Err(anyhow::anyhow!("No async encoder MFT found (fallback search)"));
-    }
+    // 注意: ShutdownObject() を呼ぶと、ActivateObject() で取得した IMFTransform も無効化される
+    // 参考実装では ShutdownObject() を呼んでいないため、ここでも呼ばない
+    // Array の drop で適切にクリーンアップされる
 
-    // Try to find one by name (since SetOutputType might fail without D3D manager)
-    use windows::core::PWSTR;
-    use windows::Win32::System::Com::CoTaskMemFree;
-
-    for (_i, activate) in all_encoders.iter().enumerate() {
-         unsafe {
-             let mut name_ptr = PWSTR::null();
-             let mut name_len = 0;
-             let _ = activate.GetAllocatedString(
-                 &windows::Win32::Media::MediaFoundation::MFT_FRIENDLY_NAME_Attribute,
-                 &mut name_ptr,
-                 &mut name_len,
-             );
-             
-             let name = if !name_ptr.is_null() {
-                 name_ptr.to_string().unwrap_or_default()
-             } else {
-                 String::new()
-             };
-             
-             // Free the string
-             if !name_ptr.is_null() {
-                 CoTaskMemFree(Some(name_ptr.as_ptr() as _));
-             }
-
-             // Check if it's an AV1 encoder
-             if name.to_uppercase().contains("AV1") {
-                 tracing::info!("Found AV1 Encoder by name: {}", name);
-                 if let Ok(transform) = activate.ActivateObject::<IMFTransform>() {
-                     return Ok(transform);
-                 }
-             }
-         }
-    }
-
-    Err(anyhow::anyhow!("No async encoder MFT found after fallback search (checked names)"))
+    Ok(transform)
 }
 
 /// 非同期ハードウェア H.264 エンコーダー MFT を検索
 pub unsafe fn find_async_h264_encoder() -> Result<IMFTransform> {
-    find_async_encoder(MFVideoFormat_H264)
+    let input_type = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: MFVideoFormat_NV12,
+    };
+
+    let output_type = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: MFVideoFormat_H264,
+    };
+
+    // 非同期ハードウェアエンコーダーを検索
+    // 参考実装に合わせて SORTANDFILTER フラグを追加（より安定した選択のため）
+    // 注意: windows-rs に SORTANDFILTER が定義されていない場合は、ビット値 0x00000001 を使用
+    let mfactivate_list = enumerate_mfts(
+        &MFT_CATEGORY_VIDEO_ENCODER, // guidCategory
+        MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 | MFT_ENUM_FLAG_ASYNCMFT.0 | 0x00000001), // SORTANDFILTER
+        Some(&input_type),
+        Some(&output_type),
+    )?;
+
+    if mfactivate_list.is_empty() {
+        return Err(anyhow::anyhow!("No async H.264 encoder MFT found"));
+    }
+
+    // 最初のMFTをアクティベート
+    let activate = mfactivate_list
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No async H.264 encoder MFT found"))?;
+
+    let transform: IMFTransform = activate
+        .ActivateObject()
+        .ok()
+        .context("Failed to activate async H.264 encoder MFT")?;
+
+    // 注意: ShutdownObject() を呼ぶと、ActivateObject() で取得した IMFTransform も無効化される
+    // 参考実装では ShutdownObject() を呼んでいないため、ここでも呼ばない
+    // Array の drop で適切にクリーンアップされる
+
+    Ok(transform)
 }
 
 /// Video Processor MFT を検索
@@ -231,7 +228,7 @@ pub fn check_mf_available() -> bool {
     }
 
     // D3D11デバイスが作成できるか確認
-    if crate::windows::utils::d3d::create_d3d11_device().is_err() {
+    if super::d3d::create_d3d11_device().is_err() {
         warn!("Failed to create D3D11 device");
         return false;
     }

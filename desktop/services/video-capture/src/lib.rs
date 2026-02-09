@@ -66,8 +66,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         frame: &mut WindowsFrame,
         _capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
-        debug!("on_frame_arrived called");
-
         self.frame_counter += 1;
         let frame_id = self.frame_counter;
 

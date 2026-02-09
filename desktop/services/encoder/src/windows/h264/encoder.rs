@@ -1,13 +1,8 @@
 use anyhow::{Context, Result};
-use tracing::debug;
+use tracing::{debug, info};
 use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount,
-    CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVLowLatencyMode, ICodecAPI, IMFMediaEventGenerator,
-    IMFMediaType, IMFTransform, MFCreateMediaType, MFMediaType_Video, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFT_MESSAGE_COMMAND_FLUSH,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY,
-    MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY, MF_MT_MPEG_SEQUENCE_HEADER,
+    CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVLowLatencyMode, ICodecAPI, IMFMediaEventGenerator, IMFMediaType, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY, MF_MT_MPEG_SEQUENCE_HEADER, MF_SA_D3D11_AWARE, MFCreateMediaType, MFMediaType_Video, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive
 };
 
 use crate::windows::utils::d3d::D3D11Resources;
@@ -80,6 +75,8 @@ impl H264Encoder {
                                 type_index
                             ))?;
 
+                        info!("Found input media type at index {} : {}", type_index, major_type.to_u128());
+
                         if major_type == MFMediaType_Video {
                             // サブタイプを確認
                             let subtype = mt
@@ -116,6 +113,8 @@ impl H264Encoder {
                     }
                 }
             }
+
+            info!("Supported resolutions: {:?}", supported_resolutions);
 
             Ok(supported_resolutions)
         }
@@ -461,7 +460,6 @@ impl H264Encoder {
                         e
                     )
                 })?;
-
             Ok(())
         }
     }

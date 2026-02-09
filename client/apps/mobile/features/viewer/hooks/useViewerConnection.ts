@@ -143,6 +143,7 @@ export function useViewerConnection({ sessionId, onDataChannelMessage }: UseView
           JSON.stringify({
             type: "offer",
             sdp: offer.sdp,
+            // codec: "av1",
             codec: "h264",
           }),
         )

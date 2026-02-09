@@ -2,8 +2,7 @@ use anyhow::{Context, Result};
 use std::mem::ManuallyDrop;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11ComputeShader, ID3D11ShaderResourceView, ID3D11UnorderedAccessView,
-    D3D11_BIND_UNORDERED_ACCESS, D3D11_RESOURCE_MISC_SHARED,
+    D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_VIDEO_ENCODER, ID3D11ComputeShader, ID3D11ShaderResourceView, ID3D11UnorderedAccessView
 };
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
@@ -20,7 +19,8 @@ use windows::Win32::Media::MediaFoundation::{
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE,
 };
 
-use crate::windows::utils::d3d::D3D11Resources;
+use super::d3d::D3D11Resources;
+use super::mf;
 
 /// Video Processor MFT による前処理（RGBA → BGRA → NV12 + リサイズ）
 pub struct VideoProcessorPreprocessor {
@@ -32,19 +32,21 @@ pub struct VideoProcessorPreprocessor {
     rgba_srv: Option<ID3D11ShaderResourceView>,
     bgra_uav: Option<ID3D11UnorderedAccessView>,
     compute_shader: Option<ID3D11ComputeShader>,
+    // 現在設定されているアライメント後の解像度を保持
+    current_aligned_width: u32,
+    current_aligned_height: u32,
 }
 
 impl VideoProcessorPreprocessor {
     /// Video Processor MFT を作成
     pub fn create(d3d_resources: D3D11Resources) -> Result<Self> {
         unsafe {
-            let transform = crate::windows::utils::mf::find_video_processor()
+            let transform = mf::find_video_processor()
                 .context("Failed to find Video Processor MFT")?;
 
-            // D3D マネージャーを設定
             d3d_resources.setup_mft(&transform)?;
 
-            let preprocessor = Self {
+            Ok(Self {
                 transform,
                 d3d_resources,
                 rgba_texture: None,
@@ -53,131 +55,41 @@ impl VideoProcessorPreprocessor {
                 rgba_srv: None,
                 bgra_uav: None,
                 compute_shader: None,
-            };
-
-            // メディアタイプは process() で設定されるためここでは設定しない
-
-            Ok(preprocessor)
+                current_aligned_width: 0,
+                current_aligned_height: 0,
+            })
         }
     }
 
-    /// メディアタイプを設定
-    fn setup_media_types(&mut self, src_width: u32, src_height: u32, dst_width: u32, dst_height: u32) -> Result<()> {
+    fn setup_media_types(&mut self, width: u32, height: u32) -> Result<()> {
         unsafe {
-            // 入力メディアタイプ（BGRA）
-            let input_media_type = MFCreateMediaType()
-                .ok()
-                .context("Failed to create input media type")?;
+            // 入力メディアタイプ（BGRA - アライメント後のサイズ）
+            let input_media_type = MFCreateMediaType().context("Failed to create input type")?;
+            input_media_type.SetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            input_media_type.SetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE, &MFVideoFormat_ARGB32)?;
+            
+            let frame_size = ((width as u64) << 32) | (height as u64);
+            input_media_type.SetUINT64(&windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE, frame_size)?;
+            input_media_type.SetUINT64(&windows::Win32::Media::MediaFoundation::MF_MT_FRAME_RATE, (60u64 << 32) | 1u64)?;
+            input_media_type.SetUINT32(&windows::Win32::Media::MediaFoundation::MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
 
-            input_media_type
-                .SetGUID(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE,
-                    &MFMediaType_Video,
-                )
-                .ok()
-                .context("Failed to set input major type")?;
+            self.transform.SetInputType(0, &input_media_type, 0).context("Failed to set VP input type")?;
 
-            input_media_type
-                .SetGUID(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE,
-                    &MFVideoFormat_ARGB32,
-                )
-                .ok()
-                .context("Failed to set input subtype")?;
+            // 出力メディアタイプ（NV12 - アライメント後のサイズ）
+            let output_media_type = MFCreateMediaType().context("Failed to create output type")?;
+            output_media_type.SetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            output_media_type.SetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+            output_media_type.SetUINT64(&windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE, frame_size)?;
+            output_media_type.SetUINT64(&windows::Win32::Media::MediaFoundation::MF_MT_FRAME_RATE, (60u64 << 32) | 1u64)?;
+            output_media_type.SetUINT32(&windows::Win32::Media::MediaFoundation::MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
 
-            let frame_size = ((src_width as u64) << 32) | (src_height as u64);
-            input_media_type
-                .SetUINT64(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE,
-                    frame_size,
-                )
-                .ok()
-                .context("Failed to set input frame size")?;
+            self.transform.SetOutputType(0, &output_media_type, 0).context("Failed to set VP output type")?;
 
-            let frame_rate = (60u64 << 32) | 1u64;
-            input_media_type
-                .SetUINT64(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_RATE,
-                    frame_rate,
-                )
-                .ok()
-                .context("Failed to set input frame rate")?;
+            self.transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+            self.transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
-            input_media_type
-                .SetUINT32(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_INTERLACE_MODE,
-                    MFVideoInterlace_Progressive.0 as u32,
-                )
-                .ok()
-                .context("Failed to set input interlace mode")?;
-
-            self.transform
-                .SetInputType(0, &input_media_type, 0)
-                .ok()
-                .context("Failed to set Video Processor input type")?;
-
-            // 出力メディアタイプ（NV12）
-            let output_media_type = MFCreateMediaType()
-                .ok()
-                .context("Failed to create output media type")?;
-
-            output_media_type
-                .SetGUID(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE,
-                    &MFMediaType_Video,
-                )
-                .ok()
-                .context("Failed to set output major type")?;
-
-            output_media_type
-                .SetGUID(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE,
-                    &MFVideoFormat_NV12,
-                )
-                .ok()
-                .context("Failed to set output subtype")?;
-
-            let output_frame_size = ((dst_width as u64) << 32) | (dst_height as u64);
-            output_media_type
-                .SetUINT64(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE,
-                    output_frame_size,
-                )
-                .ok()
-                .context("Failed to set output frame size")?;
-
-            output_media_type
-                .SetUINT64(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_RATE,
-                    frame_rate,
-                )
-                .ok()
-                .context("Failed to set output frame rate")?;
-
-            output_media_type
-                .SetUINT32(
-                    &windows::Win32::Media::MediaFoundation::MF_MT_INTERLACE_MODE,
-                    MFVideoInterlace_Progressive.0 as u32,
-                )
-                .ok()
-                .context("Failed to set output interlace mode")?;
-
-            self.transform
-                .SetOutputType(0, &output_media_type, 0)
-                .ok()
-                .context("Failed to set Video Processor output type")?;
-
-            // ストリーム開始を通知（非同期MFTでは BEGIN_STREAMING を先に送る必要がある）
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
-                .ok()
-                .context("Failed to notify begin streaming")?;
-
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
-                .ok()
-                .context("Failed to notify start of stream")?;
-
+            self.current_aligned_width = width;
+            self.current_aligned_height = height;
             Ok(())
         }
     }
@@ -186,83 +98,33 @@ impl VideoProcessorPreprocessor {
 
     /// Compute Shaderを作成
     fn create_compute_shader(&mut self) -> Result<()> {
-        if self.compute_shader.is_some() {
-            return Ok(());
-        }
-
+        if self.compute_shader.is_some() { return Ok(()); }
         unsafe {
-            // HLSL Compute Shaderコード（RGBA→BGRA変換）
             let shader_code = r#"
                 Texture2D<float4> rgba_texture : register(t0);
                 RWTexture2D<float4> bgra_texture : register(u0);
-
                 [numthreads(8, 8, 1)]
-                void CSMain(uint3 id : SV_DispatchThreadID)
-                {
+                void CSMain(uint3 id : SV_DispatchThreadID) {
+                    // 入力が大きくても、出力テクスチャのサイズ内でのみ書き込む
                     float4 rgba = rgba_texture[id.xy];
-                    // GPU が BGRA テクスチャへの書き込み時に自動変換
                     bgra_texture[id.xy] = rgba;
                 }
             "#;
 
             use windows::core::PCSTR;
             use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
-            use windows::Win32::Graphics::Direct3D::Fxc::D3DCOMPILE_OPTIMIZATION_LEVEL3;
 
-            let shader_code_bytes = shader_code.as_bytes();
-            let entry_point_bytes = b"CSMain\0";
-            let target_bytes = b"cs_5_0\0";
-            let entry_point = PCSTR(entry_point_bytes.as_ptr());
-            let target = PCSTR(target_bytes.as_ptr());
+            let mut compiled_shader = None;
+            D3DCompile(shader_code.as_ptr() as _, shader_code.len(), None, None, None, 
+                       PCSTR(b"CSMain\0".as_ptr()), PCSTR(b"cs_5_0\0".as_ptr()), 1 << 15, 0, 
+                       &mut compiled_shader, None)?;
 
-            let mut compiled_shader: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-            let mut error_blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-
-            let result = D3DCompile(
-                shader_code_bytes.as_ptr() as _,
-                shader_code_bytes.len(),
-                None,
-                None,
-                None,
-                entry_point,
-                target,
-                D3DCOMPILE_OPTIMIZATION_LEVEL3 as u32,
-                0,
-                &mut compiled_shader,
-                Some(&mut error_blob),
-            );
-
-            if result.is_err() {
-                let error_msg = if let Some(blob) = error_blob.as_ref() {
-                    let ptr = blob.GetBufferPointer();
-                    let len = blob.GetBufferSize();
-                    std::str::from_utf8(std::slice::from_raw_parts(ptr as *const u8, len as usize))
-                        .unwrap_or("Unknown error")
-                } else {
-                    "Unknown error"
-                };
-                return Err(anyhow::anyhow!(
-                    "Failed to compile compute shader: {}",
-                    error_msg
-                ));
-            }
-
-            let compiled_shader = compiled_shader.ok_or_else(|| {
-                anyhow::anyhow!("Failed to compile compute shader: compiled_shader is None")
-            })?;
-
-            let buffer_ptr = compiled_shader.GetBufferPointer();
-            let buffer_size = compiled_shader.GetBufferSize();
-            let shader_bytes = std::slice::from_raw_parts(buffer_ptr as *const u8, buffer_size);
-
-            let mut compute_shader: Option<ID3D11ComputeShader> = None;
-            self.d3d_resources
-                .device
-                .CreateComputeShader(shader_bytes, None, Some(&mut compute_shader))
-                .ok()
-                .context("Failed to create compute shader")?;
-
-            self.compute_shader = compute_shader;
+            let compiled_shader = compiled_shader.unwrap();
+            let mut shader = None;
+            self.d3d_resources.device.CreateComputeShader(
+                std::slice::from_raw_parts(compiled_shader.GetBufferPointer() as *const u8, compiled_shader.GetBufferSize()),
+                None, Some(&mut shader))?;
+            self.compute_shader = shader;
             Ok(())
         }
     }
@@ -352,9 +214,12 @@ impl VideoProcessorPreprocessor {
                         Quality: 0,
                     },
                     Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_SHADER_RESOURCE.0
+                    BindFlags: (
+                        // D3D11_BIND_VIDEO_ENCODER.0
+                        D3D11_BIND_SHADER_RESOURCE.0
                         | D3D11_BIND_RENDER_TARGET.0
-                        | D3D11_BIND_UNORDERED_ACCESS.0) as u32,
+                        | D3D11_BIND_UNORDERED_ACCESS.0
+                    ) as u32,
                     CPUAccessFlags: 0,
                     MiscFlags: 0,
                 };
@@ -362,9 +227,7 @@ impl VideoProcessorPreprocessor {
                 let mut texture: Option<ID3D11Texture2D> = None;
                 self.d3d_resources
                     .device
-                    .CreateTexture2D(&desc, None, Some(&mut texture))
-                    .ok()
-                    .context("Failed to create BGRA texture")?;
+                    .CreateTexture2D(&desc, None, Some(&mut texture))?;
 
                 self.bgra_texture = texture;
             }
@@ -477,14 +340,13 @@ impl VideoProcessorPreprocessor {
                     Usage: D3D11_USAGE_DEFAULT,
                     BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
                     CPUAccessFlags: 0,
-                    MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32,
+                    MiscFlags: 0,
                 };
 
                 let mut texture: Option<ID3D11Texture2D> = None;
                 self.d3d_resources
                     .device
-                    .CreateTexture2D(&desc, None, Some(&mut texture))
-                    .context("Failed to create output texture")?;
+                    .CreateTexture2D(&desc, None, Some(&mut texture))?;
 
                 self.output_texture = texture;
             }
@@ -514,14 +376,6 @@ impl VideoProcessorPreprocessor {
                 } else {
                     true
                 }
-            } || {
-                 let mut desc = D3D11_TEXTURE2D_DESC::default();
-                 if let Some(tex) = &self.rgba_texture {
-                     tex.GetDesc(&mut desc);
-                     desc.Width != src_width || desc.Height != src_height
-                 } else {
-                     true
-                 }
             };
 
             if needs_reconfigure {
@@ -530,68 +384,117 @@ impl VideoProcessorPreprocessor {
                 self.output_texture = None;
                 self.rgba_srv = None;
                 self.bgra_uav = None;
-                self.setup_media_types(src_width, src_height, dst_width, dst_height)
+                self.setup_media_types(dst_width, dst_height)
                     .context("Failed to setup media types in process")?;
             }
 
-            // RGBA を D3D11 テクスチャにアップロード (src dimensions)
-            let rgba_texture = self.upload_rgba_to_texture(rgba_data, src_width, src_height)?;
+            // 2. RGBAアップロード（生サイズ 1923x1121）
+            if self.rgba_texture.is_none() {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: src_width, Height: src_height, MipLevels: 1, ArraySize: 1,
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT, BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32, ..Default::default()
+                };
+                let mut tex = None;
+                self.d3d_resources.device.CreateTexture2D(&desc, None, Some(&mut tex))?;
+                self.rgba_texture = tex;
+            }
+            let rgba_tex = self.rgba_texture.as_ref().unwrap().clone();
+            self.d3d_resources.context.UpdateSubresource(&rgba_tex, 0, None, rgba_data.as_ptr() as _, src_width * 4, 0);
 
-            // BGRA テクスチャを作成 (src dimensions)
-            let bgra_texture = self.create_bgra_texture(src_width, src_height)?;
+            // 3. BGRA変換用テクスチャ（アライメント済サイズ 1920x1120）
+            if self.bgra_texture.is_none() {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: dst_width, Height: dst_height, MipLevels: 1, ArraySize: 1,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT, 
+                    BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_UNORDERED_ACCESS.0 | D3D11_BIND_RENDER_TARGET.0) as u32, 
+                    ..Default::default()
+                };
+                let mut tex = None;
+                self.d3d_resources.device.CreateTexture2D(&desc, None, Some(&mut tex))?;
+                self.bgra_texture = tex;
+            }
+            let bgra_tex = self.bgra_texture.as_ref().unwrap().clone();
 
-            // GPU側でRGBA→BGRA変換を行う (src dimensions)
-            self.convert_rgba_to_bgra(&rgba_texture, &bgra_texture, src_width, src_height)?;
+            // 4. Compute Shader実行（1923x1121 -> 1920x1120）
+            self.create_compute_shader()?;
+            if self.rgba_srv.is_none() {
+                let mut srv = None;
+                self.d3d_resources.device.CreateShaderResourceView(&rgba_tex, None, Some(&mut srv))?;
+                self.rgba_srv = srv;
+            }
+            if self.bgra_uav.is_none() {
+                let mut uav = None;
+                self.d3d_resources.device.CreateUnorderedAccessView(&bgra_tex, None, Some(&mut uav))?;
+                self.bgra_uav = uav;
+            }
 
-            let input_texture = bgra_texture;
+            self.d3d_resources.context.CSSetShader(self.compute_shader.as_ref(), None);
+            self.d3d_resources.context.CSSetShaderResources(0, Some(&[self.rgba_srv.clone()]));
+            self.d3d_resources.context.CSSetUnorderedAccessViews(0, 1, Some(&self.bgra_uav), None);
+            // 実行範囲はアライメント後のサイズ
+            self.d3d_resources.context.Dispatch((dst_width + 7) / 8, (dst_height + 7) / 8, 1);
+            
+            // クリーンアップ
+            self.d3d_resources.context.CSSetShader(None, None);
+            self.d3d_resources.context.CSSetShaderResources(0, Some(&[None]));
+            self.d3d_resources.context.CSSetUnorderedAccessViews(0, 1, Some(&None), None);
 
-            // NV12 出力テクスチャを作成 (dst dimensions)
-            let _output_texture = self.create_output_texture(dst_width, dst_height)?;
+            // 5. Output用NV12テクスチャ（1920x1120）
+            if self.output_texture.is_none() {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: dst_width, Height: dst_height, MipLevels: 1, ArraySize: 1,
+                    Format: DXGI_FORMAT_NV12, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT, 
+                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32, ..Default::default()
+                };
+                let mut tex = None;
+                self.d3d_resources.device.CreateTexture2D(&desc, None, Some(&mut tex))?;
+                self.output_texture = tex;
+            }
+            let output_tex = self.output_texture.as_ref().unwrap().clone();
 
-            // DXGI サーフェスバッファを作成
-            // MFCreateDXGISurfaceBufferの最初のパラメータはID3D11Texture2DインターフェースのIIDを指定する必要がある
-            let input_buffer =
-                MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &input_texture, 0, false)
+            // 6. MFT Process
+            let input_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &bgra_tex, 0, false)?;
+            let input_sample = MFCreateSample()?;
+            input_sample.AddBuffer(&input_buffer)?;
+            input_sample.SetSampleTime(timestamp)?;
+
+            self.transform.ProcessInput(0, &input_sample, 0)?;
+
+            // ProcessOutput で NV12 テクスチャに書き込ませる
+            // 出力用バッファとサンプルを作成
+            let output_buffer =
+                MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &output_tex, 0, false)
                     .map_err(|e| {
                         anyhow::anyhow!(
-                    "Failed to create DXGI surface buffer (format=ARGB32, width={}, height={}): {}",
-                    dst_width,
-                    dst_height,
-                    e
-                )
+                        "Failed to create DXGI surface buffer for output (format=NV12, width={}, height={}): {}",
+                        dst_width,
+                        dst_height,
+                        e
+                    )
                     })?;
 
-            // 入力サンプルを作成
-            let input_sample = MFCreateSample()
+            let output_sample = MFCreateSample()
                 .ok()
-                .context("Failed to create input sample")?;
+                .context("Failed to create output sample")?;
 
-            input_sample
-                .AddBuffer(&input_buffer)
+            output_sample
+                .AddBuffer(&output_buffer)
                 .ok()
-                .context("Failed to add buffer to sample")?;
+                .context("Failed to add buffer to output sample")?;
 
-            input_sample
-                .SetSampleTime(timestamp)
-                .ok()
-                .context("Failed to set sample time")?;
-
-            // ProcessInput
-            self.transform
-                .ProcessInput(0, &input_sample, 0)
-                .ok()
-                .context("Failed to process input in Video Processor")?;
-
-
-            // ProcessOutput で NV12 テクスチャを取得
             // 非同期MFTの場合、ProcessOutputをループで呼び出して
             // MF_E_TRANSFORM_NEED_MORE_INPUTが返されるまで繰り返す
-            let mut output_texture_result: Option<ID3D11Texture2D> = None;
+            // ただし、出力サンプルを渡す場合は1回で済むことが多い
+            let mut output_produced = false;
 
             loop {
+                // 出力サンプルを渡す
                 let mut output_data_buffer = MFT_OUTPUT_DATA_BUFFER {
                     dwStreamID: 0,
-                    pSample: ManuallyDrop::new(None),
+                    pSample: ManuallyDrop::new(Some(output_sample.clone())),
                     dwStatus: 0,
                     pEvents: ManuallyDrop::new(None),
                 };
@@ -603,41 +506,19 @@ impl VideoProcessorPreprocessor {
                     &mut status,
                 ) {
                     Ok(_) => {
-                        if let Some(output_sample) = output_data_buffer.pSample.take() {
-                            // 出力サンプルからバッファを取得
-                            let output_buffer = output_sample
-                                .GetBufferByIndex(0)
-                                .ok()
-                                .context("Failed to get output buffer")?;
-
-                            // IMFDXGIBufferインターフェースを取得してテクスチャを取り出す
-                            if let Ok(dxgi_buffer) = output_buffer.cast::<IMFDXGIBuffer>() {
-                                let mut texture_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-                                if dxgi_buffer
-                                    .GetResource(&ID3D11Texture2D::IID, &mut texture_ptr as *mut _)
-                                    .is_ok()
-                                {
-                                    if !texture_ptr.is_null() {
-                                        // from_raw は unsafe だが、null チェック済みなので安全
-                                        #[allow(unused_unsafe)]
-                                        let texture =
-                                            unsafe { ID3D11Texture2D::from_raw(texture_ptr as _) };
-                                        // Video Processor MFTが提供したNV12テクスチャを保存
-                                        output_texture_result = Some(texture);
-                                        // ループを続けて、すべての出力を取得する
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
+                        output_produced = true;
+                        // 成功したら完了（1フレーム分）
+                        break;
                     }
                     Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
-                        // すべての出力を取得した - 正常終了
+                        // 入力が足りない（まだ出力できない）
                         break;
                     }
                     Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
                         // ストリーム変更が発生した場合は警告を出して続行
                         tracing::warn!("Video Processor: stream change detected");
+                        // ストリーム変更の場合は再試行が必要かもしれないが、
+                        // ここでは一旦ループを抜ける（次のフレームで再設定されるはず）
                         break;
                     }
                     Err(e) => {
@@ -651,24 +532,14 @@ impl VideoProcessorPreprocessor {
                 }
             }
 
-            // Video Processor MFTが提供したテクスチャを返すか、フォールバックとして事前に作成したテクスチャを返す
-            // Video Processor から出力が得られた場合、それを output_texture にコピーして返す
-            if let Some(vp_texture) = output_texture_result {
-                use windows::Win32::Graphics::Direct3D11::ID3D11Resource;
+            if !output_produced {
+                tracing::warn!("Video Processor: ProcessOutput did not produce output for timestamp {}", timestamp);
+            }
 
-                let target_texture = self.output_texture.as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Output texture not initialized"))?;
+            // Video Processor MFTが書き込んだ（はずの）テクスチャを返す
+            Ok(output_tex)
 
-                let src_resource: ID3D11Resource = vp_texture.cast()
-                    .context("Failed to cast VP texture to ID3D11Resource")?;
-                let dst_resource: ID3D11Resource = target_texture.cast()
-                    .context("Failed to cast target texture to ID3D11Resource")?;
 
-                self.d3d_resources.context.CopyResource(&dst_resource, &src_resource);
-                Ok(target_texture.clone())
-            } else {
-                 Err(anyhow::anyhow!("Video Processor did not return any output texture"))
-            }        
         }
     }
 }

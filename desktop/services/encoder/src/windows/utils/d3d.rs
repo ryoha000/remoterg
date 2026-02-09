@@ -4,13 +4,11 @@ use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_SDK_VERSION,
-    D3D11_CREATE_DEVICE_FLAG, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Media::MediaFoundation::{
-    IMFDXGIDeviceManager, IMFTransform, MFCreateDXGIDeviceManager, MFT_MESSAGE_SET_D3D_MANAGER,
-    MF_TRANSFORM_ASYNC_UNLOCK,
+    IMFDXGIDeviceManager, IMFTransform, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC_UNLOCK, MFCreateDXGIDeviceManager, MFT_MESSAGE_SET_D3D_MANAGER
 };
 
 /// D3D11 デバイスとコンテキスト、DXGI デバイスマネージャーを保持する構造体
@@ -45,6 +43,11 @@ impl D3D11Resources {
                     .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
                     .ok()
                     .context("Failed to unlock async MFT")?;
+            attributes
+                .SetUINT32(&MF_SA_D3D11_AWARE, 1)
+                .map_err(|e|
+                    anyhow::anyhow!("Failed to set MF_SA_D3D11_AWARE attribute: {}", e))?;
+
             }
 
             // D3D マネージャーを設定
@@ -71,9 +74,7 @@ pub fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
             None, // デフォルトアダプター
             D3D_DRIVER_TYPE_HARDWARE,
             HMODULE::default(), // ソフトウェアデバイスなし
-            D3D11_CREATE_DEVICE_FLAG(
-                D3D11_CREATE_DEVICE_VIDEO_SUPPORT.0 | D3D11_CREATE_DEVICE_BGRA_SUPPORT.0,
-            ),
+            windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_FLAG::default(),
             None, // 機能レベル配列
             D3D11_SDK_VERSION,
             Some(&mut device),

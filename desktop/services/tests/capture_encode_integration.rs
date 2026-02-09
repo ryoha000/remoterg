@@ -19,7 +19,7 @@ mod tests {
     fn init_tracing() {
         INIT_TRACING.call_once(|| {
             tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::INFO)
+                .with_max_level(tracing::Level::DEBUG)
                 .with_test_writer()
                 .init();
         });

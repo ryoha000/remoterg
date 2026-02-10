@@ -187,7 +187,7 @@ pub fn check_mf_available() -> bool {
     }
 
     // D3D11デバイスが作成できるか確認
-    if crate::h264::mmf::d3d::create_d3d11_device().is_err() {
+    if crate::windows::utils::d3d::create_d3d11_device().is_err() {
         warn!("Failed to create D3D11 device");
         return false;
     }

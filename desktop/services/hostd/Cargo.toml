@@ -33,5 +33,4 @@ webrtc-rs = { package = "webrtc", version = "0.14" }
 clap = { version = "4.5", features = ["derive", "env"] }
 
 [features]
-default = ["h264"]
-h264 = ["encoder/h264"]
+default = []

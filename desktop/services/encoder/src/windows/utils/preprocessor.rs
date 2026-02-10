@@ -20,7 +20,7 @@ use windows::Win32::Media::MediaFoundation::{
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE,
 };
 
-use crate::h264::mmf::d3d::D3D11Resources;
+use crate::windows::utils::d3d::D3D11Resources;
 
 /// Video Processor MFT による前処理（RGBA → BGRA → NV12 + リサイズ）
 pub struct VideoProcessorPreprocessor {
@@ -38,7 +38,7 @@ impl VideoProcessorPreprocessor {
     /// Video Processor MFT を作成
     pub fn create(d3d_resources: D3D11Resources) -> Result<Self> {
         unsafe {
-            let transform = crate::h264::mmf::mf::find_video_processor()
+            let transform = crate::windows::utils::mf::find_video_processor()
                 .context("Failed to find Video Processor MFT")?;
 
             // D3D マネージャーを設定

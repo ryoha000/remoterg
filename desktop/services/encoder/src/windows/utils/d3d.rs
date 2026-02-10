@@ -17,21 +17,19 @@ use windows::Win32::Media::MediaFoundation::{
 pub struct D3D11Resources {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
-    pub device_manager: IMFDXGIDeviceManager,
-    reset_token: u32,
+    pub imf_dev_manager: IMFDXGIDeviceManager,
 }
 
 impl D3D11Resources {
     /// D3D11 デバイスと DXGI デバイスマネージャーを作成
     pub fn create() -> Result<Self> {
         let (device, context) = create_d3d11_device()?;
-        let (device_manager, reset_token) = create_dxgi_device_manager(&device)?;
+        let (device_manager, _reset_token) = create_dxgi_device_manager(&device)?;
 
         Ok(Self {
             device,
             context,
-            device_manager,
-            reset_token,
+            imf_dev_manager: device_manager,
         })
     }
 
@@ -50,7 +48,7 @@ impl D3D11Resources {
             transform
                 .ProcessMessage(
                     MFT_MESSAGE_SET_D3D_MANAGER,
-                    std::mem::transmute(self.device_manager.as_raw()),
+                    std::mem::transmute(self.imf_dev_manager.as_raw()),
                 )
                 .ok()
                 .context("Failed to setup D3D manager on H.264 encoder")?;

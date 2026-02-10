@@ -4,11 +4,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "h264")]
-use encoder::h264::openh264::OpenH264EncoderFactory;
-
-#[cfg(all(feature = "h264", windows))]
-use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+#[cfg(windows)]
+use encoder::windows::h264::MediaFoundationH264EncoderFactory;
 
 /// フレーム生成パターンの種類
 #[allow(dead_code)]
@@ -211,16 +208,7 @@ fn bench_encoder_multiple_frames<F: VideoEncoderFactory>(
     group.finish();
 }
 
-#[cfg(feature = "h264")]
-fn bench_openh264(c: &mut Criterion) {
-    let factory = OpenH264EncoderFactory::new();
-
-    // 複数フレームの連続エンコード（1080pのみ、代表的なパターン）
-    bench_encoder_multiple_frames(c, "openh264", &factory, 1920, 1080, FramePattern::Noise);
-    bench_encoder_multiple_frames(c, "openh264", &factory, 3840, 2160, FramePattern::Noise);
-}
-
-#[cfg(all(feature = "h264", windows))]
+#[cfg(windows)]
 fn bench_mmf(c: &mut Criterion) {
     let factory = MediaFoundationH264EncoderFactory::new();
 
@@ -235,13 +223,13 @@ fn bench_mmf(c: &mut Criterion) {
     bench_encoder_multiple_frames(c, "mmf", &factory, 3840, 2160, FramePattern::Noise);
 }
 
-#[cfg(all(feature = "h264", windows))]
-criterion_group!(benches, bench_openh264, bench_mmf);
+#[cfg(windows)]
+criterion_group!(benches, bench_mmf);
 
-#[cfg(all(feature = "h264", not(windows)))]
-criterion_group!(benches, bench_openh264);
+#[cfg(not(windows))]
+fn dummy_bench(_: &mut criterion::Criterion) {}
 
-#[cfg(not(feature = "h264"))]
-criterion_group!(benches);
+#[cfg(not(windows))]
+criterion_group!(benches, dummy_bench);
 
 criterion_main!(benches);

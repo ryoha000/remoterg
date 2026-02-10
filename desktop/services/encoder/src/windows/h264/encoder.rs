@@ -9,14 +9,14 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY,
     MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY, MF_MT_MPEG_SEQUENCE_HEADER,
 };
+use windows::Win32::System::Variant::VARIANT;
 
-use crate::h264::mmf::d3d::D3D11Resources;
+use crate::windows::utils::d3d::D3D11Resources;
 
 /// 非同期ハードウェア H.264 エンコーダー
 pub struct H264Encoder {
     transform: IMFTransform,
     event_generator: IMFMediaEventGenerator,
-    d3d_resources: D3D11Resources,
     width: u32,
     height: u32,
 }
@@ -25,7 +25,7 @@ impl H264Encoder {
     /// H.264 エンコーダーを作成
     pub fn create(d3d_resources: D3D11Resources, width: u32, height: u32) -> Result<Self> {
         unsafe {
-            let transform = crate::h264::mmf::mf::find_async_h264_encoder()
+            let transform = crate::windows::utils::mf::find_async_h264_encoder()
                 .context("Failed to find async H.264 encoder MFT")?;
 
             // D3D マネージャーを設定
@@ -40,7 +40,6 @@ impl H264Encoder {
             let mut encoder = Self {
                 transform,
                 event_generator,
-                d3d_resources,
                 width,
                 height,
             };
@@ -473,9 +472,13 @@ impl H264Encoder {
                 .cast()
                 .ok()
                 .context("Failed to cast transform to ICodecAPI")?;
-            // CODECAPI_AVEncVideoForceKeyFrameを設定（値は1）
+            // CODECAPI_AVEncVideoForceKeyFrameを設定（値は1(VT_UI4)）
+            // windows crateのVARIANTはFrom<u32>を実装している場合がある
+            let val = if force { 1u32 } else { 0u32 };
+            let variant: VARIANT = val.into();
+
             codec_api
-                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &force.into())
+                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &variant)
                 .map_err(|e| {
                     anyhow::anyhow!("Failed to set CODECAPI_AVEncVideoForceKeyFrame: {}", e)
                 })?;

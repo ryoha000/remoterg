@@ -9,14 +9,14 @@ use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
     METransformHaveOutput, METransformNeedInput, MFCreateDXGISurfaceBuffer, MFCreateSample,
-    MFSampleExtension_CleanPoint, MFSampleExtension_VideoEncodePictureType, MFT_OUTPUT_DATA_BUFFER,
+    MFSampleExtension_CleanPoint, MFT_OUTPUT_DATA_BUFFER,
     MF_EVENT_FLAG_NONE, MF_EVENT_TYPE, MF_E_TRANSFORM_NEED_MORE_INPUT,
     MF_E_TRANSFORM_STREAM_CHANGE,
 };
 
-use crate::h264::mmf::d3d::D3D11Resources;
-use crate::h264::mmf::encoder::H264Encoder;
-use crate::h264::mmf::preprocessor::VideoProcessorPreprocessor;
+use crate::windows::utils::d3d::D3D11Resources;
+use crate::windows::h264::encoder::H264Encoder;
+use crate::windows::utils::preprocessor::VideoProcessorPreprocessor;
 
 /// H.264データがAnnex-B形式（スタートコード）かどうかを判定
 fn is_annexb_format(data: &[u8]) -> bool {
@@ -457,13 +457,9 @@ pub fn start_mf_encode_workers() -> (
 
                         // キーフレーム要求がある場合は強制
                         if job.request_keyframe {
-                            if let Err(e) =
-                                input_sample.SetUINT32(&MFSampleExtension_VideoEncodePictureType, 1)
-                            {
-                                warn!("MF encoder worker: failed to set picture type: {}", e);
-                                encode_failures += 1;
-                                input_meta_queue.pop_back();
-                                continue;
+                            if let Err(e) = encoder.set_force_keyframe(true) {
+                                warn!("MF encoder worker: failed to set force keyframe: {}", e);
+                                // 致命的ではないため警告のみで続行
                             }
                         }
 

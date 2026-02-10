@@ -1,8 +1,7 @@
-#[cfg(all(windows, feature = "h264"))]
 #[cfg(test)]
 mod tests {
-    use crate::h264::mmf::mf::{check_mf_available, find_h264_encoder, init_media_foundation};
-    use crate::h264::mmf::MediaFoundationH264EncoderFactory;
+    use crate::windows::utils::mf::{check_mf_available, find_h264_encoder, init_media_foundation};
+    use crate::windows::h264::MediaFoundationH264EncoderFactory;
     use core_types::{EncodeJob, ShutdownError, VideoCodec, VideoEncoderFactory};
     use std::sync::Arc;
     use std::{
@@ -56,7 +55,7 @@ mod tests {
             timestamp,
             enqueue_at: Instant::now(),
             request_keyframe,
-            frame_id: 0,
+            frame_id: timestamp, // 簡易的にtimestampをframe_idとして使用
         }
     }
 

@@ -14,7 +14,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 core-types = { path = "../core" }
 video-capture = { path = "../video-capture" }
-encoder = { path = "../encoder", features = ["h264"] }
+encoder = { path = "../encoder" }
 windows-capture = "2.0.0-alpha.7"
 
 [dev-dependencies]

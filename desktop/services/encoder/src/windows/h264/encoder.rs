@@ -48,16 +48,7 @@ impl H264Encoder {
                 first_keyframe_sent: false,
             };
 
-            // 低遅延属性を設定（ベストエフォート、失敗しても無視）
-            media_type::setup_low_latency_attributes(&encoder.transform)?;
-
-            // メディアタイプを設定
-            media_type::setup_media_types(&encoder.transform, width, height)
-                .with_context(|| format!("Failed to setup media types for {}x{}", width, height))
-                .map_err(|e| {
-                    tracing::error!("Media type setup failed: {:?}", e);
-                    e
-                })?;
+            // メディアタイプの設定はpipeline側で行うため、ここでは行わない
 
             Ok(encoder)
         }
@@ -107,8 +98,7 @@ impl HardwareEncoder for H264Encoder {
         if self.width != width || self.height != height {
             self.width = width;
             self.height = height;
-            media_type::setup_media_types(&self.transform, width, height)
-                .context("Failed to resize H.264 encoder")?;
+            // メディアタイプの再設定はpipeline側で行われる
         }
         Ok(())
     }

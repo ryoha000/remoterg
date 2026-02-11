@@ -17,11 +17,7 @@ mod tests {
         rgba
     }
 
-    fn create_encode_job(
-        width: u32,
-        height: u32,
-        rgba: Vec<u8>
-    ) -> EncodeJob {
+    fn create_encode_job(width: u32, height: u32, rgba: Vec<u8>) -> EncodeJob {
         let arc_rgba = Arc::new(rgba);
         EncodeJob {
             width,
@@ -56,8 +52,14 @@ mod tests {
             .expect("Encode timeout")
             .expect("Failed to receive encode result");
 
-        assert!(!result.sample_data.is_empty(), "Encoded data should not be empty");
-        println!("Full HD Encoded frame size: {}x{}", result.width, result.height);
+        assert!(
+            !result.sample_data.is_empty(),
+            "Encoded data should not be empty"
+        );
+        println!(
+            "Full HD Encoded frame size: {}x{}",
+            result.width, result.height
+        );
         assert_eq!(result.width, width);
         assert_eq!(result.height, height);
     }
@@ -85,9 +87,15 @@ mod tests {
             .expect("Encode timeout")
             .expect("Failed to receive encode result");
 
-        assert!(!result.sample_data.is_empty(), "Encoded data should not be empty");
-        println!("Odd Resolution Encoded frame size: {}x{}", result.width, result.height);
-        
+        assert!(
+            !result.sample_data.is_empty(),
+            "Encoded data should not be empty"
+        );
+        println!(
+            "Odd Resolution Encoded frame size: {}x{}",
+            result.width, result.height
+        );
+
         // Factory aligns to even numbers (truncates)
         let expected_width = (width / 2) * 2;
         let expected_height = (height / 2) * 2;

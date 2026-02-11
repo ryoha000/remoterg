@@ -80,7 +80,7 @@ impl TaggerService {
 
     pub async fn analyze_screenshot(&self, image_data: &[u8], prompt: &str) -> Result<String> {
         let base64_image = BASE64_STANDARD.encode(image_data);
-        let data_url = format!("data:image/png;base64,{}", base64_image); 
+        let data_url = format!("data:image/png;base64,{}", base64_image);
 
         let request = ChatCompletionRequest {
             messages: vec![Message {
@@ -90,9 +90,7 @@ impl TaggerService {
                         text: prompt.to_string(),
                     },
                     ContentPart::ImageUrl {
-                        image_url: ImageUrl {
-                            url: data_url,
-                        },
+                        image_url: ImageUrl { url: data_url },
                     },
                 ],
             }],
@@ -195,7 +193,8 @@ impl TaggerService {
                                     return;
                                 }
 
-                                if let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data) {
+                                if let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data)
+                                {
                                     if let Some(choice) = chunk.choices.first() {
                                         if let Some(content) = &choice.delta.content {
                                             if tx.send(Ok(content.clone())).await.is_err() {

@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use core_types::{DataChannelMessage, SignalingResponse, VideoCodec, VideoStreamMessage, WebRtcMessage};
+use core_types::{
+    DataChannelMessage, SignalingResponse, VideoCodec, VideoStreamMessage, WebRtcMessage,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

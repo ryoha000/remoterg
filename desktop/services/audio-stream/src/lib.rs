@@ -31,10 +31,7 @@ impl AudioStreamService {
     /// 音声トラックとRTPSenderを受け取り、エンコード結果を書き込む
     pub async fn run(
         mut self,
-        mut track_rx: mpsc::Receiver<(
-            Arc<TrackLocalStaticSample>,
-            Arc<RTCRtpSender>,
-        )>,
+        mut track_rx: mpsc::Receiver<(Arc<TrackLocalStaticSample>, Arc<RTCRtpSender>)>,
     ) -> Result<()> {
         info!("AudioStreamService started");
 

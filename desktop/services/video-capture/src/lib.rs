@@ -89,7 +89,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         for y in 0..height {
             let start = y * row_pitch;
             let end = start + row_size;
-            
+
             if end <= raw_buffer.len() {
                 buffer.extend_from_slice(&raw_buffer[start..end]);
             }
@@ -178,7 +178,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             }
         }
 
-
         drop(_send_guard);
         drop(_frame_guard);
 
@@ -229,7 +228,7 @@ impl CaptureService {
         let mut capture_control: Option<CaptureControl<CaptureHandler, anyhow::Error>> = None;
         let mut target_hwnd: Option<u64> = None;
         let mut config = CaptureConfig::default();
-        
+
         // スクリーンショット要求を保持する共有ステート
         let screenshot_req: Arc<Mutex<Option<oneshot::Sender<Frame>>>> = Arc::new(Mutex::new(None));
         // 最新フレームのキャッシュ（共有）
@@ -409,4 +408,3 @@ struct CaptureConfigWithSender {
     screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
     last_captured_frame: Arc<Mutex<Option<Frame>>>,
 }
-

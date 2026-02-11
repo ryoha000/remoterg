@@ -34,10 +34,17 @@ impl Default for CaptureConfig {
 /// Capture サービスへのメッセージ
 #[derive(Debug)]
 pub enum CaptureMessage {
-    Start { hwnd: u64 },
+    Start {
+        hwnd: u64,
+    },
     Stop,
-    UpdateConfig { size: CaptureSize, fps: u32 },
-    RequestFrame { tx: tokio::sync::oneshot::Sender<Frame> },
+    UpdateConfig {
+        size: CaptureSize,
+        fps: u32,
+    },
+    RequestFrame {
+        tx: tokio::sync::oneshot::Sender<Frame>,
+    },
 }
 
 /// Capture サービスの実行結果 Future 型
@@ -208,9 +215,7 @@ pub enum WebRtcMessage {
     /// ICE Restartをトリガー
     TriggerIceRestart,
     /// ICE RestartのAnswerを受信
-    SetAnswerForRestart {
-        sdp: String,
-    },
+    SetAnswerForRestart { sdp: String },
 }
 
 /// シグナリングサービスへの応答メッセージ
@@ -238,15 +243,31 @@ pub enum SignalingResponse {
 /// DataChannel経由でやり取りするメッセージ
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DataChannelMessage {
-    Key { key: String, down: bool },
-    MouseWheel { delta: i32 },
+    Key {
+        key: String,
+        down: bool,
+    },
+    MouseWheel {
+        delta: i32,
+    },
     ScreenshotRequest,
-    Ping { timestamp: u64 },
-    Pong { timestamp: u64 },
+    Ping {
+        timestamp: u64,
+    },
+    Pong {
+        timestamp: u64,
+    },
     // Input
-    MouseClick { x: f64, y: f64, button: String },
+    MouseClick {
+        x: f64,
+        y: f64,
+        button: String,
+    },
     // LLM Analysis
-    AnalyzeRequest { id: String, max_edge: u32 },
+    AnalyzeRequest {
+        id: String,
+        max_edge: u32,
+    },
     // Outgoing messages (Host -> Client)
     #[serde(rename = "SCREENSHOT_METADATA")]
     ScreenshotMetadata {
@@ -292,7 +313,6 @@ pub enum TaggerCommand {
         reply_tx: tokio::sync::oneshot::Sender<LlmConfig>,
     },
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScreenshotMetadataPayload {

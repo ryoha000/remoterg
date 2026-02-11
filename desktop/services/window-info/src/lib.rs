@@ -2,7 +2,9 @@ use anyhow::Result;
 use windows::Win32::Foundation::{HANDLE, HWND, MAX_PATH};
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
-use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+};
 
 pub struct WindowInfoProvider;
 
@@ -21,8 +23,12 @@ impl WindowInfoProvider {
     pub fn get_info(&self, hwnd: u64) -> Result<WindowMetadata> {
         let hwnd = HWND(hwnd as *mut _);
 
-        let title = self.get_window_title(hwnd).unwrap_or_else(|_| "Unknown".to_string());
-        let (process_path, process_name) = self.get_process_info(hwnd).unwrap_or_else(|_| ("Unknown".to_string(), "Unknown".to_string()));
+        let title = self
+            .get_window_title(hwnd)
+            .unwrap_or_else(|_| "Unknown".to_string());
+        let (process_path, process_name) = self
+            .get_process_info(hwnd)
+            .unwrap_or_else(|_| ("Unknown".to_string(), "Unknown".to_string()));
 
         Ok(WindowMetadata {
             title,
@@ -74,7 +80,7 @@ impl WindowInfoProvider {
             if len == 0 {
                 // close handle handled by Drop? No, OpenProcess returns HANDLE which is not automatically closed by windows-rs unless using specific wrapper?
                 // windows-rs HANDLE implements Drop if it owns it. But raw HANDLE doesn't.
-                // Owned<HANDLE> equivalent in windows crate is usually explicit. 
+                // Owned<HANDLE> equivalent in windows crate is usually explicit.
                 // Wait, windows crate 0.48+ HANDLE is Copy/Clone, so it doesn't close on drop.
                 // We need to use Cancel/CloseHandle?
                 // Actually windows::core::Owned is used sometimes, but standard HANDLE is raw.

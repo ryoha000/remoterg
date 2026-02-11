@@ -19,12 +19,12 @@ use core_types::{
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
 use input::InputService;
 use signaling::SignalingClient;
+use tagger::TaggerService;
+use tagger_setup::TaggerSetup;
 use video_capture;
 use video_capture_mock;
 use video_stream::VideoStreamService;
 use webrtc::WebRtcService;
-use tagger::TaggerService;
-use tagger_setup::TaggerSetup;
 
 #[derive(Parser, Debug)]
 #[command(name = "hostd")]
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
 
     // ログ設定
     let filter = EnvFilter::new(&args.log_level);
-    
+
     // tracing-chrome layer setup (output to trace-timestamp.json)
     let (chrome_layer, _guard) = tracing_chrome::ChromeLayerBuilder::new()
         .include_args(true)
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
-                .with_filter(filter)
+                .with_filter(filter),
         )
         .init();
 
@@ -127,7 +127,10 @@ async fn main() -> Result<()> {
 
     // LLM Sidecar Setup
     let mut tagger_setup = TaggerSetup::new();
-    let llama_server_path = args.llama_server_path.as_ref().map(std::path::PathBuf::from);
+    let llama_server_path = args
+        .llama_server_path
+        .as_ref()
+        .map(std::path::PathBuf::from);
 
     if let Err(e) = tagger_setup
         .start(args.llm_port, llama_server_path.clone(), None, None)
@@ -164,8 +167,6 @@ async fn main() -> Result<()> {
         Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
         Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
     )>(10);
-
-
 
     let mut encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>> = HashMap::new();
     encoder_factories.insert(
@@ -230,10 +231,10 @@ async fn main() -> Result<()> {
 
     // CaptureServiceへのコマンド送信チャネルを複製
     let capture_cmd_tx_for_input = capture_cmd_tx.clone();
-    
+
     let input_service = InputService::new(
-        data_channel_rx, 
-        capture_cmd_tx_for_input, 
+        data_channel_rx,
+        capture_cmd_tx_for_input,
         outgoing_dc_tx, // Pass outgoing_dc_tx
         tagger_service,
         tagger_cmd_tx,
@@ -276,14 +277,12 @@ async fn main() -> Result<()> {
     let mut signaling_handle = tokio::spawn(async move { signaling_client.run().await });
 
     // VideoStreamService起動タスク
-    let mut video_stream_handle = tokio::spawn(async move {
-        video_stream_service.run(video_track_rx).await
-    });
+    let mut video_stream_handle =
+        tokio::spawn(async move { video_stream_service.run(video_track_rx).await });
 
     // AudioStreamService起動タスク
-    let mut audio_stream_handle = tokio::spawn(async move {
-        audio_stream_service.run(audio_track_rx).await
-    });
+    let mut audio_stream_handle =
+        tokio::spawn(async move { audio_stream_service.run(audio_track_rx).await });
 
     // WebRTC は非 Send 型を含むため spawn せず現在のタスクで実行する
     let webrtc_fut = webrtc_service.run(webrtc_msg_tx_for_run);

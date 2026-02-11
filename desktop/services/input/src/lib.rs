@@ -8,7 +8,8 @@ use uuid::Uuid;
 use tagger::TaggerService;
 
 use core_types::{
-    CaptureMessage, DataChannelMessage, Frame, OutgoingDataChannelMessage, ScreenshotMetadataPayload,
+    CaptureMessage, DataChannelMessage, Frame, OutgoingDataChannelMessage,
+    ScreenshotMetadataPayload,
 };
 
 use window_info::WindowInfoProvider;
@@ -19,7 +20,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, GetWindowRect, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, GetWindowRect, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN,
+};
 
 /// 入力サービス
 pub struct InputService {
@@ -122,7 +126,10 @@ impl InputService {
                 self.handle_screenshot_request().await?;
             }
             DataChannelMessage::AnalyzeRequest { id, max_edge } => {
-                info!("Analysis requested for screenshot: {} (max_edge: {})", id, max_edge);
+                info!(
+                    "Analysis requested for screenshot: {} (max_edge: {})",
+                    id, max_edge
+                );
                 self.handle_analyze_request(id, max_edge).await?;
             }
             DataChannelMessage::Ping { timestamp } => {
@@ -206,7 +213,10 @@ impl InputService {
         let window_info = match self.window_info_provider.get_info(self.target_hwnd) {
             Ok(info) => Some(info),
             Err(e) => {
-                error!("Failed to get window info for hwnd {}: {}", self.target_hwnd, e);
+                error!(
+                    "Failed to get window info for hwnd {}: {}",
+                    self.target_hwnd, e
+                );
                 None
             }
         };
@@ -253,7 +263,12 @@ impl InputService {
                 .await?;
         }
 
-        info!("Sent screenshot {} ({} bytes, {} chunks)", id, jpeg_data.len(), total_chunks);
+        info!(
+            "Sent screenshot {} ({} bytes, {} chunks)",
+            id,
+            jpeg_data.len(),
+            total_chunks
+        );
 
         Ok(())
     }
@@ -268,27 +283,36 @@ impl InputService {
 
         // 1. Read file
         let image_data = tokio::fs::read(&file_path).await?;
-        info!("Read screenshot file: {:?} ({} bytes)", file_path, image_data.len());
+        info!(
+            "Read screenshot file: {:?} ({} bytes)",
+            file_path,
+            image_data.len()
+        );
 
         // 2. Resize if needed
         let image_data_for_analysis = match image::load_from_memory(&image_data) {
             Ok(img) => {
                 let width = img.width();
                 let height = img.height();
-                
+
                 if width > max_edge || height > max_edge {
-                    info!("Resizing image for analysis from {}x{} to max_edge {}", width, height, max_edge);
-                    let resized = img.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3);
-                    
+                    info!(
+                        "Resizing image for analysis from {}x{} to max_edge {}",
+                        width, height, max_edge
+                    );
+                    let resized =
+                        img.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3);
+
                     let mut resized_data = Vec::new();
                     let mut cursor = std::io::Cursor::new(&mut resized_data);
-                    
+
                     match resized.write_to(&mut cursor, image::ImageOutputFormat::Png) {
                         Ok(_) => {
                             info!("Resized image size: {} bytes", resized_data.len());
-                            
+
                             // Save resized image
-                            let resized_path = self.screenshot_dir.join(format!("{}_resized.png", id));
+                            let resized_path =
+                                self.screenshot_dir.join(format!("{}_resized.png", id));
                             if let Err(e) = tokio::fs::write(&resized_path, &resized_data).await {
                                 error!("Failed to save resized image: {}", e);
                             } else {
@@ -296,7 +320,7 @@ impl InputService {
                             }
 
                             resized_data
-                        },
+                        }
                         Err(e) => {
                             error!("Failed to encode resized image: {}", e);
                             image_data // fallback to original
@@ -305,7 +329,7 @@ impl InputService {
                 } else {
                     image_data
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to load image for resizing: {}", e);
                 image_data // fallback
@@ -428,7 +452,7 @@ impl InputService {
         // Click sequence: Move -> Down -> Up
         // In SendInput, we can combine or just send separate events.
         // For reliability, Move then Click.
-        
+
         let inputs = [
             INPUT {
                 r#type: INPUT_MOUSE,
@@ -450,7 +474,9 @@ impl InputService {
                         dx: abs_x,
                         dy: abs_y,
                         mouseData: 0,
-                        dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_VIRTUALDESK,
+                        dwFlags: MOUSEEVENTF_ABSOLUTE
+                            | MOUSEEVENTF_LEFTDOWN
+                            | MOUSEEVENTF_VIRTUALDESK,
                         time: 0,
                         dwExtraInfo: 0,
                     },
@@ -463,7 +489,9 @@ impl InputService {
                         dx: abs_x,
                         dy: abs_y,
                         mouseData: 0,
-                        dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTUP | MOUSEEVENTF_VIRTUALDESK,
+                        dwFlags: MOUSEEVENTF_ABSOLUTE
+                            | MOUSEEVENTF_LEFTUP
+                            | MOUSEEVENTF_VIRTUALDESK,
                         time: 0,
                         dwExtraInfo: 0,
                     },

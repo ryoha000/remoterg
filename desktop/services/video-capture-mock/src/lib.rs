@@ -110,7 +110,7 @@ impl CaptureService {
                             config.fps = fps;
                             frame_index = 0;
                             let regen_start = Instant::now();
-                            
+
                             // 設定変更時もバックグラウンドで再生成
                             let config_clone = config.clone();
                             let new_frames = tokio::task::spawn_blocking(move || {

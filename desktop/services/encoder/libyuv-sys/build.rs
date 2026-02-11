@@ -36,10 +36,7 @@ fn main() {
 
     let build_output = cmake_config.build();
 
-    println!(
-        "CMake build output directory: {}",
-        build_output.display()
-    );
+    println!("CMake build output directory: {}", build_output.display());
 
     // 静的ライブラリのパスを設定
     // cmakeクレートはbuild()がビルドディレクトリのパスを返す
@@ -96,10 +93,7 @@ fn main() {
         for lib_path in &possible_paths {
             if lib_path.exists() {
                 found_lib = Some(lib_path.parent().unwrap().to_path_buf());
-                println!(
-                    "Found libyuv library at: {}",
-                    lib_path.display()
-                );
+                println!("Found libyuv library at: {}", lib_path.display());
                 break;
             }
         }

@@ -20,7 +20,6 @@ pub struct TaggerSetup {
     current_mmproj_path: Option<PathBuf>,
 }
 
-
 impl TaggerSetup {
     pub fn new() -> Self {
         Self {
@@ -48,7 +47,10 @@ impl TaggerSetup {
         let server_path = self.resolve_server_path(server_path)?;
         let model_path = if let Some(p) = custom_model_path {
             if !p.exists() {
-                warn!("Custom model file not found at {:?}. llama-server might fail.", p);
+                warn!(
+                    "Custom model file not found at {:?}. llama-server might fail.",
+                    p
+                );
             }
             p
         } else {
@@ -57,12 +59,15 @@ impl TaggerSetup {
         self.current_model_path = Some(model_path.clone());
 
         let mmproj_path = if let Some(p) = custom_mmproj_path {
-             if !p.exists() {
-                warn!("Custom mmproj file not found at {:?}. llama-server might fail.", p);
+            if !p.exists() {
+                warn!(
+                    "Custom mmproj file not found at {:?}. llama-server might fail.",
+                    p
+                );
             }
             p
         } else {
-             self.resolve_mmproj_path(&server_path)?
+            self.resolve_mmproj_path(&server_path)?
         };
         self.current_mmproj_path = Some(mmproj_path.clone());
 
@@ -117,7 +122,10 @@ impl TaggerSetup {
 
         let exe_path = server_path.join("llama-server.exe");
         if !exe_path.exists() {
-            warn!("llama-server.exe not found at {:?}. LLM features will be unavailable.", exe_path);
+            warn!(
+                "llama-server.exe not found at {:?}. LLM features will be unavailable.",
+                exe_path
+            );
             return Ok(());
         }
 
@@ -133,20 +141,20 @@ impl TaggerSetup {
 
         if let Some(job) = self.job_handle {
             if let Some(pid) = child.id() {
-                let process_handle_res = unsafe {
-                    OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)
-                };
+                let process_handle_res =
+                    unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) };
                 match process_handle_res {
-                    Ok(process_handle) => {
-                        unsafe {
-                            if let Err(e) = AssignProcessToJobObject(job, process_handle) {
-                                warn!("Failed to assign llama-server to Job Object: {}", e);
-                            }
-                            let _ = CloseHandle(process_handle);
+                    Ok(process_handle) => unsafe {
+                        if let Err(e) = AssignProcessToJobObject(job, process_handle) {
+                            warn!("Failed to assign llama-server to Job Object: {}", e);
                         }
-                    }
+                        let _ = CloseHandle(process_handle);
+                    },
                     Err(e) => {
-                         warn!("Failed to open process handle for llama-server (PID: {}): {}", pid, e);
+                        warn!(
+                            "Failed to open process handle for llama-server (PID: {}): {}",
+                            pid, e
+                        );
                     }
                 }
             }
@@ -166,17 +174,22 @@ impl TaggerSetup {
         custom_mmproj_path: Option<PathBuf>,
     ) -> Result<()> {
         self.shutdown().await?;
-        self.start(port, server_path, custom_model_path, custom_mmproj_path).await
+        self.start(port, server_path, custom_model_path, custom_mmproj_path)
+            .await
     }
 
     pub fn get_config(&self) -> (u16, Option<PathBuf>, Option<PathBuf>) {
-        (self.current_port, self.current_model_path.clone(), self.current_mmproj_path.clone())
+        (
+            self.current_port,
+            self.current_model_path.clone(),
+            self.current_mmproj_path.clone(),
+        )
     }
 
     fn resolve_server_path(&self, server_path: Option<PathBuf>) -> Result<PathBuf> {
         if let Some(path) = server_path {
-             debug!("Using provided server path: {:?}", path);
-             return Ok(path);
+            debug!("Using provided server path: {:?}", path);
+            return Ok(path);
         }
 
         // Fallback to executable directory
@@ -184,7 +197,7 @@ impl TaggerSetup {
         let parent = current_exe
             .parent()
             .context("Failed to get parent directory of current executable")?;
-        
+
         debug!("Using fallback path (adjacent to executable): {:?}", parent);
         Ok(parent.to_path_buf())
     }
@@ -194,7 +207,10 @@ impl TaggerSetup {
         // We don't strictly error if missing here, just return the path to let llama-server fail or we handle it later.
         // But better to check.
         if !model_path.exists() {
-             warn!("Model file not found at {:?}. llama-server might fail.", model_path);
+            warn!(
+                "Model file not found at {:?}. llama-server might fail.",
+                model_path
+            );
         }
         Ok(model_path)
     }
@@ -204,7 +220,10 @@ impl TaggerSetup {
         // We don't strictly error if missing here, just return the path to let llama-server fail or we handle it later.
         // But better to check.
         if !model_path.exists() {
-             warn!("mmproj file not found at {:?}. llama-server might fail.", model_path);
+            warn!(
+                "mmproj file not found at {:?}. llama-server might fail.",
+                model_path
+            );
         }
         Ok(model_path)
     }
@@ -215,7 +234,7 @@ impl TaggerSetup {
             .arg("--query-gpu=name")
             .arg("--format=csv,noheader")
             .output()
-            .await 
+            .await
         {
             Ok(output) => {
                 if output.status.success() {
@@ -242,7 +261,9 @@ impl TaggerSetup {
             info!("llama-server stopped");
         }
         if let Some(job) = self.job_handle.take() {
-            unsafe { let _ = CloseHandle(job); }
+            unsafe {
+                let _ = CloseHandle(job);
+            }
         }
         Ok(())
     }

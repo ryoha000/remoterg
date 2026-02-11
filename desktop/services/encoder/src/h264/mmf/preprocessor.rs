@@ -62,7 +62,13 @@ impl VideoProcessorPreprocessor {
     }
 
     /// メディアタイプを設定
-    fn setup_media_types(&mut self, src_width: u32, src_height: u32, dst_width: u32, dst_height: u32) -> Result<()> {
+    fn setup_media_types(
+        &mut self,
+        src_width: u32,
+        src_height: u32,
+        dst_width: u32,
+        dst_height: u32,
+    ) -> Result<()> {
         unsafe {
             // 入力メディアタイプ（BGRA）
             let input_media_type = MFCreateMediaType()
@@ -181,8 +187,6 @@ impl VideoProcessorPreprocessor {
             Ok(())
         }
     }
-
-
 
     /// Compute Shaderを作成
     fn create_compute_shader(&mut self) -> Result<()> {
@@ -507,23 +511,25 @@ impl VideoProcessorPreprocessor {
         unsafe {
             // 必要に応じてリソースを再確保・メディアタイプ再設定
             // 簡易的に、既存のテクスチャサイズと異なれば再設定とする
-             let needs_reconfigure = self.output_texture.is_none() || {
-                let mut desc = D3D11_TEXTURE2D_DESC::default();
-                if let Some(tex) = &self.output_texture {
-                    tex.GetDesc(&mut desc);
-                    desc.Width != dst_width || desc.Height != dst_height
-                } else {
-                    true
+            let needs_reconfigure = self.output_texture.is_none()
+                || {
+                    let mut desc = D3D11_TEXTURE2D_DESC::default();
+                    if let Some(tex) = &self.output_texture {
+                        tex.GetDesc(&mut desc);
+                        desc.Width != dst_width || desc.Height != dst_height
+                    } else {
+                        true
+                    }
                 }
-            } || {
-                 let mut desc = D3D11_TEXTURE2D_DESC::default();
-                 if let Some(tex) = &self.rgba_texture {
-                     tex.GetDesc(&mut desc);
-                     desc.Width != src_width || desc.Height != src_height
-                 } else {
-                     true
-                 }
-            };
+                || {
+                    let mut desc = D3D11_TEXTURE2D_DESC::default();
+                    if let Some(tex) = &self.rgba_texture {
+                        tex.GetDesc(&mut desc);
+                        desc.Width != src_width || desc.Height != src_height
+                    } else {
+                        true
+                    }
+                };
 
             if needs_reconfigure {
                 self.rgba_texture = None;

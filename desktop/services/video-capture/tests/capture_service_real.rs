@@ -2,12 +2,12 @@
 #[cfg(windows)]
 mod tests {
     use anyhow::{Context, Result};
-    use video_capture::CaptureService;
     use core_types::{CaptureBackend, CaptureMessage};
     use std::path::PathBuf;
     use std::time::Duration;
     use tokio::sync::mpsc;
     use tokio::time::timeout;
+    use video_capture::CaptureService;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
 

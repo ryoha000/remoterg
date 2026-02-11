@@ -8,8 +8,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use webrtc_rs::peer_connection::RTCPeerConnection;
 
+use core_types::{
+    DataChannelMessage, OutgoingDataChannelMessage, SignalingResponse, WebRtcMessage,
+};
 use std::sync::Mutex;
-use core_types::{DataChannelMessage, OutgoingDataChannelMessage, SignalingResponse, WebRtcMessage};
 
 use connection::{handle_add_ice_candidate, handle_set_offer};
 
@@ -71,16 +73,15 @@ impl WebRtcService {
     }
 
     /// ICE Restartを実行
-    async fn execute_ice_restart(
-        &self,
-        peer_connection: &Arc<RTCPeerConnection>,
-    ) -> Result<()> {
+    async fn execute_ice_restart(&self, peer_connection: &Arc<RTCPeerConnection>) -> Result<()> {
         use anyhow::Context;
 
         info!("Executing ICE Restart...");
 
         // 1. restart_ice()を呼び出し（新しいICE credentialsを生成）
-        peer_connection.restart_ice().await
+        peer_connection
+            .restart_ice()
+            .await
             .context("Failed to restart ICE")?;
 
         // 2. 新しいOfferを生成
@@ -114,7 +115,9 @@ impl WebRtcService {
         let connection_ready = Arc::new(AtomicBool::new(false));
 
         // アクティブなデータチャネルを保持（outgoing用）
-        let active_data_channel = Arc::new(Mutex::new(None::<Arc<webrtc_rs::data_channel::RTCDataChannel>>));
+        let active_data_channel = Arc::new(Mutex::new(
+            None::<Arc<webrtc_rs::data_channel::RTCDataChannel>>,
+        ));
 
         let mut peer_connection: Option<Arc<RTCPeerConnection>> = None;
 

@@ -274,12 +274,17 @@ impl SignalingClient {
                                 warn!("Received Answer message as host (unexpected)");
                             }
                             Ok(SignalingMessage::AnswerForRestart { sdp, .. }) => {
-                                info!("Answer for ICE Restart received, forwarding to WebRTC service");
+                                info!(
+                                    "Answer for ICE Restart received, forwarding to WebRTC service"
+                                );
                                 if let Err(e) = webrtc_tx_recv
                                     .send(WebRtcMessage::SetAnswerForRestart { sdp })
                                     .await
                                 {
-                                    error!("Failed to send answer for restart to WebRTC service: {}", e);
+                                    error!(
+                                        "Failed to send answer for restart to WebRTC service: {}",
+                                        e
+                                    );
                                 }
                             }
                             Ok(SignalingMessage::OfferForRestart { .. }) => {

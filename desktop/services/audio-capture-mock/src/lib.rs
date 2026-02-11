@@ -206,8 +206,8 @@ pub struct AudioCaptureService {
 impl AudioCaptureService {
     pub fn new(frame_tx: AudioFrameSender, command_rx: AudioCaptureCommandReceiver) -> Self {
         // 起動時にWAVファイルをロードしてフレーム分割
-        let frames = load_audio_samples()
-            .expect("Failed to load audio samples from embedded WAV file");
+        let frames =
+            load_audio_samples().expect("Failed to load audio samples from embedded WAV file");
         info!("Loaded {} audio frames from WAV file", frames.len());
 
         Self {

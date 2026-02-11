@@ -127,10 +127,10 @@ impl VideoStreamService {
         // エンコードは常に回す（負荷はかかるが、アイドル時もH.264のIDR生成などは必要かもしれない）。
         // 送信側（ここ）で current_connection_ready を見て drop する。
         // これなら frame_router の変更は最小限で済む（あるいは変更不要でダミーを渡す）。
-        
+
         let global_encode_enable = Arc::new(AtomicBool::new(false)); // 初期値はfalse
         let keyframe_requested_clone = keyframe_requested.clone();
-        
+
         // frame_router 用に clone
         let global_encode_enable_for_router = global_encode_enable.clone();
 
@@ -162,7 +162,7 @@ impl VideoStreamService {
                     match new_track {
                         Some((track, sender, connection_ready)) => {
                             info!("Switched to new video track");
-                            
+
                             // 古いRTCPタスクをキャンセル
                             if let Some(handle) = rtcp_drain_handle.take() {
                                 handle.abort();
@@ -187,14 +187,14 @@ impl VideoStreamService {
                             // ステート更新
                             current_video_track = Some(track);
                             current_connection_ready = Some(connection_ready);
-                            
+
                             // エンコードを有効化（再接続時は即座に有効化して良いとする）
                             // 本来は connection_ready を監視して true になったら有効化すべきだが、
                             // frame_router に渡しているのは global_encode_enable なので、
                             // これを true にすればエンコードが始まる。
                             // 実際の送信は下の encode_result 受信時に current_connection_ready を見る。
                             global_encode_enable.store(true, Ordering::Relaxed);
-                            
+
                             // キーフレーム要求を出して、新しい接続に即座に絵が出るようにする
                             keyframe_requested.store(true, Ordering::Relaxed);
                         }

@@ -4,7 +4,7 @@ use std::mem::ManuallyDrop;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
-use tracing::{debug, info, warn, span, Level};
+use tracing::{debug, info, span, warn, Level};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
@@ -220,9 +220,7 @@ pub fn start_mf_encode_workers() -> (
         let mut preprocessor = {
             let preproc_span = span!(Level::DEBUG, "preproc_create");
             let _preproc_guard = preproc_span.enter();
-            match VideoProcessorPreprocessor::create(
-                d3d_resources.clone(),
-            ) {
+            match VideoProcessorPreprocessor::create(d3d_resources.clone()) {
                 Ok(preproc) => preproc,
                 Err(e) => {
                     warn!("MF encoder worker: failed to create preprocessor: {}", e);
@@ -234,8 +232,7 @@ pub fn start_mf_encode_workers() -> (
         let mut encoder = {
             let encoder_span = span!(Level::DEBUG, "encoder_create");
             let _encoder_guard = encoder_span.enter();
-            match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height)
-            {
+            match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height) {
                 Ok(enc) => enc,
                 Err(e) => {
                     warn!("MF encoder worker: failed to create encoder: {}", e);
@@ -261,7 +258,7 @@ pub fn start_mf_encode_workers() -> (
                 return;
             }
         }
-        
+
         drop(_init_guard);
 
         // 最初のフレームを処理
@@ -323,13 +320,10 @@ pub fn start_mf_encode_workers() -> (
                         let job_height = job.height;
 
                         // 詳細な処理内訳を計測するスパンを開始
-                        let handle_input_span = span!(
-                            Level::DEBUG,
-                            "handle_need_input",
-                            frame_id = job.frame_id
-                        );
+                        let handle_input_span =
+                            span!(Level::DEBUG, "handle_need_input", frame_id = job.frame_id);
                         let _handle_input_guard = handle_input_span.enter();
-                        
+
                         // エンコード解像度は2の倍数に調整
                         let encode_width = (job_width / 2) * 2;
                         let encode_height = (job_height / 2) * 2;
@@ -345,11 +339,8 @@ pub fn start_mf_encode_workers() -> (
                         // 前処理（RGBA → NV12 テクスチャ）
                         // src: job_width/height, dst: encode_width/height
                         let nv12_texture = {
-                            let preprocess_span = span!(
-                                Level::DEBUG,
-                                "preprocess",
-                                frame_id = job.frame_id
-                            );
+                            let preprocess_span =
+                                span!(Level::DEBUG, "preprocess", frame_id = job.frame_id);
                             let _guard = preprocess_span.enter();
 
                             match preprocessor.process(
@@ -397,13 +388,10 @@ pub fn start_mf_encode_workers() -> (
 
                         // DXGI サーフェスバッファを作成
                         let input_buffer = {
-                             let buffer_create_span = span!(
-                                Level::DEBUG,
-                                "buffer_create",
-                                frame_id = job.frame_id
-                            );
+                            let buffer_create_span =
+                                span!(Level::DEBUG, "buffer_create", frame_id = job.frame_id);
                             let _guard = buffer_create_span.enter();
-                            
+
                             match MFCreateDXGISurfaceBuffer(
                                 &ID3D11Texture2D::IID,
                                 &nv12_texture,
@@ -469,13 +457,10 @@ pub fn start_mf_encode_workers() -> (
 
                         // ProcessInput を呼び出す
                         {
-                            let process_input_span = span!(
-                                Level::DEBUG,
-                                "process_input",
-                                frame_id = job.frame_id
-                            );
+                            let process_input_span =
+                                span!(Level::DEBUG, "process_input", frame_id = job.frame_id);
                             let _guard = process_input_span.enter();
-                            
+
                             if let Err(e) = encoder.transform().ProcessInput(0, &input_sample, 0) {
                                 warn!(
                                     "MF encoder worker: ProcessInput failed for {}x{} frame: {} (HRESULT: {:?})",
@@ -508,23 +493,20 @@ pub fn start_mf_encode_workers() -> (
                         let mut status: u32 = 0;
 
                         let mut output_buffers = [output_data_buffer];
-                        
+
                         let process_output_result = {
-                            let expected_frame_id = input_meta_queue.front().map(|m| m.frame_id).unwrap_or(0);
-                            let process_output_span = span!(
-                                Level::DEBUG,
-                                "process_output",
-                                frame_id = expected_frame_id
-                            );
+                            let expected_frame_id =
+                                input_meta_queue.front().map(|m| m.frame_id).unwrap_or(0);
+                            let process_output_span =
+                                span!(Level::DEBUG, "process_output", frame_id = expected_frame_id);
                             let _guard = process_output_span.enter();
-                            
+
                             encoder
                                 .transform()
                                 .ProcessOutput(0, &mut output_buffers, &mut status)
                         };
 
-                        match process_output_result
-                        {
+                        match process_output_result {
                             Ok(_) => {
                                 if let Some(sample) = output_buffers[0].pSample.take() {
                                     let buffer = match sample.GetBufferByIndex(0) {

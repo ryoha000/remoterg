@@ -131,17 +131,17 @@ pub async fn run_frame_router(
                 );
                 current_width = frame.width;
                 current_height = frame.height;
-                
+
                 // 初回起動時もエンコーダーを作成・転送タスク起動が必要
                 // ただし、以前の実装では VideoStreamService で作られたものを渡されていた。
                 // 今回はここで作る必要がある。
                 // (current_width == 0 && current_height == 0) のパスに来るのは、
                 // encode_job_slot が空の場合のみ（初回）。
-                
+
                 if encode_job_slot.is_none() {
                     info!("Initializing encoder for the first time");
                     let (new_slot, mut new_rx) = encoder_factory.setup();
-                    
+
                     // 結果転送タスクを起動
                     let result_tx_clone = result_tx.clone();
                     tokio::spawn(async move {
@@ -172,7 +172,7 @@ pub async fn run_frame_router(
 
                 // 新しいencoderワーカーを起動
                 let (new_slot, mut new_rx) = encoder_factory.setup();
-                
+
                 // 結果転送タスクを起動
                 let result_tx_clone = result_tx.clone();
                 tokio::spawn(async move {
@@ -193,10 +193,10 @@ pub async fn run_frame_router(
 
         // エンコードジョブ送信を span で計測
         if let Some(job_slot) = encode_job_slot.as_ref() {
-            let queue_encode_job_span = span!(Level::DEBUG, "queue_encode_job", frame_id = frame.id);
+            let queue_encode_job_span =
+                span!(Level::DEBUG, "queue_encode_job", frame_id = frame.id);
             let _queue_encode_job_guard = queue_encode_job_span.enter();
             let job_send_start = Instant::now();
-
 
             // キーフレーム要求が来ている場合は、フラグをリセットしてジョブに含める
             let request_keyframe = keyframe_requested.swap(false, Ordering::Relaxed);

@@ -18,6 +18,52 @@ impl From<CodecType> for VideoCodec {
     }
 }
 
+impl CodecType {
+    /// エンコーダーを作成し、初期設定を実行
+    pub fn create_encoder(
+        self,
+        d3d_resources: crate::windows::utils::d3d::D3D11Resources,
+        width: u32,
+        height: u32,
+    ) -> Result<Box<dyn HardwareEncoder>> {
+        use windows::Win32::Media::MediaFoundation::{MFVideoFormat_AV1, MFVideoFormat_H264};
+
+        // エンコーダーを作成
+        let encoder: Box<dyn HardwareEncoder> = match self {
+            CodecType::H264 => {
+                let enc = crate::windows::h264::encoder::H264Encoder::create(
+                    d3d_resources,
+                    width,
+                    height,
+                )?;
+                Box::new(enc)
+            }
+            CodecType::AV1 => {
+                let enc =
+                    crate::windows::av1::encoder::AV1Encoder::create(d3d_resources, width, height)?;
+                Box::new(enc)
+            }
+        };
+
+        // 共通設定: 低遅延属性
+        crate::windows::utils::media_type::setup_low_latency_attributes(encoder.transform())?;
+
+        // 共通設定: メディアタイプ
+        let video_format = match self {
+            CodecType::H264 => &MFVideoFormat_H264,
+            CodecType::AV1 => &MFVideoFormat_AV1,
+        };
+        crate::windows::utils::media_type::setup_media_types(
+            encoder.transform(),
+            width,
+            height,
+            video_format,
+        )?;
+
+        Ok(encoder)
+    }
+}
+
 pub struct EncodedFrame {
     pub data: Vec<u8>,
     pub is_keyframe: bool,

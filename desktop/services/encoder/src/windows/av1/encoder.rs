@@ -3,8 +3,8 @@ use tracing::warn;
 use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaEventGenerator, IMFTransform,
-    MFSampleExtension_CleanPoint, MFT_MESSAGE_COMMAND_FLUSH,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+    MFSampleExtension_CleanPoint, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM,
 };
 
 use crate::windows::codec::{EncodedFrame, HardwareEncoder};
@@ -24,7 +24,12 @@ pub struct AV1Encoder {
 impl AV1Encoder {
     /// AV1 エンコーダーを作成
     pub fn create(d3d_resources: D3D11Resources, width: u32, height: u32) -> Result<Self> {
-        let transform = find_async_av1_encoder().context("Failed to find async AV1 encoder MFT")?;
+        let transform = unsafe {
+            crate::windows::utils::encoder_finder::find_async_video_encoder(
+                core_types::VideoCodec::AV1,
+            )
+            .context("Failed to find async AV1 encoder MFT")?
+        };
 
         // D3D マネージャーを設定
         d3d_resources.setup_mft(&transform)?;
@@ -43,16 +48,6 @@ impl AV1Encoder {
         };
 
         Ok(encoder)
-    }
-}
-
-
-/// 非同期ハードウェア AV1 エンコーダー MFT を検索
-pub(crate) fn find_async_av1_encoder() -> Result<IMFTransform> {
-    unsafe {
-        crate::windows::utils::encoder_finder::find_async_video_encoder(
-            core_types::VideoCodec::AV1,
-        )
     }
 }
 

@@ -16,6 +16,11 @@ pub struct VideoProcessor {
 
 impl VideoProcessor {
     pub fn new() -> Result<Self> {
+        // Media Foundationの初期化を確認
+        if !crate::windows::utils::mf::init_media_foundation() {
+            return Err(anyhow::anyhow!("Media Foundation の初期化に失敗しました"));
+        }
+
         let transform = unsafe {
             crate::windows::utils::mf::find_video_processor()
                 .context("Video Processor MFT の検索に失敗しました")?

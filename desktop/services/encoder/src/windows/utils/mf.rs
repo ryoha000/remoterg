@@ -96,30 +96,3 @@ pub unsafe fn find_video_processor() -> Result<IMFTransform> {
 
     Ok(transform)
 }
-
-/// Media Foundationの基本機能が利用可能かチェック (D3D11, VideoProcessor)
-pub fn check_core_mf_available() -> bool {
-    // Media Foundationの初期化を試行
-    if !init_media_foundation() {
-        return false;
-    }
-
-    // D3D11デバイスが作成できるか確認
-    if crate::windows::utils::d3d::create_d3d11_device().is_err() {
-        warn!("Failed to create D3D11 device");
-        return false;
-    }
-
-    // Video Processor MFTが存在するか確認
-    unsafe {
-        match find_video_processor() {
-            Ok(_) => {}
-            Err(e) => {
-                warn!("Video Processor MFT not found: {}", e);
-                return false;
-            }
-        }
-    }
-
-    true
-}

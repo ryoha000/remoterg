@@ -3,9 +3,21 @@ mod tests {
     use crate::windows::av1::factory::MediaFoundationAV1EncoderFactory;
     use crate::windows::h264::MediaFoundationH264EncoderFactory;
     use core_types::{EncodeJob, VideoCodec, VideoEncoderFactory}; // VideoCodec added
-    use std::sync::Arc;
+    use std::sync::{Arc, Once};
     use std::time::{Duration, Instant};
     use tokio::time::timeout;
+
+    static INIT_TRACING: Once = Once::new();
+
+    /// tracingを初期化（テスト実行時に一度だけ実行される）
+    fn init_tracing() {
+        INIT_TRACING.call_once(|| {
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::INFO)
+                .with_test_writer()
+                .init();
+        });
+    }
 
     fn create_solid_color_rgba(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -40,6 +52,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_encode_alignment() {
+        init_tracing();
         let test_cases = vec![
             TestCase {
                 name: "H264 Full HD".to_string(),
@@ -71,16 +84,7 @@ mod tests {
             println!("Running test case: {}", case.name);
 
             let factory: Box<dyn VideoEncoderFactory> = match case.codec {
-                VideoCodec::H264 => {
-                    let f = MediaFoundationH264EncoderFactory::new();
-                    if !f.use_media_foundation() {
-                        println!(
-                            "Skipping H264 test: Media Foundation H.264 encoder not available"
-                        );
-                        continue;
-                    }
-                    Box::new(f)
-                }
+                VideoCodec::H264 => Box::new(MediaFoundationH264EncoderFactory::new()),
                 VideoCodec::AV1 => Box::new(MediaFoundationAV1EncoderFactory::new()),
             };
 
@@ -92,10 +96,6 @@ mod tests {
             job_slot.set(job);
 
             // Wait for result
-            // Note: If initialization fails (e.g. no AV1 hardware), subsequent recv will timeout?
-            // Or pipeline handles it gracefully?
-            // Pipeline warns and returns?
-            // If setup fails in thread, nothing flows to receiver?
 
             let result_opt = timeout(Duration::from_secs(5), receiver.recv()).await;
 
@@ -126,25 +126,11 @@ mod tests {
                     );
                 }
                 Ok(None) => {
-                    // Receiver closed, meaning worker exited.
-                    // Could happen if AV1 encoder not found.
-                    if case.codec == VideoCodec::AV1 {
-                        println!(
-                            "skipping AV1 test: Encoder worker exited (likely no hardware support)"
-                        );
-                    } else {
-                        panic!("[{}] Encoder worker exited unexpectedly", case.name);
-                    }
+                    panic!("[{}] Encoder worker exited unexpectedly", case.name);
                 }
                 Err(_) => {
                     // Timeout
-                    if case.codec == VideoCodec::AV1 {
-                        println!(
-                            "skipping AV1 test: Timeout (likely no hardware support or slow init)"
-                        );
-                    } else {
-                        panic!("[{}] Encode timeout", case.name);
-                    }
+                    panic!("[{}] Encode timeout", case.name);
                 }
             }
         }

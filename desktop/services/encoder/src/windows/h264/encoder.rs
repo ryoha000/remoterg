@@ -27,8 +27,10 @@ impl H264Encoder {
     /// H.264 エンコーダーを作成
     pub fn create(d3d_resources: D3D11Resources, width: u32, height: u32) -> Result<Self> {
         unsafe {
-            let transform = crate::windows::h264::utils::find_async_h264_encoder()
-                .context("Failed to find async H.264 encoder MFT")?;
+            let transform = crate::windows::utils::encoder_finder::find_async_video_encoder(
+                core_types::VideoCodec::H264,
+            )
+            .context("Failed to find async H.264 encoder MFT")?;
 
             // D3D マネージャーを設定
             d3d_resources.setup_mft(&transform)?;

@@ -1,18 +1,25 @@
 use anyhow::Result;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView, ID3D11Texture2D,
-    ID3D11UnorderedAccessView, D3D11_TEXTURE2D_DESC,
+    ID3D11UnorderedAccessView,
 };
 
 use crate::windows::utils::d3d::D3D11Resources;
 use super::texture;
 
+/// キャッシュされたテクスチャとサイズ情報
+struct CachedTexture {
+    texture: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
 /// プリプロセッサ用のD3D11テクスチャを管理
 pub struct TexturePool {
     d3d_resources: D3D11Resources,
-    rgba_texture: Option<ID3D11Texture2D>,
-    bgra_texture: Option<ID3D11Texture2D>,
-    output_texture: Option<ID3D11Texture2D>,
+    rgba_texture: Option<CachedTexture>,
+    bgra_texture: Option<CachedTexture>,
+    output_texture: Option<CachedTexture>,
     rgba_srv: Option<ID3D11ShaderResourceView>,
     bgra_uav: Option<ID3D11UnorderedAccessView>,
 }
@@ -36,54 +43,75 @@ impl TexturePool {
         width: u32,
         height: u32,
     ) -> Result<ID3D11Texture2D> {
-        let needs_recreate = self.rgba_texture.is_none() || unsafe {
-            let mut desc = D3D11_TEXTURE2D_DESC::default();
-            self.rgba_texture.as_ref().unwrap().GetDesc(&mut desc);
-            desc.Width != width || desc.Height != height
+        let needs_recreate = if let Some(cached) = &self.rgba_texture {
+            cached.width != width || cached.height != height
+        } else {
+            true
         };
 
         if needs_recreate {
-            self.rgba_texture = Some(texture::create_rgba_texture(&self.d3d_resources.device, width, height)?);
+            let texture = texture::create_rgba_texture(&self.d3d_resources.device, width, height)?;
+            self.rgba_texture = Some(CachedTexture {
+                texture,
+                width,
+                height,
+            });
             // 依存するViewを無効化
             self.rgba_srv = None;
         }
 
-        let texture = self.rgba_texture.as_ref().unwrap();
-        texture::upload_rgba_data(&self.d3d_resources.context, texture, rgba_data, width, height);
+        let cached = self.rgba_texture.as_ref().unwrap();
+        texture::upload_rgba_data(
+            &self.d3d_resources.context,
+            &cached.texture,
+            rgba_data,
+            width,
+            height,
+        );
 
-        Ok(texture.clone())
+        Ok(cached.texture.clone())
     }
 
     /// BGRAテクスチャを作成（変換先）
     pub fn ensure_bgra_texture(&mut self, width: u32, height: u32) -> Result<ID3D11Texture2D> {
-        let needs_recreate = self.bgra_texture.is_none() || unsafe {
-            let mut desc = D3D11_TEXTURE2D_DESC::default();
-            self.bgra_texture.as_ref().unwrap().GetDesc(&mut desc);
-            desc.Width != width || desc.Height != height
+        let needs_recreate = if let Some(cached) = &self.bgra_texture {
+            cached.width != width || cached.height != height
+        } else {
+            true
         };
 
         if needs_recreate {
-            self.bgra_texture = Some(texture::create_bgra_texture(&self.d3d_resources.device, width, height)?);
+            let texture = texture::create_bgra_texture(&self.d3d_resources.device, width, height)?;
+            self.bgra_texture = Some(CachedTexture {
+                texture,
+                width,
+                height,
+            });
             // 依存するViewを無効化
             self.bgra_uav = None;
         }
 
-        Ok(self.bgra_texture.as_ref().unwrap().clone())
+        Ok(self.bgra_texture.as_ref().unwrap().texture.clone())
     }
 
     /// NV12出力テクスチャを作成
     pub fn ensure_output_texture(&mut self, width: u32, height: u32) -> Result<ID3D11Texture2D> {
-        let needs_recreate = self.output_texture.is_none() || unsafe {
-            let mut desc = D3D11_TEXTURE2D_DESC::default();
-            self.output_texture.as_ref().unwrap().GetDesc(&mut desc);
-            desc.Width != width || desc.Height != height
+        let needs_recreate = if let Some(cached) = &self.output_texture {
+            cached.width != width || cached.height != height
+        } else {
+            true
         };
 
         if needs_recreate {
-            self.output_texture = Some(texture::create_nv12_texture(&self.d3d_resources.device, width, height)?);
+            let texture = texture::create_nv12_texture(&self.d3d_resources.device, width, height)?;
+            self.output_texture = Some(CachedTexture {
+                texture,
+                width,
+                height,
+            });
         }
 
-        Ok(self.output_texture.as_ref().unwrap().clone())
+        Ok(self.output_texture.as_ref().unwrap().texture.clone())
     }
 
     pub fn get_rgba_srv(&mut self, texture: &ID3D11Texture2D) -> Result<ID3D11ShaderResourceView> {
@@ -128,31 +156,25 @@ impl TexturePool {
         dst_width: u32,
         dst_height: u32,
     ) -> bool {
-        unsafe {
-            let mut desc = D3D11_TEXTURE2D_DESC::default();
-            
-            // 出力テクスチャをチェック
-            if let Some(tex) = &self.output_texture {
-                tex.GetDesc(&mut desc);
-                if desc.Width != dst_width || desc.Height != dst_height {
-                    return true;
-                }
-            } else {
+        // 出力テクスチャをチェック
+        if let Some(cached) = &self.output_texture {
+            if cached.width != dst_width || cached.height != dst_height {
                 return true;
             }
-
-            // 入力テクスチャ(RGBA)をチェック
-            if let Some(tex) = &self.rgba_texture {
-                tex.GetDesc(&mut desc);
-                if desc.Width != src_width || desc.Height != src_height {
-                    return true;
-                }
-            } else {
-                return true;
-            }
-
-            false
+        } else {
+            return true;
         }
+
+        // 入力テクスチャ(RGBA)をチェック
+        if let Some(cached) = &self.rgba_texture {
+            if cached.width != src_width || cached.height != src_height {
+                return true;
+            }
+        } else {
+            return true;
+        }
+
+        false
     }
 
     /// 全てのテクスチャをクリア（再設定時に使用）

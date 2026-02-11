@@ -10,7 +10,7 @@ fn main() {
 
     // Opusのソースコードをダウンロード（まだ存在しない場合）
     if !opus_dir.exists() {
-        println!("cargo:warning=Downloading Opus...");
+        println!("Downloading Opus...");
         let status = Command::new("git")
             .args(&[
                 "clone",
@@ -42,7 +42,7 @@ fn main() {
     let build_output = cmake_config.build();
 
     println!(
-        "cargo:warning=CMake build output directory: {}",
+        "CMake build output directory: {}",
         build_output.display()
     );
 
@@ -85,7 +85,7 @@ fn main() {
             if lib_path.exists() {
                 found_lib = Some(lib_path.parent().unwrap().to_path_buf());
                 println!(
-                    "cargo:warning=Found Opus library at: {}",
+                    "Found Opus library at: {}",
                     lib_path.display()
                 );
                 break;

@@ -10,7 +10,7 @@ fn main() {
 
     // libyuvのソースコードをダウンロード（まだ存在しない場合）
     if !libyuv_dir.exists() {
-        println!("cargo:warning=Downloading libyuv...");
+        println!("Downloading libyuv...");
         let status = Command::new("git")
             .args(&[
                 "clone",
@@ -37,7 +37,7 @@ fn main() {
     let build_output = cmake_config.build();
 
     println!(
-        "cargo:warning=CMake build output directory: {}",
+        "CMake build output directory: {}",
         build_output.display()
     );
 
@@ -97,7 +97,7 @@ fn main() {
             if lib_path.exists() {
                 found_lib = Some(lib_path.parent().unwrap().to_path_buf());
                 println!(
-                    "cargo:warning=Found libyuv library at: {}",
+                    "Found libyuv library at: {}",
                     lib_path.display()
                 );
                 break;

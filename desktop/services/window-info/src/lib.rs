@@ -1,5 +1,4 @@
-use anyhow::{Context, Result};
-use tracing::{info, warn};
+use anyhow::Result;
 use windows::Win32::Foundation::{HANDLE, HWND, MAX_PATH};
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};

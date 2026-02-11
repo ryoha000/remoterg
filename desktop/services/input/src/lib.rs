@@ -402,7 +402,7 @@ impl InputService {
         Ok(())
     }
 
-    async fn handle_mouse_click(&self, x: f64, y: f64, button: &str) -> Result<()> {
+    async fn handle_mouse_click(&self, x: f64, y: f64, _button: &str) -> Result<()> {
         let (abs_x, abs_y) = if self.target_hwnd != 0 {
             let hwnd = HWND(self.target_hwnd as *mut _);
             let mut rect = windows::Win32::Foundation::RECT::default();

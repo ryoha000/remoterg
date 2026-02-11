@@ -87,7 +87,7 @@ impl SignalingClient {
         }
     }
 
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         info!(
             "Starting SignalingClient connecting to {} (session_id: {})",
             self.cloudflare_url, self.session_id

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::h264::mmf::MediaFoundationH264EncoderFactory;
+    use crate::windows::h264::MediaFoundationH264EncoderFactory;
     use core_types::{EncodeJob, VideoEncoderFactory};
     use std::sync::Arc;
     use std::time::{Duration, Instant};

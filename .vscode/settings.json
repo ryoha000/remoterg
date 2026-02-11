@@ -10,5 +10,10 @@
   },
   "rust-analyzer.linkedProjects": ["desktop/services/Cargo.toml"],
   "editor.defaultFormatter": "oxc.oxc-vscode",
-  // "oxc.path.oxfmt": "client\\node_modules\\@oxfmt\\win32-x64\\oxfmt.win32-x64.node"
+  // "oxc.path.oxfmt": "client\\node_modules\\@oxfmt\\win32-x64\\oxfmt.win32-x64.node",
+  "terminal.integrated.shellIntegration.enabled": false,
+  "terminal.integrated.automationProfile.windows": {
+    "path": "powershell.exe",
+    "args": ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"]
+  }
 }

@@ -16,7 +16,7 @@ use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
     SignalingResponse, TaggerCommand, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
 };
-use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+use encoder::windows::h264::MediaFoundationH264EncoderFactory;
 use input::InputService;
 use signaling::SignalingClient;
 use tagger::TaggerService;

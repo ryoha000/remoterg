@@ -3,7 +3,7 @@
 mod tests {
     use anyhow::{Context, Result};
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
-    use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
+    use encoder::windows::h264::MediaFoundationH264EncoderFactory;
     use std::path::PathBuf;
     use std::sync::Once;
     use std::time::{Duration, Instant};

@@ -1,15 +1,12 @@
-pub mod d3d;
 pub mod encoder;
-pub mod mf;
 pub mod pipeline;
-pub mod preprocessor;
+pub mod test;
+pub mod utils;
 
 use core_types::{EncodeJobSlot, EncodeResult, VideoCodec, VideoEncoderFactory};
 use std::sync::Arc;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{info, warn};
-
-use self::mf::check_mf_available;
 
 /// Media Foundation H.264 エンコーダーファクトリ
 /// 利用可能でない場合はOpenH264にフォールバック
@@ -20,7 +17,7 @@ pub struct MediaFoundationH264EncoderFactory {
 impl MediaFoundationH264EncoderFactory {
     pub fn new() -> Self {
         // Media Foundationが利用可能かチェック
-        let use_mf = check_mf_available();
+        let use_mf = utils::check_h264_mf_available();
         if use_mf {
             info!("Media Foundation H.264 encoder is available, using MF encoder");
         } else {
@@ -53,6 +50,3 @@ impl VideoEncoderFactory for MediaFoundationH264EncoderFactory {
         VideoCodec::H264
     }
 }
-
-#[cfg(test)]
-mod test;

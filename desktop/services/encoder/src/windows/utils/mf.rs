@@ -92,7 +92,6 @@ pub unsafe fn find_video_processor() -> Result<IMFTransform> {
 
     let transform: IMFTransform = activate
         .ActivateObject()
-        .ok()
         .context("Failed to activate Video Processor MFT")?;
 
     Ok(transform)

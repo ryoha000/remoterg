@@ -5,7 +5,6 @@ use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_SDK_VERSION,
 };
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Media::MediaFoundation::{
     IMFDXGIDeviceManager, IMFTransform, MFCreateDXGIDeviceManager, MFT_MESSAGE_SET_D3D_MANAGER,
@@ -43,7 +42,6 @@ impl D3D11Resources {
             if let Ok(attributes) = transform.GetAttributes() {
                 attributes
                     .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
-                    .ok()
                     .context("Failed to unlock async MFT")?;
             }
 
@@ -53,7 +51,6 @@ impl D3D11Resources {
                     MFT_MESSAGE_SET_D3D_MANAGER,
                     std::mem::transmute(self.device_manager.as_raw()),
                 )
-                .ok()
                 .context("Failed to setup D3D manager on H.264 encoder")?;
         }
 
@@ -78,7 +75,6 @@ pub fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
             None, // 機能レベル
             Some(&mut context),
         )
-        .ok()
         .context("Failed to create D3D11 device")?;
 
         let device = device.ok_or_else(|| anyhow::anyhow!("D3D11 device is None"))?;
@@ -94,7 +90,6 @@ fn create_dxgi_device_manager(device: &ID3D11Device) -> Result<(IMFDXGIDeviceMan
         let mut reset_token = 0u32;
         let mut device_manager: Option<IMFDXGIDeviceManager> = None;
         MFCreateDXGIDeviceManager(&mut reset_token, &mut device_manager)
-            .ok()
             .context("Failed to create DXGI device manager")?;
 
         let device_manager =
@@ -108,12 +103,8 @@ fn create_dxgi_device_manager(device: &ID3D11Device) -> Result<(IMFDXGIDeviceMan
         // デバイスをリセット
         device_manager
             .ResetDevice(&dxgi_device, reset_token)
-            .ok()
             .context("Failed to reset device in DXGI device manager")?;
 
         Ok((device_manager, reset_token))
     }
 }
-
-/// DXGI_FORMAT_NV12 の定数（必要に応じて）
-pub const DXGI_FORMAT_NV12_VALUE: u32 = DXGI_FORMAT_NV12.0 as u32;

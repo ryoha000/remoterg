@@ -36,7 +36,6 @@ impl H264Encoder {
             // IMFMediaEventGeneratorを取得（非同期MFTのイベント駆動に必要）
             let event_generator: IMFMediaEventGenerator = transform
                 .cast()
-                .ok()
                 .context("Failed to get IMFMediaEventGenerator from transform")?;
 
             let encoder = Self {
@@ -77,17 +76,14 @@ impl HardwareEncoder for H264Encoder {
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
-                .ok()
                 .context("Failed to flush encoder")?;
 
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
-                .ok()
                 .context("Failed to notify begin streaming")?;
 
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
-                .ok()
                 .context("Failed to notify start of stream")?;
 
             Ok(())
@@ -108,7 +104,6 @@ impl HardwareEncoder for H264Encoder {
             let codec_api: ICodecAPI = self
                 .transform
                 .cast()
-                .ok()
                 .context("Failed to cast transform to ICodecAPI")?;
             // CODECAPI_AVEncVideoForceKeyFrameを設定（値は1）
             codec_api

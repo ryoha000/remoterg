@@ -40,7 +40,6 @@ pub unsafe fn find_async_h264_encoder() -> Result<IMFTransform> {
 
     let transform: IMFTransform = activate
         .ActivateObject()
-        .ok()
         .context("Failed to activate async H.264 encoder MFT")?;
 
     Ok(transform)

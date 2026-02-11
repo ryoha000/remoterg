@@ -72,7 +72,6 @@ impl VideoProcessorPreprocessor {
         unsafe {
             // 入力メディアタイプ（BGRA）
             let input_media_type = MFCreateMediaType()
-                .ok()
                 .context("Failed to create input media type")?;
 
             input_media_type
@@ -80,7 +79,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE,
                     &MFMediaType_Video,
                 )
-                .ok()
                 .context("Failed to set input major type")?;
 
             input_media_type
@@ -88,7 +86,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE,
                     &MFVideoFormat_ARGB32,
                 )
-                .ok()
                 .context("Failed to set input subtype")?;
 
             let frame_size = ((src_width as u64) << 32) | (src_height as u64);
@@ -97,7 +94,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE,
                     frame_size,
                 )
-                .ok()
                 .context("Failed to set input frame size")?;
 
             let frame_rate = (60u64 << 32) | 1u64;
@@ -106,7 +102,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_RATE,
                     frame_rate,
                 )
-                .ok()
                 .context("Failed to set input frame rate")?;
 
             input_media_type
@@ -114,17 +109,14 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_INTERLACE_MODE,
                     MFVideoInterlace_Progressive.0 as u32,
                 )
-                .ok()
                 .context("Failed to set input interlace mode")?;
 
             self.transform
                 .SetInputType(0, &input_media_type, 0)
-                .ok()
                 .context("Failed to set Video Processor input type")?;
 
             // 出力メディアタイプ（NV12）
             let output_media_type = MFCreateMediaType()
-                .ok()
                 .context("Failed to create output media type")?;
 
             output_media_type
@@ -132,7 +124,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE,
                     &MFMediaType_Video,
                 )
-                .ok()
                 .context("Failed to set output major type")?;
 
             output_media_type
@@ -140,7 +131,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE,
                     &MFVideoFormat_NV12,
                 )
-                .ok()
                 .context("Failed to set output subtype")?;
 
             let output_frame_size = ((dst_width as u64) << 32) | (dst_height as u64);
@@ -149,7 +139,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE,
                     output_frame_size,
                 )
-                .ok()
                 .context("Failed to set output frame size")?;
 
             output_media_type
@@ -157,7 +146,6 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_RATE,
                     frame_rate,
                 )
-                .ok()
                 .context("Failed to set output frame rate")?;
 
             output_media_type
@@ -165,23 +153,19 @@ impl VideoProcessorPreprocessor {
                     &windows::Win32::Media::MediaFoundation::MF_MT_INTERLACE_MODE,
                     MFVideoInterlace_Progressive.0 as u32,
                 )
-                .ok()
                 .context("Failed to set output interlace mode")?;
 
             self.transform
                 .SetOutputType(0, &output_media_type, 0)
-                .ok()
                 .context("Failed to set Video Processor output type")?;
 
             // ストリーム開始を通知（非同期MFTでは BEGIN_STREAMING を先に送る必要がある）
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
-                .ok()
                 .context("Failed to notify begin streaming")?;
 
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
-                .ok()
                 .context("Failed to notify start of stream")?;
 
             Ok(())
@@ -263,7 +247,6 @@ impl VideoProcessorPreprocessor {
             self.d3d_resources
                 .device
                 .CreateComputeShader(shader_bytes, None, Some(&mut compute_shader))
-                .ok()
                 .context("Failed to create compute shader")?;
 
             self.compute_shader = compute_shader;
@@ -308,7 +291,6 @@ impl VideoProcessorPreprocessor {
                 self.d3d_resources
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))
-                    .ok()
                     .context("Failed to create RGBA texture")?;
 
                 self.rgba_texture = texture;
@@ -367,7 +349,6 @@ impl VideoProcessorPreprocessor {
                 self.d3d_resources
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))
-                    .ok()
                     .context("Failed to create BGRA texture")?;
 
                 self.bgra_texture = texture;
@@ -395,7 +376,6 @@ impl VideoProcessorPreprocessor {
                 self.d3d_resources
                     .device
                     .CreateShaderResourceView(rgba_texture, None, Some(&mut srv))
-                    .ok()
                     .context("Failed to create RGBA SRV")?;
 
                 self.rgba_srv = srv;
@@ -407,7 +387,6 @@ impl VideoProcessorPreprocessor {
                 self.d3d_resources
                     .device
                     .CreateUnorderedAccessView(bgra_texture, None, Some(&mut uav))
-                    .ok()
                     .context("Failed to create BGRA UAV")?;
 
                 self.bgra_uav = uav;
@@ -488,7 +467,6 @@ impl VideoProcessorPreprocessor {
                 self.d3d_resources
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))
-                    .ok()
                     .context("Failed to create output texture")?;
 
                 self.output_texture = texture;
@@ -570,23 +548,19 @@ impl VideoProcessorPreprocessor {
 
             // 入力サンプルを作成
             let input_sample = MFCreateSample()
-                .ok()
                 .context("Failed to create input sample")?;
 
             input_sample
                 .AddBuffer(&input_buffer)
-                .ok()
                 .context("Failed to add buffer to sample")?;
 
             input_sample
                 .SetSampleTime(timestamp)
-                .ok()
                 .context("Failed to set sample time")?;
 
             // ProcessInput
             self.transform
                 .ProcessInput(0, &input_sample, 0)
-                .ok()
                 .context("Failed to process input in Video Processor")?;
 
             // ProcessOutput で NV12 テクスチャを取得
@@ -613,7 +587,6 @@ impl VideoProcessorPreprocessor {
                             // 出力サンプルからバッファを取得
                             let output_buffer = output_sample
                                 .GetBufferByIndex(0)
-                                .ok()
                                 .context("Failed to get output buffer")?;
 
                             // IMFDXGIBufferインターフェースを取得してテクスチャを取り出す

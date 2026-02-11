@@ -20,7 +20,6 @@ pub fn detect_supported_resolutions(transform: &IMFTransform) -> Result<Vec<(u32
                     // メジャータイプを確認
                     let major_type = mt
                         .GetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE)
-                        .ok()
                         .context(format!(
                             "Failed to get input major type at index {}",
                             type_index
@@ -30,7 +29,6 @@ pub fn detect_supported_resolutions(transform: &IMFTransform) -> Result<Vec<(u32
                         // サブタイプを確認
                         let subtype = mt
                             .GetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE)
-                            .ok()
                             .context(format!(
                                 "Failed to get input subtype at index {}",
                                 type_index
@@ -95,7 +93,6 @@ pub fn setup_media_types(
                     // メジャータイプを確認
                     let major_type = mt
                         .GetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_MAJOR_TYPE)
-                        .ok()
                         .context(format!(
                             "Failed to get output major type at index {}",
                             type_index
@@ -105,7 +102,6 @@ pub fn setup_media_types(
                         // サブタイプを確認
                         let current_subtype = mt
                             .GetGUID(&windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE)
-                            .ok()
                             .context(format!(
                                 "Failed to get output subtype at index {}",
                                 type_index
@@ -153,13 +149,11 @@ pub fn setup_media_types(
 
         // 列挙されたメディアタイプをコピーして新しいメディアタイプを作成
         let configured_output_type = MFCreateMediaType()
-            .ok()
             .context("Failed to create output media type for configuration")?;
 
         // 列挙されたメディアタイプからすべての属性をコピー
         output_media_type
             .CopyAllItems(&configured_output_type)
-            .ok()
             .context("Failed to copy output media type attributes")?;
 
         // 必要な属性を設定
@@ -168,7 +162,6 @@ pub fn setup_media_types(
                 &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE,
                 frame_size,
             )
-            .ok()
             .context("Failed to set output frame size")?;
 
         configured_output_type
@@ -176,7 +169,6 @@ pub fn setup_media_types(
                 &windows::Win32::Media::MediaFoundation::MF_MT_FRAME_RATE,
                 frame_rate,
             )
-            .ok()
             .context("Failed to set output frame rate")?;
 
         configured_output_type
@@ -184,7 +176,6 @@ pub fn setup_media_types(
                 &windows::Win32::Media::MediaFoundation::MF_MT_INTERLACE_MODE,
                 MFVideoInterlace_Progressive.0 as u32,
             )
-            .ok()
             .context("Failed to set output interlace mode")?;
 
         // 出力メディアタイプを設定

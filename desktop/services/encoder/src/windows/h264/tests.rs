@@ -710,8 +710,7 @@ mod tests {
         
         unsafe {
             use windows::Win32::Media::MediaFoundation::{
-                MFT_INPUT_STREAM_INFO, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_FRAME_SIZE, MF_MT_FRAME_RATE,
-                MF_MT_INTERLACE_MODE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_ALL_SAMPLES_INDEPENDENT,
+                MFT_INPUT_STREAM_INFO, MF_MT_SUBTYPE,
             };
             use crate::windows::h264::encoder::H264Encoder;
             use crate::windows::utils::d3d::D3D11Resources;

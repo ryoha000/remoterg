@@ -67,6 +67,7 @@ pub struct Frame {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VideoCodec {
     H264,
+    AV1,
 }
 
 impl std::str::FromStr for VideoCodec {
@@ -75,6 +76,7 @@ impl std::str::FromStr for VideoCodec {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "h264" | "h.264" => Ok(VideoCodec::H264),
+            "av1" => Ok(VideoCodec::AV1),
             other => Err(format!("unsupported codec string: {}", other)),
         }
     }

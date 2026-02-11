@@ -9,11 +9,12 @@ use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
     METransformHaveOutput, METransformNeedInput, MFCreateDXGISurfaceBuffer, MFCreateSample,
-    MFSampleExtension_VideoEncodePictureType, MFVideoFormat_H264, MFT_OUTPUT_DATA_BUFFER,
-    MF_EVENT_FLAG_NONE, MF_EVENT_TYPE, MF_E_TRANSFORM_NEED_MORE_INPUT,
+    MFSampleExtension_VideoEncodePictureType, MFVideoFormat_AV1, MFVideoFormat_H264,
+    MFT_OUTPUT_DATA_BUFFER, MF_EVENT_FLAG_NONE, MF_EVENT_TYPE, MF_E_TRANSFORM_NEED_MORE_INPUT,
     MF_E_TRANSFORM_STREAM_CHANGE,
 };
 
+use crate::windows::av1::encoder::AV1Encoder;
 use crate::windows::codec::{CodecType, HardwareEncoder};
 use crate::windows::h264::encoder::H264Encoder;
 use crate::windows::utils::d3d::D3D11Resources;
@@ -125,6 +126,41 @@ pub fn start_mf_encode_workers(
                         }
                     }
                 }
+                CodecType::AV1 => {
+                    // AV1 implementation
+                    match AV1Encoder::create(d3d_resources.clone(), encode_width, encode_height) {
+                        Ok(enc) => {
+                            // 共通の設定（低遅延、メディアタイプ）を適用
+                            if let Err(e) =
+                                media_type::setup_low_latency_attributes(enc.transform())
+                            {
+                                warn!(
+                                    "MF encoder worker: failed to setup low latency attributes: {}",
+                                    e
+                                );
+                            }
+
+                            if let Err(e) = media_type::setup_media_types(
+                                enc.transform(),
+                                encode_width,
+                                encode_height,
+                                &MFVideoFormat_AV1,
+                            ) {
+                                warn!(
+                                    "MF encoder worker: failed to setup media types for AV1: {}",
+                                    e
+                                );
+                                return;
+                            }
+
+                            Box::new(enc)
+                        }
+                        Err(e) => {
+                            warn!("MF encoder worker: failed to create AV1 encoder: {}", e);
+                            return;
+                        }
+                    }
+                }
             }
         };
 
@@ -211,7 +247,10 @@ pub fn start_mf_encode_workers(
                             encoder.transform(),
                             encode_width,
                             encode_height,
-                            &MFVideoFormat_H264,
+                            match codec_type {
+                                CodecType::H264 => &MFVideoFormat_H264,
+                                CodecType::AV1 => &MFVideoFormat_AV1,
+                            },
                         ) {
                             warn!(
                                 "MF encoder worker: failed to setup media types for resize: {}",

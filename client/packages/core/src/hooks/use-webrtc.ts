@@ -15,12 +15,13 @@ import {
   makeMediaStreamHandler,
   createMockWebSocket,
   createMockPeerConnection,
+  setAv1Preferences,
 } from "@remoterg/webrtc";
 
 export interface WebRTCOptions {
   signalUrl: string;
   sessionId: string;
-  codec?: "h264" | "any";
+  codec?: "h264" | "av1" | "any";
   useMock?: boolean;
   onTrack?: (stream: MediaStream) => void;
   onConnectionStateChange?: (state: string) => void;
@@ -271,6 +272,12 @@ export function useWebRTC(options: WebRTCOptions) {
         const applied = yield* setH264Preferences(pc);
         if (applied) addLog("H.264 codec preferenceを適用", "success");
         else addLog("H.264 codec preference適用失敗 (or no codec found)", "warning");
+      }
+
+      if (codec === "av1") {
+        const applied = yield* setAv1Preferences(pc);
+        if (applied) addLog("AV1 codec preferenceを適用", "success");
+        else addLog("AV1 codec preference適用失敗 (or no codec found)", "warning");
       }
 
       // 4. Data Channel (Creation)

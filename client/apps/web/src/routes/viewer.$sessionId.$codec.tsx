@@ -11,7 +11,7 @@ import { parse } from "best-effort-json-parser";
 
 import * as v from "valibot";
 
-const CodecSchema = v.picklist(["h264", "any"]);
+const CodecSchema = v.picklist(["h264", "av1", "any"]);
 
 export const Route = createFileRoute("/viewer/$sessionId/$codec")({
   component: ViewerPage,

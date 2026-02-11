@@ -37,8 +37,8 @@ impl VideoProcessor {
     ) -> Result<()> {
         unsafe {
             // 入力メディアタイプ (BGRA)
-            let input_media_type = MFCreateMediaType()
-                .context("入力メディアタイプの作成に失敗しました")?;
+            let input_media_type =
+                MFCreateMediaType().context("入力メディアタイプの作成に失敗しました")?;
 
             input_media_type
                 .SetGUID(
@@ -82,8 +82,8 @@ impl VideoProcessor {
                 .context("Video Processor 入力タイプの設定に失敗しました")?;
 
             // 出力メディアタイプ (NV12)
-            let output_media_type = MFCreateMediaType()
-                .context("出力メディアタイプの作成に失敗しました")?;
+            let output_media_type =
+                MFCreateMediaType().context("出力メディアタイプの作成に失敗しました")?;
 
             output_media_type
                 .SetGUID(
@@ -146,12 +146,14 @@ impl VideoProcessor {
     ) -> Result<Option<ID3D11Texture2D>> {
         unsafe {
             // DXGI Surface Buffer 作成
-            let input_buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &input_texture, 0, false)
-                .map_err(|e| anyhow::anyhow!("DXGI Surface Buffer の作成に失敗しました: {}", e))?;
+            let input_buffer =
+                MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &input_texture, 0, false)
+                    .map_err(|e| {
+                        anyhow::anyhow!("DXGI Surface Buffer の作成に失敗しました: {}", e)
+                    })?;
 
             // 入力サンプル作成
-            let input_sample = MFCreateSample()
-                .context("入力サンプルの作成に失敗しました")?;
+            let input_sample = MFCreateSample().context("入力サンプルの作成に失敗しました")?;
 
             input_sample
                 .AddBuffer(&input_buffer)

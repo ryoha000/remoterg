@@ -16,6 +16,7 @@ use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
     SignalingResponse, TaggerCommand, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
 };
+use encoder::windows::av1::factory::MediaFoundationAV1EncoderFactory;
 use encoder::windows::h264::MediaFoundationH264EncoderFactory;
 use input::InputService;
 use signaling::SignalingClient;
@@ -174,14 +175,18 @@ async fn main() -> Result<()> {
         // Arc::new(OpenH264EncoderFactory::new()),
         Arc::new(MediaFoundationH264EncoderFactory::new()),
     );
+    encoder_factories.insert(
+        VideoCodec::AV1,
+        Arc::new(MediaFoundationAV1EncoderFactory::new()),
+    );
 
     // 音声フレーム用のチャンネルを作成
     let (audio_frame_tx, audio_frame_rx) = mpsc::channel::<AudioFrame>(100);
 
     // デフォルトのビデオエンコーダーを選択
     let default_video_encoder = encoder_factories
-        .get(&VideoCodec::H264)
-        .expect("H264 encoder must be available")
+        .get(&VideoCodec::AV1)
+        .expect("AV1 encoder must be available")
         .clone();
 
     // 音声エンコーダーファクトリを作成

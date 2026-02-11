@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
-use crate::windows::utils::d3d::D3D11Resources;
 use super::converter::ColorConverter;
 use super::texture_pool::TexturePool;
 use super::video_processor::VideoProcessor;
+use crate::windows::utils::d3d::D3D11Resources;
 
 /// Video Processor MFT Preprocessor (RGBA -> BGRA -> NV12 + Resize)
 pub struct VideoProcessorPreprocessor {
@@ -17,8 +17,8 @@ impl VideoProcessorPreprocessor {
     /// Create Video Processor MFT
     pub fn create(d3d_resources: D3D11Resources) -> Result<Self> {
         let video_processor = VideoProcessor::new()?;
-        
-        // Setup D3D Manager (using methods from video_processor if needed, 
+
+        // Setup D3D Manager (using methods from video_processor if needed,
         // but previously it was d3d_resources.setup_mft(&transform))
         d3d_resources.setup_mft(video_processor.transform())?;
 
@@ -40,35 +40,38 @@ impl VideoProcessorPreprocessor {
         timestamp: i64,
     ) -> Result<ID3D11Texture2D> {
         // 1. Reconfigure if needed
-        if self.texture_pool.needs_reconfigure(src_width, src_height, dst_width, dst_height) {
+        if self
+            .texture_pool
+            .needs_reconfigure(src_width, src_height, dst_width, dst_height)
+        {
             self.texture_pool.clear();
-            self.video_processor.configure(src_width, src_height, dst_width, dst_height)
+            self.video_processor
+                .configure(src_width, src_height, dst_width, dst_height)
                 .context("Failed to configure video processor in process")?;
         }
 
         // 2. Upload RGBA & Create target textures
-        let rgba_texture = self.texture_pool.ensure_rgba_texture(rgba_data, src_width, src_height)?;
-        let bgra_texture = self.texture_pool.ensure_bgra_texture(src_width, src_height)?;
-        
+        let rgba_texture = self
+            .texture_pool
+            .ensure_rgba_texture(rgba_data, src_width, src_height)?;
+        let bgra_texture = self
+            .texture_pool
+            .ensure_bgra_texture(src_width, src_height)?;
+
         // 3. Convert RGBA -> BGRA
         {
             let device = self.texture_pool.device();
             self.converter.ensure_shader(&device)?;
         }
-        
+
         // Get views from pool
         let srv = self.texture_pool.get_rgba_srv(&rgba_texture)?;
         let uav = self.texture_pool.get_bgra_uav(&bgra_texture)?;
-        
+
         {
             let context = self.texture_pool.context();
-            self.converter.convert(
-                &context,
-                &srv,
-                &uav,
-                src_width,
-                src_height,
-            )?;
+            self.converter
+                .convert(&context, &srv, &uav, src_width, src_height)?;
         }
 
         // 4. Process with MFT (BGRA -> NV12 + Resize)
@@ -77,8 +80,10 @@ impl VideoProcessorPreprocessor {
         // 5. 出力テクスチャを確保して返す
         // MFTから出力が得られなかった場合（NEED_MORE_INPUTなど）、
         // プールにある出力テクスチャ（前回のフレームまたは空）をフォールバックとして返す
-        let pool_output_texture = self.texture_pool.ensure_output_texture(dst_width, dst_height)?;
-        
+        let pool_output_texture = self
+            .texture_pool
+            .ensure_output_texture(dst_width, dst_height)?;
+
         if let Some(tex) = output_texture_result {
             Ok(tex)
         } else {

@@ -81,3 +81,26 @@ export const setH264Preferences = (pc: RTCPeerConnection) =>
     }
     return false;
   });
+
+export const setAv1Preferences = (pc: RTCPeerConnection) =>
+  Effect.sync(() => {
+    try {
+      const capabilities = RTCRtpSender.getCapabilities("video");
+      const codecs = (capabilities?.codecs ?? []).filter(
+        (c) => c.mimeType === "video/AV1",
+      );
+      const transceiver = pc.getTransceivers().find((t) => t.receiver.track.kind === "video");
+      if (
+        codecs.length > 0 &&
+        transceiver &&
+        typeof transceiver.setCodecPreferences === "function"
+      ) {
+        transceiver.setCodecPreferences(codecs);
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  });
+

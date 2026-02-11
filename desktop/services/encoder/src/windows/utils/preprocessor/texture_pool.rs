@@ -4,8 +4,8 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11UnorderedAccessView,
 };
 
-use crate::windows::utils::d3d::D3D11Resources;
 use super::texture;
+use crate::windows::utils::d3d::D3D11Resources;
 
 /// キャッシュされたテクスチャとサイズ情報
 struct CachedTexture {
@@ -118,9 +118,11 @@ impl TexturePool {
         if self.rgba_srv.is_none() {
             let mut srv: Option<ID3D11ShaderResourceView> = None;
             unsafe {
-                self.d3d_resources
-                    .device
-                    .CreateShaderResourceView(texture, None, Some(&mut srv))?;
+                self.d3d_resources.device.CreateShaderResourceView(
+                    texture,
+                    None,
+                    Some(&mut srv),
+                )?;
             }
             self.rgba_srv = srv;
         }
@@ -131,9 +133,11 @@ impl TexturePool {
         if self.bgra_uav.is_none() {
             let mut uav: Option<ID3D11UnorderedAccessView> = None;
             unsafe {
-                self.d3d_resources
-                    .device
-                    .CreateUnorderedAccessView(texture, None, Some(&mut uav))?;
+                self.d3d_resources.device.CreateUnorderedAccessView(
+                    texture,
+                    None,
+                    Some(&mut uav),
+                )?;
             }
             self.bgra_uav = uav;
         }

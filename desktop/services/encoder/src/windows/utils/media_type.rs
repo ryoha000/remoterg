@@ -148,8 +148,8 @@ pub fn setup_media_types(
         })?;
 
         // 列挙されたメディアタイプをコピーして新しいメディアタイプを作成
-        let configured_output_type = MFCreateMediaType()
-            .context("Failed to create output media type for configuration")?;
+        let configured_output_type =
+            MFCreateMediaType().context("Failed to create output media type for configuration")?;
 
         // 列挙されたメディアタイプからすべての属性をコピー
         output_media_type

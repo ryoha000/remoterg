@@ -12,7 +12,8 @@ export const Route = createFileRoute("/")({ component: App });
 
 function App() {
   const [sessionId, setSessionId] = useState<string>("fixed");
-  const [isH264, setIsH264] = useState(true);
+  const [isH264, setIsH264] = useState(false);
+  const [isAv1, setIsAv1] = useState(true);
   const [mounted, setMounted] = useState(false);
   const navigate = useNavigate();
 
@@ -25,7 +26,7 @@ function App() {
       to: "/viewer/$sessionId/$codec",
       params: {
         sessionId: sessionId || "fixed",
-        codec: isH264 ? "h264" : "any",
+        codec: isH264 ? "h264" : isAv1 ? "av1" : "any",
       },
     });
   };
@@ -99,6 +100,10 @@ function App() {
                     <div className="flex items-center justify-between">
                       <Label htmlFor="codec-h264">Force H.264</Label>
                       <Switch id="codec-h264" checked={isH264} onCheckedChange={setIsH264} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="codec-h264">Force AV1</Label>
+                      <Switch id="codec-h264" checked={isAv1} onCheckedChange={setIsAv1} />
                     </div>
                   </div>
                 </div>

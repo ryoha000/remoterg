@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use windows::core::PCSTR;
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCompile, D3DCOMPILE_OPTIMIZATION_LEVEL3};
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11ComputeShader, ID3D11DeviceContext, ID3D11Device, ID3D11ShaderResourceView,
+    ID3D11ComputeShader, ID3D11Device, ID3D11DeviceContext, ID3D11ShaderResourceView,
     ID3D11UnorderedAccessView,
 };
 
@@ -112,7 +112,7 @@ impl ColorConverter {
             let srv_slice = [Some(srv.clone())];
             let uav_slice = [Some(uav.clone())];
             let uav_initial_counts = [0];
-            
+
             context.CSSetShaderResources(0, Some(&srv_slice));
             context.CSSetUnorderedAccessViews(
                 0,
@@ -131,7 +131,7 @@ impl ColorConverter {
             let null_srv_slice = [None];
             let null_uav_slice = [None];
             let null_uav_initial_counts = [0];
-            
+
             context.CSSetShaderResources(0, Some(&null_srv_slice));
             context.CSSetUnorderedAccessViews(
                 0,

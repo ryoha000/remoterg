@@ -1,7 +1,6 @@
 pub mod encoder;
 pub mod media_type;
 pub mod nal;
-pub mod test;
 pub mod utils;
 
 use core_types::{EncodeJobSlot, EncodeResult, VideoCodec, VideoEncoderFactory};

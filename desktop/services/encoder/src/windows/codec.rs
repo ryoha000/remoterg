@@ -6,12 +6,14 @@ use windows::Win32::Media::MediaFoundation::{IMFMediaEventGenerator, IMFTransfor
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodecType {
     H264,
+    AV1,
 }
 
 impl From<CodecType> for VideoCodec {
     fn from(val: CodecType) -> Self {
         match val {
             CodecType::H264 => VideoCodec::H264,
+            CodecType::AV1 => VideoCodec::AV1,
         }
     }
 }

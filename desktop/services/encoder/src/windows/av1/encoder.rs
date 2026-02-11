@@ -3,9 +3,8 @@ use tracing::warn;
 use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaEventGenerator, IMFTransform,
-    MFSampleExtension_CleanPoint, MFVideoFormat_AV1, MFT_ENUM_FLAG_SORTANDFILTER,
-    MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+    MFSampleExtension_CleanPoint, MFT_MESSAGE_COMMAND_FLUSH,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
 };
 
 use crate::windows::codec::{EncodedFrame, HardwareEncoder};
@@ -47,56 +46,13 @@ impl AV1Encoder {
     }
 }
 
-// Helper function to find AV1 encoder (simplified version of h264 finder)
-use windows::Win32::Media::MediaFoundation::{
-    MFTEnumEx, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
-    MFT_REGISTER_TYPE_INFO,
-};
 
+/// 非同期ハードウェア AV1 エンコーダー MFT を検索
 pub(crate) fn find_async_av1_encoder() -> Result<IMFTransform> {
     unsafe {
-        let flags = MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_ASYNCMFT;
-
-        let input_info = MFT_REGISTER_TYPE_INFO {
-            guidMajorType: windows::Win32::Media::MediaFoundation::MFMediaType_Video,
-            guidSubtype: windows::Win32::Media::MediaFoundation::MFVideoFormat_NV12,
-        };
-
-        let output_info = MFT_REGISTER_TYPE_INFO {
-            guidMajorType: windows::Win32::Media::MediaFoundation::MFMediaType_Video,
-            guidSubtype: MFVideoFormat_AV1,
-        };
-
-        let mut pp_activate: *mut Option<windows::Win32::Media::MediaFoundation::IMFActivate> =
-            std::ptr::null_mut();
-        let mut count: u32 = 0;
-
-        MFTEnumEx(
-            MFT_CATEGORY_VIDEO_ENCODER,
-            flags,
-            Some(&input_info),
-            Some(&output_info),
-            &mut pp_activate,
-            &mut count,
+        crate::windows::utils::encoder_finder::find_async_video_encoder(
+            core_types::VideoCodec::AV1,
         )
-        .context("MFTEnumEx failed")?;
-
-        if count == 0 {
-            return Err(anyhow::anyhow!("No AV1 hardware encoder found"));
-        }
-
-        let activates = std::slice::from_raw_parts(pp_activate, count as usize);
-
-        // Try the first one
-        if let Some(activate) = &activates[0] {
-            let transform: IMFTransform = activate
-                .ActivateObject()
-                .context("Failed to activate MFT")?;
-
-            return Ok(transform);
-        }
-
-        Err(anyhow::anyhow!("Failed to find usable AV1 encoder"))
     }
 }
 

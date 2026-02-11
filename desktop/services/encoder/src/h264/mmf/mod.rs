@@ -70,3 +70,6 @@ impl VideoEncoderFactory for MediaFoundationH264EncoderFactory {
 #[cfg(test)]
 #[path = "../mmf_test.rs"]
 mod mmf_test;
+
+#[cfg(test)]
+mod test;

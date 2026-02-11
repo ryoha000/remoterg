@@ -3,20 +3,16 @@ name = "encoder"
 version.workspace = true
 edition.workspace = true
 
-[features]
-default = ["h264"]
-h264 = ["openh264", "rayon", "windows", "libyuv-sys"]
-
 [dependencies]
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-openh264 = { version = "0.9", optional = true }
+openh264 = { version = "0.9" }
 core-types = { path = "../core" }
-libyuv-sys = { path = "libyuv-sys", optional = true }
-rayon = { version = "1.8", optional = true }
-windows = { workspace = true, optional = true, features = [
+libyuv-sys = { path = "libyuv-sys" }
+rayon = { version = "1.8" }
+windows = { workspace = true, features = [
     "Win32_Media",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
@@ -28,11 +24,3 @@ windows = { workspace = true, optional = true, features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
 ] }
-
-[dev-dependencies]
-criterion = { version = "0.8.1", features = ["html_reports", "async_tokio"] }
-
-[[bench]]
-name = "encoder_bench"
-harness = false
-

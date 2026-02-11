@@ -16,7 +16,6 @@ use core_types::{
     AudioCaptureMessage, AudioFrame, CaptureBackend, CaptureMessage, DataChannelMessage, Frame,
     SignalingResponse, TaggerCommand, VideoCodec, VideoEncoderFactory, VideoStreamMessage,
 };
-#[cfg(feature = "h264")]
 use encoder::h264::mmf::MediaFoundationH264EncoderFactory;
 use input::InputService;
 use signaling::SignalingClient;
@@ -166,18 +165,14 @@ async fn main() -> Result<()> {
         Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
     )>(10);
 
-    #[cfg(not(feature = "h264"))]
-    compile_error!("h264 feature must be enabled for hostd");
+
 
     let mut encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>> = HashMap::new();
-    #[cfg(feature = "h264")]
-    {
-        encoder_factories.insert(
-            VideoCodec::H264,
-            // Arc::new(OpenH264EncoderFactory::new()),
-            Arc::new(MediaFoundationH264EncoderFactory::new()),
-        );
-    }
+    encoder_factories.insert(
+        VideoCodec::H264,
+        // Arc::new(OpenH264EncoderFactory::new()),
+        Arc::new(MediaFoundationH264EncoderFactory::new()),
+    );
 
     // 音声フレーム用のチャンネルを作成
     let (audio_frame_tx, audio_frame_rx) = mpsc::channel::<AudioFrame>(100);

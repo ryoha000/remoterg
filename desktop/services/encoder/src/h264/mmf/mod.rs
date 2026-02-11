@@ -1,34 +1,22 @@
-#[cfg(windows)]
 pub mod d3d;
-#[cfg(windows)]
 pub mod encoder;
-#[cfg(windows)]
 pub mod mf;
-#[cfg(windows)]
 pub mod pipeline;
-#[cfg(windows)]
 pub mod preprocessor;
 
-#[cfg(windows)]
 use core_types::{EncodeJobSlot, EncodeResult, VideoCodec, VideoEncoderFactory};
-#[cfg(windows)]
 use std::sync::Arc;
-#[cfg(windows)]
 use tokio::sync::mpsc as tokio_mpsc;
-#[cfg(windows)]
 use tracing::{info, warn};
 
-#[cfg(windows)]
 use self::mf::check_mf_available;
 
 /// Media Foundation H.264 エンコーダーファクトリ
 /// 利用可能でない場合はOpenH264にフォールバック
-#[cfg(windows)]
 pub struct MediaFoundationH264EncoderFactory {
     use_mf: bool,
 }
 
-#[cfg(windows)]
 impl MediaFoundationH264EncoderFactory {
     pub fn new() -> Self {
         // Media Foundationが利用可能かチェック
@@ -46,7 +34,6 @@ impl MediaFoundationH264EncoderFactory {
     }
 }
 
-#[cfg(windows)]
 impl VideoEncoderFactory for MediaFoundationH264EncoderFactory {
     fn setup(
         &self,
@@ -66,10 +53,6 @@ impl VideoEncoderFactory for MediaFoundationH264EncoderFactory {
         VideoCodec::H264
     }
 }
-
-#[cfg(test)]
-#[path = "../mmf_test.rs"]
-mod mmf_test;
 
 #[cfg(test)]
 mod test;

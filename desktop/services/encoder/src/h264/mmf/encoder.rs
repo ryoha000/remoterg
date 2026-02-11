@@ -16,6 +16,7 @@ use crate::h264::mmf::d3d::D3D11Resources;
 pub struct H264Encoder {
     transform: IMFTransform,
     event_generator: IMFMediaEventGenerator,
+    #[allow(dead_code)]
     d3d_resources: D3D11Resources,
     width: u32,
     height: u32,

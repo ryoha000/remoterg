@@ -1,4 +1,3 @@
-#[cfg(all(windows, feature = "h264"))]
 #[cfg(test)]
 mod tests {
     use crate::h264::mmf::MediaFoundationH264EncoderFactory;

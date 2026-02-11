@@ -18,6 +18,7 @@ pub struct D3D11Resources {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
     pub device_manager: IMFDXGIDeviceManager,
+    #[allow(dead_code)]
     reset_token: u32,
 }
 

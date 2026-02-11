@@ -1,5 +1,4 @@
 pub mod encoder;
-pub mod pipeline;
 pub mod test;
 pub mod utils;
 
@@ -39,7 +38,9 @@ impl VideoEncoderFactory for MediaFoundationH264EncoderFactory {
         tokio_mpsc::UnboundedReceiver<EncodeResult>,
     ) {
         if self.use_mf {
-            pipeline::start_mf_encode_workers()
+            crate::windows::pipeline::start_mf_encode_workers(
+                crate::windows::codec::CodecType::H264,
+            )
         } else {
             // OpenH264にフォールバック
             crate::h264::openh264::start_encode_workers()

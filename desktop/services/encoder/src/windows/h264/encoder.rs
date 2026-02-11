@@ -1,16 +1,161 @@
 use anyhow::{Context, Result};
-use tracing::debug;
+use tracing::{debug, warn};
 use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount,
     CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVLowLatencyMode, ICodecAPI, IMFMediaEventGenerator,
-    IMFMediaType, IMFTransform, MFCreateMediaType, MFMediaType_Video, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFT_MESSAGE_COMMAND_FLUSH,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY,
-    MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY, MF_MT_MPEG_SEQUENCE_HEADER,
+    IMFMediaType, IMFTransform, MFCreateMediaType, MFMediaType_Video, MFSampleExtension_CleanPoint,
+    MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_SET_TYPE_TEST_ONLY, MF_E_INVALIDMEDIATYPE,
+    MF_E_NO_MORE_TYPES, MF_LOW_LATENCY, MF_MT_MPEG_SEQUENCE_HEADER,
 };
 
+use crate::windows::codec::{EncodedFrame, HardwareEncoder};
 use crate::windows::utils::d3d::D3D11Resources;
+
+/// H.264データがAnnex-B形式（スタートコード）かどうかを判定
+fn is_annexb_format(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+    // 4バイトスタートコード (00 00 00 01)
+    if data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01 {
+        return true;
+    }
+    // 3バイトスタートコード (00 00 01)
+    if data.len() >= 3 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 {
+        return true;
+    }
+    false
+}
+
+/// H.264データをAnnex-B形式に変換（フォーマット自動判定）
+/// 戻り値: (Annex-B形式のデータ, SPS/PPSが含まれているか)
+fn annexb_from_mf_data(data: &[u8]) -> (Vec<u8>, bool) {
+    const START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
+    let mut result = Vec::new();
+    let mut has_sps_pps = false;
+
+    // 既にAnnex-B形式の場合はそのまま返す
+    if is_annexb_format(data) {
+        // Annex-B形式のまま処理（NALユニットを分割してSPS/PPSを検出）
+        let mut i = 0;
+        while i < data.len() {
+            // スタートコードを探す
+            let start_code_len = if i + 4 <= data.len()
+                && data[i] == 0x00
+                && data[i + 1] == 0x00
+                && data[i + 2] == 0x00
+                && data[i + 3] == 0x01
+            {
+                4
+            } else if i + 3 <= data.len()
+                && data[i] == 0x00
+                && data[i + 1] == 0x00
+                && data[i + 2] == 0x01
+            {
+                3
+            } else {
+                // スタートコードが見つからない場合は残りをコピーして終了
+                if i < data.len() {
+                    result.extend_from_slice(&data[i..]);
+                }
+                break;
+            };
+
+            // 次のスタートコードを探す
+            let mut next_start = None;
+            let mut search_pos = i + start_code_len;
+            while search_pos + 3 <= data.len() {
+                if search_pos + 4 <= data.len()
+                    && data[search_pos] == 0x00
+                    && data[search_pos + 1] == 0x00
+                    && data[search_pos + 2] == 0x00
+                    && data[search_pos + 3] == 0x01
+                {
+                    next_start = Some((search_pos, 4));
+                    break;
+                } else if data[search_pos] == 0x00
+                    && data[search_pos + 1] == 0x00
+                    && data[search_pos + 2] == 0x01
+                {
+                    next_start = Some((search_pos, 3));
+                    break;
+                }
+                search_pos += 1;
+            }
+
+            let nal_end = next_start.unwrap_or((data.len(), 0)).0;
+            let nal_unit = &data[i..nal_end];
+
+            // NALユニットのタイプを確認（SPS/PPS判定）
+            if nal_unit.len() > start_code_len {
+                let nal_header = nal_unit[start_code_len];
+                let nal_type = nal_header & 0x1F;
+                if nal_type == 7 || nal_type == 8 {
+                    has_sps_pps = true;
+                    debug!(
+                        "MF encoder: found SPS/PPS in Annex-B data (type={})",
+                        nal_type
+                    );
+                }
+            }
+
+            result.extend_from_slice(nal_unit);
+            i = nal_end;
+        }
+
+        return (result, has_sps_pps);
+    }
+
+    // AVCC形式（NAL長プレフィックス）として処理
+    debug!("MF encoder: detected AVCC format, converting to Annex-B");
+    let mut i = 0;
+    while i < data.len() {
+        if i + 4 <= data.len() {
+            // NAL長を読み取る（ビッグエンディアン）
+            let nal_length =
+                u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
+
+            i += 4;
+
+            if i + nal_length <= data.len() && nal_length > 0 {
+                let nal_unit = &data[i..i + nal_length];
+
+                // NALユニットのタイプを確認（SPS/PPS判定）
+                if nal_unit.len() > 0 {
+                    let nal_type = nal_unit[0] & 0x1F;
+                    if nal_type == 7 || nal_type == 8 {
+                        has_sps_pps = true;
+                        debug!("MF encoder: found SPS/PPS in AVCC data (type={})", nal_type);
+                    }
+                }
+
+                // スタートコードを追加
+                result.extend_from_slice(START_CODE);
+                result.extend_from_slice(nal_unit);
+
+                i += nal_length;
+            } else {
+                // 無効なNAL長の場合は残りをコピーして終了
+                if i < data.len() {
+                    warn!("MF encoder: invalid NAL length, copying remaining data");
+                    result.extend_from_slice(&data[i..]);
+                }
+                break;
+            }
+        } else {
+            // データが不足している場合は残りをコピー
+            if i < data.len() {
+                result.extend_from_slice(&data[i..]);
+            }
+            break;
+        }
+    }
+
+    (result, has_sps_pps)
+}
 
 /// 非同期ハードウェア H.264 エンコーダー
 pub struct H264Encoder {
@@ -20,6 +165,7 @@ pub struct H264Encoder {
     d3d_resources: D3D11Resources,
     width: u32,
     height: u32,
+    first_keyframe_sent: bool,
 }
 
 impl H264Encoder {
@@ -44,6 +190,7 @@ impl H264Encoder {
                 d3d_resources,
                 width,
                 height,
+                first_keyframe_sent: false,
             };
 
             // 低遅延属性を設定（ベストエフォート、失敗しても無視）
@@ -103,7 +250,7 @@ impl H264Encoder {
                         }
                         type_index += 1;
                     }
-                    Err(e) if e.code() == MF_E_NO_MORE_TYPES => {
+                    Err(e) if e.code().0 == MF_E_NO_MORE_TYPES.0 => {
                         break;
                     }
                     Err(e) => {
@@ -173,7 +320,7 @@ impl H264Encoder {
                         }
                         type_index += 1;
                     }
-                    Err(e) if e.code() == MF_E_NO_MORE_TYPES => {
+                    Err(e) if e.code().0 == MF_E_NO_MORE_TYPES.0 => {
                         debug!(
                             "No more output media types available after {} types",
                             type_index
@@ -255,7 +402,7 @@ impl H264Encoder {
                     loop {
                         let result = self.transform.GetInputAvailableType(0, count);
                         match &result {
-                            Err(error) if error.code() == MF_E_NO_MORE_TYPES => {
+                            Err(error) if error.code().0 == MF_E_NO_MORE_TYPES.0 => {
                                 break Ok(None);
                             }
                             Err(error) => {
@@ -327,7 +474,7 @@ impl H264Encoder {
                         );
 
                         match &test_result {
-                            Err(error) if error.code() == MF_E_INVALIDMEDIATYPE => {
+                            Err(error) if error.code().0 == MF_E_INVALIDMEDIATYPE.0 => {
                                 count += 1;
                                 continue;
                             }
@@ -389,49 +536,6 @@ impl H264Encoder {
         }
     }
 
-    /// 解像度が変更された場合に再設定
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
-        if self.width != width || self.height != height {
-            self.width = width;
-            self.height = height;
-            self.setup_media_types(width, height)
-                .context("Failed to resize H.264 encoder")?;
-        }
-        Ok(())
-    }
-
-    /// transform への参照を取得（イベントループから使用）
-    pub fn transform(&self) -> &IMFTransform {
-        &self.transform
-    }
-
-    /// event_generator への参照を取得（イベントループから使用）
-    pub fn event_generator(&self) -> &IMFMediaEventGenerator {
-        &self.event_generator
-    }
-
-    /// ストリーミングを開始（参考実装に従い、Flush → BeginStreaming → StartOfStream）
-    pub fn start_streaming(&self) -> Result<()> {
-        unsafe {
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
-                .ok()
-                .context("Failed to flush encoder")?;
-
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
-                .ok()
-                .context("Failed to notify begin streaming")?;
-
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
-                .ok()
-                .context("Failed to notify start of stream")?;
-
-            Ok(())
-        }
-    }
-
     /// 低遅延属性を設定
     fn setup_low_latency_attributes(&self) -> Result<()> {
         unsafe {
@@ -466,27 +570,9 @@ impl H264Encoder {
         }
     }
 
-    /// 次のフレームをキーフレームとして強制
-    pub fn set_force_keyframe(&self, force: bool) -> Result<()> {
-        unsafe {
-            let codec_api: ICodecAPI = self
-                .transform
-                .cast()
-                .ok()
-                .context("Failed to cast transform to ICodecAPI")?;
-            // CODECAPI_AVEncVideoForceKeyFrameを設定（値は1）
-            codec_api
-                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &force.into())
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to set CODECAPI_AVEncVideoForceKeyFrame: {}", e)
-                })?;
-            Ok(())
-        }
-    }
-
     /// 出力メディアタイプからcodec config (SPS/PPS) を取得（best-effort）
     /// 戻り値: (SPS NAL, PPS NAL) - 取得できない場合はNone
-    pub fn get_codec_config(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+    fn get_codec_config_internal(&self) -> Option<(Vec<u8>, Vec<u8>)> {
         unsafe {
             // 出力CurrentTypeを取得
             let output_type = match self.transform.GetOutputCurrentType(0) {
@@ -531,6 +617,155 @@ impl H264Encoder {
             }
 
             None
+        }
+    }
+}
+
+impl HardwareEncoder for H264Encoder {
+    fn transform(&self) -> &IMFTransform {
+        &self.transform
+    }
+
+    fn event_generator(&self) -> &IMFMediaEventGenerator {
+        &self.event_generator
+    }
+
+    fn start_streaming(&self) -> Result<()> {
+        unsafe {
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
+                .ok()
+                .context("Failed to flush encoder")?;
+
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+                .ok()
+                .context("Failed to notify begin streaming")?;
+
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+                .ok()
+                .context("Failed to notify start of stream")?;
+
+            Ok(())
+        }
+    }
+
+    fn resize(&mut self, width: u32, height: u32) -> Result<()> {
+        if self.width != width || self.height != height {
+            self.width = width;
+            self.height = height;
+            self.setup_media_types(width, height)
+                .context("Failed to resize H.264 encoder")?;
+        }
+        Ok(())
+    }
+
+    fn set_force_keyframe(&self, force: bool) -> Result<()> {
+        unsafe {
+            let codec_api: ICodecAPI = self
+                .transform
+                .cast()
+                .ok()
+                .context("Failed to cast transform to ICodecAPI")?;
+            // CODECAPI_AVEncVideoForceKeyFrameを設定（値は1）
+            codec_api
+                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &force.into())
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to set CODECAPI_AVEncVideoForceKeyFrame: {}", e)
+                })?;
+            Ok(())
+        }
+    }
+
+    fn get_codec_config(&self) -> Option<Vec<u8>> {
+        // H.264の場合、SPS/PPSをAnnex-B形式で返すこともできるが、
+        // 外部に返す必要性が低いため、ここではNoneを返しておくか、
+        // もしくは実装するか。
+        // 現在の要件ではprocess_output内で処理が完結するため、Noneで良い。
+        None
+    }
+
+    fn process_output(
+        &mut self,
+        sample: &windows::Win32::Media::MediaFoundation::IMFSample,
+    ) -> Result<EncodedFrame> {
+        unsafe {
+            let buffer = sample
+                .GetBufferByIndex(0)
+                .context("Failed to get output buffer")?;
+
+            let mut data_ptr: *mut u8 = std::ptr::null_mut();
+            let mut max_length: u32 = 0;
+            buffer
+                .Lock(&mut data_ptr, Some(&mut max_length), None)
+                .context("Failed to lock output buffer")?;
+
+            let current_length = match buffer.GetCurrentLength() {
+                Ok(len) => len,
+                Err(e) => {
+                    let _ = buffer.Unlock();
+                    return Err(anyhow::anyhow!("Failed to get output buffer length: {}", e));
+                }
+            };
+
+            let mut encoded_data = Vec::new();
+            if current_length > 0 && !data_ptr.is_null() {
+                let slice = std::slice::from_raw_parts(data_ptr, current_length as usize);
+                encoded_data.extend_from_slice(slice);
+            }
+
+            if let Err(e) = buffer.Unlock() {
+                warn!("MF encoder: failed to unlock output buffer: {}", e);
+            }
+
+            // Annex-B形式に変換（フォーマット自動判定）
+            let (mut sample_data, has_sps_pps_in_data) = annexb_from_mf_data(&encoded_data);
+
+            // キーフレーム判定（MFSampleExtension_CleanPoint + SPS/PPS検出）
+            let is_clean_point = match sample.GetUINT32(&MFSampleExtension_CleanPoint) {
+                Ok(1) => true,
+                Ok(0) => false,
+                _ => false, // エラーまたは未設定の場合はfalse
+            };
+            // SPS/PPSが含まれている場合もキーフレームとして扱う（ブラウザがデコード開始できるように）
+            let mut is_keyframe = is_clean_point || has_sps_pps_in_data;
+
+            // in-bandにSPS/PPSが無く、codec configから取得したSPS/PPSがある場合、最初のキーフレームに注入
+            if !has_sps_pps_in_data && is_keyframe && !self.first_keyframe_sent {
+                // ここでSPS/PPSを取得
+                if let Some((ref sps, ref pps)) = self.get_codec_config_internal() {
+                    debug!(
+                        "MF encoder: injecting SPS/PPS from codec config (SPS: {} bytes, PPS: {} bytes)",
+                        sps.len(),
+                        pps.len()
+                    );
+                    const START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
+                    let mut injected_data = Vec::with_capacity(
+                        START_CODE.len()
+                            + sps.len()
+                            + START_CODE.len()
+                            + pps.len()
+                            + sample_data.len(),
+                    );
+                    injected_data.extend_from_slice(START_CODE);
+                    injected_data.extend_from_slice(sps.as_slice());
+                    injected_data.extend_from_slice(START_CODE);
+                    injected_data.extend_from_slice(pps.as_slice());
+                    injected_data.extend_from_slice(&sample_data);
+                    sample_data = injected_data;
+                    is_keyframe = true; // 注入後は確実にキーフレーム
+                    self.first_keyframe_sent = true;
+                }
+            } else if has_sps_pps_in_data {
+                debug!("MF encoder: detected SPS/PPS in encoded data, marking as keyframe");
+                self.first_keyframe_sent = true;
+            }
+
+            Ok(EncodedFrame {
+                data: sample_data,
+                is_keyframe,
+            })
         }
     }
 }
@@ -619,3 +854,6 @@ fn parse_avc_decoder_config(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
         }
     }
 }
+
+// Media FoundationのCOMオブジェクトは一般的にスレッドセーフ（特に非同期MFT）
+unsafe impl Send for H264Encoder {}

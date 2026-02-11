@@ -9,157 +9,14 @@ use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Media::MediaFoundation::{
     METransformHaveOutput, METransformNeedInput, MFCreateDXGISurfaceBuffer, MFCreateSample,
-    MFSampleExtension_CleanPoint, MFSampleExtension_VideoEncodePictureType, MFT_OUTPUT_DATA_BUFFER,
-    MF_EVENT_FLAG_NONE, MF_EVENT_TYPE, MF_E_TRANSFORM_NEED_MORE_INPUT,
-    MF_E_TRANSFORM_STREAM_CHANGE,
+    MFSampleExtension_VideoEncodePictureType, MFT_OUTPUT_DATA_BUFFER, MF_EVENT_FLAG_NONE,
+    MF_EVENT_TYPE, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE,
 };
 
+use crate::windows::codec::{CodecType, HardwareEncoder};
 use crate::windows::h264::encoder::H264Encoder;
 use crate::windows::utils::d3d::D3D11Resources;
 use crate::windows::utils::preprocessor::VideoProcessorPreprocessor;
-
-/// H.264データがAnnex-B形式（スタートコード）かどうかを判定
-fn is_annexb_format(data: &[u8]) -> bool {
-    if data.len() < 4 {
-        return false;
-    }
-    // 4バイトスタートコード (00 00 00 01)
-    if data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01 {
-        return true;
-    }
-    // 3バイトスタートコード (00 00 01)
-    if data.len() >= 3 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 {
-        return true;
-    }
-    false
-}
-
-/// H.264データをAnnex-B形式に変換（フォーマット自動判定）
-/// 戻り値: (Annex-B形式のデータ, SPS/PPSが含まれているか)
-fn annexb_from_mf_data(data: &[u8]) -> (Vec<u8>, bool) {
-    const START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
-    let mut result = Vec::new();
-    let mut has_sps_pps = false;
-
-    // 既にAnnex-B形式の場合はそのまま返す
-    if is_annexb_format(data) {
-        // Annex-B形式のまま処理（NALユニットを分割してSPS/PPSを検出）
-        let mut i = 0;
-        while i < data.len() {
-            // スタートコードを探す
-            let start_code_len = if i + 4 <= data.len()
-                && data[i] == 0x00
-                && data[i + 1] == 0x00
-                && data[i + 2] == 0x00
-                && data[i + 3] == 0x01
-            {
-                4
-            } else if i + 3 <= data.len()
-                && data[i] == 0x00
-                && data[i + 1] == 0x00
-                && data[i + 2] == 0x01
-            {
-                3
-            } else {
-                // スタートコードが見つからない場合は残りをコピーして終了
-                if i < data.len() {
-                    result.extend_from_slice(&data[i..]);
-                }
-                break;
-            };
-
-            // 次のスタートコードを探す
-            let mut next_start = None;
-            let mut search_pos = i + start_code_len;
-            while search_pos + 3 <= data.len() {
-                if search_pos + 4 <= data.len()
-                    && data[search_pos] == 0x00
-                    && data[search_pos + 1] == 0x00
-                    && data[search_pos + 2] == 0x00
-                    && data[search_pos + 3] == 0x01
-                {
-                    next_start = Some((search_pos, 4));
-                    break;
-                } else if data[search_pos] == 0x00
-                    && data[search_pos + 1] == 0x00
-                    && data[search_pos + 2] == 0x01
-                {
-                    next_start = Some((search_pos, 3));
-                    break;
-                }
-                search_pos += 1;
-            }
-
-            let nal_end = next_start.unwrap_or((data.len(), 0)).0;
-            let nal_unit = &data[i..nal_end];
-
-            // NALユニットのタイプを確認（SPS/PPS判定）
-            if nal_unit.len() > start_code_len {
-                let nal_header = nal_unit[start_code_len];
-                let nal_type = nal_header & 0x1F;
-                if nal_type == 7 || nal_type == 8 {
-                    has_sps_pps = true;
-                    debug!(
-                        "MF encoder: found SPS/PPS in Annex-B data (type={})",
-                        nal_type
-                    );
-                }
-            }
-
-            result.extend_from_slice(nal_unit);
-            i = nal_end;
-        }
-
-        return (result, has_sps_pps);
-    }
-
-    // AVCC形式（NAL長プレフィックス）として処理
-    debug!("MF encoder: detected AVCC format, converting to Annex-B");
-    let mut i = 0;
-    while i < data.len() {
-        if i + 4 <= data.len() {
-            // NAL長を読み取る（ビッグエンディアン）
-            let nal_length =
-                u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
-
-            i += 4;
-
-            if i + nal_length <= data.len() && nal_length > 0 {
-                let nal_unit = &data[i..i + nal_length];
-
-                // NALユニットのタイプを確認（SPS/PPS判定）
-                if nal_unit.len() > 0 {
-                    let nal_type = nal_unit[0] & 0x1F;
-                    if nal_type == 7 || nal_type == 8 {
-                        has_sps_pps = true;
-                        debug!("MF encoder: found SPS/PPS in AVCC data (type={})", nal_type);
-                    }
-                }
-
-                // スタートコードを追加
-                result.extend_from_slice(START_CODE);
-                result.extend_from_slice(nal_unit);
-
-                i += nal_length;
-            } else {
-                // 無効なNAL長の場合は残りをコピーして終了
-                if i < data.len() {
-                    warn!("MF encoder: invalid NAL length, copying remaining data");
-                    result.extend_from_slice(&data[i..]);
-                }
-                break;
-            }
-        } else {
-            // データが不足している場合は残りをコピー
-            if i < data.len() {
-                result.extend_from_slice(&data[i..]);
-            }
-            break;
-        }
-    }
-
-    (result, has_sps_pps)
-}
 
 /// 入力フレームのメタ情報（出力と対応付けるため）
 struct InputFrameMeta {
@@ -170,7 +27,9 @@ struct InputFrameMeta {
 }
 
 /// Media Foundationエンコードワーカーを起動
-pub fn start_mf_encode_workers() -> (
+pub fn start_mf_encode_workers(
+    codec_type: CodecType,
+) -> (
     Arc<EncodeJobSlot>,
     tokio_mpsc::UnboundedReceiver<EncodeResult>,
 ) {
@@ -229,25 +88,21 @@ pub fn start_mf_encode_workers() -> (
             }
         };
 
-        let mut encoder = {
+        let mut encoder: Box<dyn HardwareEncoder> = {
             let encoder_span = span!(Level::DEBUG, "encoder_create");
             let _encoder_guard = encoder_span.enter();
-            match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height) {
-                Ok(enc) => enc,
-                Err(e) => {
-                    warn!("MF encoder worker: failed to create encoder: {}", e);
-                    return;
+            match codec_type {
+                CodecType::H264 => {
+                    match H264Encoder::create(d3d_resources.clone(), encode_width, encode_height) {
+                        Ok(enc) => Box::new(enc),
+                        Err(e) => {
+                            warn!("MF encoder worker: failed to create H264 encoder: {}", e);
+                            return;
+                        }
+                    }
                 }
             }
         };
-
-        // codec configからSPS/PPSを取得（best-effort、取得できない場合はNone）
-        let codec_config_sps_pps = encoder.get_codec_config();
-        if codec_config_sps_pps.is_some() {
-            info!("MF encoder worker: extracted SPS/PPS from codec config");
-        } else {
-            debug!("MF encoder worker: codec config not available, will rely on in-band SPS/PPS");
-        }
 
         // ストリーミングを開始
         {
@@ -263,7 +118,6 @@ pub fn start_mf_encode_workers() -> (
 
         // 最初のフレームを処理
         let mut pending_job = Some(first_job);
-        let mut first_keyframe_sent = false;
 
         // 参考実装に従い、常駐イベントループを開始
         loop {
@@ -278,7 +132,7 @@ pub fn start_mf_encode_workers() -> (
                             warn!(
                                 "MF encoder worker: failed to get event: {} (HRESULT: {:?})",
                                 e,
-                                e.code()
+                                e.code().0
                             );
                             encode_failures += 1;
                             // エラーが続く場合は終了
@@ -464,7 +318,7 @@ pub fn start_mf_encode_workers() -> (
                             if let Err(e) = encoder.transform().ProcessInput(0, &input_sample, 0) {
                                 warn!(
                                     "MF encoder worker: ProcessInput failed for {}x{} frame: {} (HRESULT: {:?})",
-                                    job_width, job_height, e, e.code()
+                                    job_width, job_height, e, e.code().0
                                 );
                                 encode_failures += 1;
                                 input_meta_queue.pop_back();
@@ -509,132 +363,57 @@ pub fn start_mf_encode_workers() -> (
                         match process_output_result {
                             Ok(_) => {
                                 if let Some(sample) = output_buffers[0].pSample.take() {
-                                    let buffer = match sample.GetBufferByIndex(0) {
-                                        Ok(buf) => buf,
+                                    // HardwareEncoderトレイト経由でデータを取得
+                                    match encoder.process_output(&sample) {
+                                        Ok(encoded_frame) => {
+                                            // メタ情報を取得
+                                            let meta = match input_meta_queue.pop_front() {
+                                                Some(m) => m,
+                                                None => {
+                                                    warn!("MF encoder worker: no input meta available for output");
+                                                    empty_samples += 1;
+                                                    continue;
+                                                }
+                                            };
+
+                                            if encoded_frame.data.is_empty() {
+                                                empty_samples += 1;
+                                                warn!(
+                                                    "MF encoder worker: empty sample (total empty: {})",
+                                                    empty_samples
+                                                );
+                                                continue;
+                                            }
+
+                                            if res_tx
+                                                .send(EncodeResult {
+                                                    sample_data: encoded_frame.data,
+                                                    is_keyframe: encoded_frame.is_keyframe,
+                                                    duration: meta.duration,
+                                                    width: meta.width,
+                                                    height: meta.height,
+                                                    frame_id: meta.frame_id,
+                                                })
+                                                .is_err()
+                                            {
+                                                // 受信側が閉じられた
+                                                break;
+                                            }
+                                        }
                                         Err(e) => {
                                             warn!(
-                                                "MF encoder worker: failed to get output buffer: {}",
+                                                "MF encoder worker: process_output failed: {}",
                                                 e
                                             );
-                                            empty_samples += 1;
+                                            encode_failures += 1;
+                                            // メタ情報の整合性を保つため、エラー時もポップするか検討が必要だが、
+                                            // ここでは次のProcessOutputが成功する可能性も考慮し、
+                                            // 対応付けがずれるリスクはあるがポップしないでおくか、
+                                            // process_outputが失敗した＝データが取れなかった＝メタも消費すべきか。
+                                            // ここでは消費しておく。
+                                            input_meta_queue.pop_front();
                                             continue;
                                         }
-                                    };
-
-                                    let mut data_ptr: *mut u8 = std::ptr::null_mut();
-                                    let mut max_length: u32 = 0;
-                                    if let Err(e) =
-                                        buffer.Lock(&mut data_ptr, Some(&mut max_length), None)
-                                    {
-                                        warn!(
-                                            "MF encoder worker: failed to lock output buffer: {}",
-                                            e
-                                        );
-                                        empty_samples += 1;
-                                        continue;
-                                    }
-
-                                    let current_length = match buffer.GetCurrentLength() {
-                                        Ok(len) => len,
-                                        Err(e) => {
-                                            warn!(
-                                                "MF encoder worker: failed to get output buffer length: {}",
-                                                e
-                                            );
-                                            let _ = buffer.Unlock();
-                                            empty_samples += 1;
-                                            continue;
-                                        }
-                                    };
-
-                                    let mut encoded_data = Vec::new();
-                                    if current_length > 0 && !data_ptr.is_null() {
-                                        let slice = std::slice::from_raw_parts(
-                                            data_ptr,
-                                            current_length as usize,
-                                        );
-                                        encoded_data.extend_from_slice(slice);
-                                    }
-
-                                    if let Err(e) = buffer.Unlock() {
-                                        warn!(
-                                            "MF encoder worker: failed to unlock output buffer: {}",
-                                            e
-                                        );
-                                    }
-
-                                    // Annex-B形式に変換（フォーマット自動判定）
-                                    let (mut sample_data, has_sps_pps_in_data) =
-                                        annexb_from_mf_data(&encoded_data);
-
-                                    // キーフレーム判定（MFSampleExtension_CleanPoint + SPS/PPS検出）
-                                    let is_clean_point =
-                                        match sample.GetUINT32(&MFSampleExtension_CleanPoint) {
-                                            Ok(1) => true,
-                                            Ok(0) => false,
-                                            _ => false, // エラーまたは未設定の場合はfalse
-                                        };
-                                    // SPS/PPSが含まれている場合もキーフレームとして扱う（ブラウザがデコード開始できるように）
-                                    let mut is_keyframe = is_clean_point || has_sps_pps_in_data;
-
-                                    // in-bandにSPS/PPSが無く、codec configから取得したSPS/PPSがある場合、最初のキーフレームに注入
-                                    if !has_sps_pps_in_data && is_keyframe && !first_keyframe_sent {
-                                        if let Some((ref sps, ref pps)) = codec_config_sps_pps {
-                                            debug!("MF encoder: injecting SPS/PPS from codec config (SPS: {} bytes, PPS: {} bytes)", sps.len(), pps.len());
-                                            const START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
-                                            let mut injected_data = Vec::with_capacity(
-                                                START_CODE.len()
-                                                    + sps.len()
-                                                    + START_CODE.len()
-                                                    + pps.len()
-                                                    + sample_data.len(),
-                                            );
-                                            injected_data.extend_from_slice(START_CODE);
-                                            injected_data.extend_from_slice(sps.as_slice());
-                                            injected_data.extend_from_slice(START_CODE);
-                                            injected_data.extend_from_slice(pps.as_slice());
-                                            injected_data.extend_from_slice(&sample_data);
-                                            sample_data = injected_data;
-                                            is_keyframe = true; // 注入後は確実にキーフレーム
-                                            first_keyframe_sent = true;
-                                        }
-                                    } else if has_sps_pps_in_data {
-                                        debug!("MF encoder: detected SPS/PPS in encoded data, marking as keyframe");
-                                        first_keyframe_sent = true;
-                                    }
-
-                                    // メタ情報を取得
-                                    let meta = match input_meta_queue.pop_front() {
-                                        Some(m) => m,
-                                        None => {
-                                            warn!("MF encoder worker: no input meta available for output");
-                                            empty_samples += 1;
-                                            continue;
-                                        }
-                                    };
-
-                                    if sample_data.is_empty() {
-                                        empty_samples += 1;
-                                        warn!(
-                                            "MF encoder worker: empty sample (total empty: {})",
-                                            empty_samples
-                                        );
-                                        continue;
-                                    }
-
-                                    if res_tx
-                                        .send(EncodeResult {
-                                            sample_data,
-                                            is_keyframe: is_keyframe,
-                                            duration: meta.duration,
-                                            width: meta.width,
-                                            height: meta.height,
-                                            frame_id: meta.frame_id,
-                                        })
-                                        .is_err()
-                                    {
-                                        // 受信側が閉じられた
-                                        break;
                                     }
                                 } else {
                                     empty_samples += 1;
@@ -644,11 +423,11 @@ pub fn start_mf_encode_workers() -> (
                                     );
                                 }
                             }
-                            Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
+                            Err(e) if e.code().0 == MF_E_TRANSFORM_NEED_MORE_INPUT.0 => {
                                 // すべての出力を取得した - 正常（次のNeedInputを待つ）
                                 debug!("MF encoder worker: all output retrieved");
                             }
-                            Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                            Err(e) if e.code().0 == MF_E_TRANSFORM_STREAM_CHANGE.0 => {
                                 warn!("MF encoder worker: stream change detected");
                                 // ストリーム変更が発生した場合は再初期化が必要かもしれないが、
                                 // ここでは警告のみ
@@ -658,7 +437,7 @@ pub fn start_mf_encode_workers() -> (
                                 warn!(
                                     "MF encoder worker: ProcessOutput failed: {} (code: {:?}, status: {})",
                                     e,
-                                    error_code,
+                                    error_code.0,
                                     status
                                 );
                                 encode_failures += 1;
@@ -670,7 +449,7 @@ pub fn start_mf_encode_workers() -> (
                                     );
                                 }
                                 // MF_E_TRANSFORM_NEED_MORE_INPUT の場合は次の入力待ちに続行
-                                if error_code == MF_E_TRANSFORM_NEED_MORE_INPUT {
+                                if error_code.0 == MF_E_TRANSFORM_NEED_MORE_INPUT.0 {
                                     debug!("MF encoder worker: need more input, continuing");
                                 }
                             }

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use core_types::VideoCodec;
 
 use windows::Win32::Media::MediaFoundation::{IMFMediaEventGenerator, IMFTransform};
@@ -31,16 +31,11 @@ impl CodecType {
         // エンコーダーを作成
         let encoder: Box<dyn HardwareEncoder> = match self {
             CodecType::H264 => {
-                let enc = crate::windows::h264::encoder::H264Encoder::create(
-                    d3d_resources,
-                    width,
-                    height,
-                )?;
+                let enc = crate::windows::h264::encoder::H264Encoder::create(d3d_resources)?;
                 Box::new(enc)
             }
             CodecType::AV1 => {
-                let enc =
-                    crate::windows::av1::encoder::AV1Encoder::create(d3d_resources, width, height)?;
+                let enc = crate::windows::av1::encoder::AV1Encoder::create(d3d_resources)?;
                 Box::new(enc)
             }
         };
@@ -78,14 +73,29 @@ pub trait HardwareEncoder: Send {
     /// Get the referenced IMFMediaEventGenerator (used for event loop)
     fn event_generator(&self) -> &IMFMediaEventGenerator;
 
-    /// Start streaming
-    fn start_streaming(&self) -> Result<()>;
+    /// Start streaming (default implementation provided)
+    fn start_streaming(&self) -> Result<()> {
+        use windows::Win32::Media::MediaFoundation::{
+            MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+            MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+        };
 
-    /// Resize encoder
-    fn resize(&mut self, width: u32, height: u32) -> Result<()>;
+        unsafe {
+            self.transform()
+                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
+                .context("Failed to flush encoder")?;
 
-    /// Force keyframe for next frame
-    fn set_force_keyframe(&self, force: bool) -> Result<()>;
+            self.transform()
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+                .context("Failed to notify begin streaming")?;
+
+            self.transform()
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+                .context("Failed to notify start of stream")?;
+
+            Ok(())
+        }
+    }
 
     /// Retrieve encoded data from output sample
     /// Returns EncodedFrame if successful
@@ -94,8 +104,4 @@ pub trait HardwareEncoder: Send {
         &mut self,
         sample: &windows::Win32::Media::MediaFoundation::IMFSample,
     ) -> Result<EncodedFrame>;
-
-    /// Optional: Get codec specific configuration (SPS/PPS for H.264)
-    /// This might be needed for initialization or first keyframe injection
-    fn get_codec_config(&self) -> Option<Vec<u8>>;
 }

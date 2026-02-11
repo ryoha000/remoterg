@@ -202,13 +202,6 @@ pub fn start_mf_encode_workers(
                             continue;
                         }
 
-                        if let Err(e) = encoder.resize(encode_width, encode_height) {
-                            warn!("MF encoder worker: failed to resize encoder: {}", e);
-                            encode_failures += 1;
-                            input_meta_queue.pop_back();
-                            continue;
-                        }
-
                         // 前処理（RGBA → NV12 テクスチャ）
                         // src: job_width/height, dst: encode_width/height
                         let nv12_texture = {

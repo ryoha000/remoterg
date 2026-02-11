@@ -2,9 +2,7 @@ use anyhow::{Context, Result};
 use tracing::warn;
 use windows::core::Interface;
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncVideoForceKeyFrame, ICodecAPI, IMFMediaEventGenerator, IMFTransform,
-    MFSampleExtension_CleanPoint, MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+    IMFMediaEventGenerator, IMFTransform, MFSampleExtension_CleanPoint,
 };
 
 use crate::windows::codec::{EncodedFrame, HardwareEncoder};
@@ -17,13 +15,11 @@ pub struct AV1Encoder {
     event_generator: IMFMediaEventGenerator,
     #[allow(dead_code)]
     d3d_resources: D3D11Resources,
-    width: u32,
-    height: u32,
 }
 
 impl AV1Encoder {
     /// AV1 エンコーダーを作成
-    pub fn create(d3d_resources: D3D11Resources, width: u32, height: u32) -> Result<Self> {
+    pub fn create(d3d_resources: D3D11Resources) -> Result<Self> {
         let transform = unsafe {
             crate::windows::utils::encoder_finder::find_async_video_encoder(
                 core_types::VideoCodec::AV1,
@@ -43,8 +39,6 @@ impl AV1Encoder {
             transform,
             event_generator,
             d3d_resources,
-            width,
-            height,
         };
 
         Ok(encoder)
@@ -60,52 +54,6 @@ impl HardwareEncoder for AV1Encoder {
 
     fn event_generator(&self) -> &IMFMediaEventGenerator {
         &self.event_generator
-    }
-
-    fn start_streaming(&self) -> Result<()> {
-        unsafe {
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
-                .context("Failed to flush encoder")?;
-
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
-                .context("Failed to notify begin streaming")?;
-
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
-                .context("Failed to notify start of stream")?;
-
-            Ok(())
-        }
-    }
-
-    fn resize(&mut self, width: u32, height: u32) -> Result<()> {
-        if self.width != width || self.height != height {
-            self.width = width;
-            self.height = height;
-        }
-        Ok(())
-    }
-
-    fn set_force_keyframe(&self, force: bool) -> Result<()> {
-        unsafe {
-            let codec_api: ICodecAPI = self
-                .transform
-                .cast()
-                .context("Failed to cast transform to ICodecAPI")?;
-
-            codec_api
-                .SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &force.into())
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to set CODECAPI_AVEncVideoForceKeyFrame: {}", e)
-                })?;
-            Ok(())
-        }
-    }
-
-    fn get_codec_config(&self) -> Option<Vec<u8>> {
-        None
     }
 
     fn process_output(

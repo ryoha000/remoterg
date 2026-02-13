@@ -202,30 +202,105 @@ pub fn start_mf_encode_workers(
                             continue;
                         }
 
-                        // 前処理（RGBA → NV12 テクスチャ）
+                        // 前処理（RGBA/SharedTexture → NV12 テクスチャ）
                         // src: job_width/height, dst: encode_width/height
                         let nv12_texture = {
                             let preprocess_span =
                                 span!(Level::DEBUG, "preprocess", frame_id = job.frame_id);
                             let _guard = preprocess_span.enter();
 
-                            match preprocessor.process(
-                                &job.rgba,
-                                job_width,
-                                job_height,
-                                encode_width,
-                                encode_height,
-                                frame_timestamp,
-                            ) {
-                                Ok(texture) => texture,
-                                Err(e) => {
-                                    warn!(
-                                            "MF encoder worker: preprocess failed for {}x{} frame: {} (HRESULT: {:?})",
-                                            job.width, job.height, e, e.source()
-                                        );
-                                    encode_failures += 1;
-                                    input_meta_queue.pop_back(); // メタ情報も削除
-                                    continue;
+                            if let Some(handle_val) = job.texture_handle {
+                                use windows::Win32::Foundation::HANDLE;
+                                let handle = HANDLE(handle_val as usize as *mut std::ffi::c_void);
+                                let mut input_texture: Option<ID3D11Texture2D> = None;
+                                let input_texture_result: windows::core::Result<()> = unsafe {
+                                    d3d_resources
+                                        .device
+                                        .OpenSharedResource(handle, &mut input_texture)
+                                };
+
+                                match input_texture_result {
+                                    Ok(_) => {
+                                        if let Some(input_texture) = input_texture {
+                                            match preprocessor.process_texture(
+                                                input_texture,
+                                                job_width,
+                                                job_height,
+                                                encode_width,
+                                                encode_height,
+                                                frame_timestamp,
+                                            ) {
+                                                Ok(texture) => texture,
+                                                Err(e) => {
+                                                    warn!(
+                                                        "MF encoder worker: preprocess_texture failed for {}x{} frame: {} (HRESULT: {:?})",
+                                                        job.width, job.height, e, e.source()
+                                                    );
+                                                    encode_failures += 1;
+                                                    input_meta_queue.pop_back(); // メタ情報も削除
+                                                    continue;
+                                                }
+                                            }
+                                        } else {
+                                            warn!("MF encoder worker: OpenSharedResource returned success but texture is None");
+                                            encode_failures += 1;
+                                            input_meta_queue.pop_back();
+                                            continue;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("MF encoder worker: Failed to open shared resource: {:?}", e);
+                                        // Fallback to CPU buffer if possible?
+                                        // Currently if handle is present, we assume data might be empty.
+                                        // But if OpenSharedResource fails, we might want to try data if available.
+                                        // Let's try fallback if data is not empty.
+                                        if !job.rgba.is_empty() {
+                                            warn!("MF encoder worker: Fallback to CPU buffer");
+                                            match preprocessor.process(
+                                                &job.rgba,
+                                                job_width,
+                                                job_height,
+                                                encode_width,
+                                                encode_height,
+                                                frame_timestamp,
+                                            ) {
+                                                Ok(texture) => texture,
+                                                Err(e) => {
+                                                    warn!(
+                                                            "MF encoder worker: preprocess failed (fallback) for {}x{} frame: {} (HRESULT: {:?})",
+                                                            job.width, job.height, e, e.source()
+                                                        );
+                                                    encode_failures += 1;
+                                                    input_meta_queue.pop_back();
+                                                    continue;
+                                                }
+                                            }
+                                        } else {
+                                            encode_failures += 1;
+                                            input_meta_queue.pop_back();
+                                            continue;
+                                        }
+                                    }
+                                }
+                            } else {
+                                match preprocessor.process(
+                                    &job.rgba,
+                                    job_width,
+                                    job_height,
+                                    encode_width,
+                                    encode_height,
+                                    frame_timestamp,
+                                ) {
+                                    Ok(texture) => texture,
+                                    Err(e) => {
+                                        warn!(
+                                                "MF encoder worker: preprocess failed for {}x{} frame: {} (HRESULT: {:?})",
+                                                job.width, job.height, e, e.source()
+                                            );
+                                        encode_failures += 1;
+                                        input_meta_queue.pop_back(); // メタ情報も削除
+                                        continue;
+                                    }
                                 }
                             }
                         };

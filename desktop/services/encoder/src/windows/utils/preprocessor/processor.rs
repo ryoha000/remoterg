@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+use windows::Win32::Graphics::Direct3D11::{ID3D11ShaderResourceView, ID3D11Texture2D};
 
 use super::converter::ColorConverter;
 use super::texture_pool::TexturePool;
@@ -80,6 +80,68 @@ impl VideoProcessorPreprocessor {
         // 5. 出力テクスチャを確保して返す
         // MFTから出力が得られなかった場合（NEED_MORE_INPUTなど）、
         // プールにある出力テクスチャ（前回のフレームまたは空）をフォールバックとして返す
+        let pool_output_texture = self
+            .texture_pool
+            .ensure_output_texture(dst_width, dst_height)?;
+
+        if let Some(tex) = output_texture_result {
+            Ok(tex)
+        } else {
+            Ok(pool_output_texture)
+        }
+    }
+
+    /// Process Shared Texture (RGBA) and generate NV12 texture
+    pub fn process_texture(
+        &mut self,
+        input_texture: ID3D11Texture2D,
+        src_width: u32,
+        src_height: u32,
+        dst_width: u32,
+        dst_height: u32,
+        timestamp: i64,
+    ) -> Result<ID3D11Texture2D> {
+        // 1. Reconfigure if needed
+        if self
+            .texture_pool
+            .needs_reconfigure(src_width, src_height, dst_width, dst_height)
+        {
+            self.texture_pool.clear();
+            self.video_processor
+                .configure(src_width, src_height, dst_width, dst_height)
+                .context("Failed to configure video processor in process_texture")?;
+        }
+
+        // 2. Ensure BGRA texture (target for conversion)
+        let bgra_texture = self
+            .texture_pool
+            .ensure_bgra_texture(src_width, src_height)?;
+
+        // 3. Convert RGBA (Shared) -> BGRA
+        {
+            let device = self.texture_pool.device();
+            self.converter.ensure_shader(&device)?;
+
+            // Create SRV for input texture
+            let mut srv: Option<ID3D11ShaderResourceView> = None;
+            unsafe {
+                device.CreateShaderResourceView(&input_texture, None, Some(&mut srv))?;
+            }
+            let srv =
+                srv.ok_or_else(|| anyhow::anyhow!("Failed to create SRV for shared texture"))?;
+
+            // Get UAV for BGRA texture
+            let uav = self.texture_pool.get_bgra_uav(&bgra_texture)?;
+            let context = self.texture_pool.context();
+
+            self.converter
+                .convert(&context, &srv, &uav, src_width, src_height)?;
+        }
+
+        // 4. Process with MFT (BGRA -> NV12 + Resize)
+        let output_texture_result = self.video_processor.process(bgra_texture, timestamp)?;
+
+        // 5. Output
         let pool_output_texture = self
             .texture_pool
             .ensure_output_texture(dst_width, dst_height)?;

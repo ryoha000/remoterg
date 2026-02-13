@@ -254,6 +254,7 @@ mod tests {
                         enqueue_at: Instant::now(),
                         request_keyframe: false,
                         frame_id: frame.id,
+                        texture_handle: frame.texture_handle,
                     };
 
                     job_slot.set(job);

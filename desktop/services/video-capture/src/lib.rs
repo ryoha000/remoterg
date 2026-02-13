@@ -37,13 +37,22 @@ impl CaptureBackend for CaptureService {
     }
 }
 
+use windows::core::Interface;
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT,
+};
+use windows::Win32::Graphics::Dxgi::IDXGIResource;
+
 /// windows-captureのハンドラ実装
 struct CaptureHandler {
     frame_tx: mpsc::Sender<Frame>,
     screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
     last_captured_frame: Arc<Mutex<Option<Frame>>>,
-    config: CaptureConfig,
+    _config: CaptureConfig,
     frame_counter: u64,
+    shared_texture: Option<ID3D11Texture2D>,
+    texture_desc: Option<D3D11_TEXTURE2D_DESC>,
 }
 
 impl GraphicsCaptureApiHandler for CaptureHandler {
@@ -56,8 +65,10 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             frame_tx: ctx.flags.frame_tx.clone(),
             screenshot_tx: ctx.flags.screenshot_tx.clone(),
             last_captured_frame: ctx.flags.last_captured_frame.clone(),
-            config: ctx.flags.config.clone(),
+            _config: ctx.flags.config.clone(),
             frame_counter: 0,
+            shared_texture: None,
+            texture_desc: None,
         })
     }
 
@@ -66,83 +77,122 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         frame: &mut WindowsFrame,
         _capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
-        debug!("on_frame_arrived called");
-
         self.frame_counter += 1;
         let frame_id = self.frame_counter;
 
-        // FrameBufferを取得してRGBAデータを読み取る
-        let mut frame_buffer = frame.buffer()?;
+        let frame_span = span!(Level::DEBUG, "frame_processing", frame_id = frame_id);
+        let _frame_guard = frame_span.enter();
 
-        let row_pitch = frame_buffer.row_pitch() as usize;
-        let width = frame_buffer.width() as usize;
-        let height = frame_buffer.height() as usize;
+        let width = frame.width();
+        let height = frame.height();
+        let desc = frame.desc(); // D3D11_TEXTURE2D_DESC
 
-        // パディングなしのバッファを取得
-        // 4Kモニタなどでストライド（row_pitch）が width * 4 と一致しない場合があるため、
-        // as_nopadding_buffer ではなく手動で行ごとにコピーする
-        let raw_buffer = frame_buffer.as_raw_buffer();
-        let row_size = width * 4;
+        // Check if we need to recreate the shared texture
+        if self.shared_texture.is_none()
+            || self
+                .texture_desc
+                .as_ref()
+                .map(|d| d.Width != width || d.Height != height || d.Format != desc.Format)
+                .unwrap_or(true)
+        {
+            info!(
+                "Creating/Recreating shared texture: {}x{} format:{:?}",
+                width, height, desc.Format
+            );
 
-        let mut buffer = Vec::with_capacity(row_size * height);
+            let device = frame.device();
+            let new_desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: desc.Format,
+                SampleDesc: desc.SampleDesc,
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32, // Important!
+            };
 
-        for y in 0..height {
-            let start = y * row_pitch;
-            let end = start + row_size;
+            let mut texture: Option<ID3D11Texture2D> = None;
+            unsafe {
+                if let Err(e) = device.CreateTexture2D(&new_desc, None, Some(&mut texture)) {
+                    error!("Failed to create shared texture: {:?}", e);
+                    // Fallback or error handling
+                }
+            };
 
-            if end <= raw_buffer.len() {
-                buffer.extend_from_slice(&raw_buffer[start..end]);
+            if let Some(tex) = texture {
+                self.shared_texture = Some(tex);
+                self.texture_desc = Some(new_desc);
             }
         }
 
-        let src_width = width as u32;
-        let src_height = height as u32;
+        let mut texture_handle: Option<u64> = None;
 
-        // リサイズが必要かチェック
-        let (dst_width, dst_height) = match &self.config.size {
-            core_types::CaptureSize::UseSourceSize => (src_width, src_height),
-            core_types::CaptureSize::Custom { width, height } => (*width, *height),
-        };
+        // Copy to shared texture
+        if let Some(shared_tex) = &self.shared_texture {
+            let context = frame.device_context();
+            let src_texture = frame.as_raw_texture();
 
-        // フレーム処理全体を span で計測
-        let frame_span = span!(
-            Level::DEBUG,
-            "frame_processing",
-            width = dst_width,
-            height = dst_height,
-            src_width = src_width,
-            width = dst_width,
-            height = dst_height,
-            src_width = src_width,
-            src_height = src_height,
-            frame_id = frame_id
-        );
-        let _frame_guard = frame_span.enter();
+            unsafe {
+                context.CopyResource(shared_tex, src_texture);
+            }
 
-        // リサイズが必要な場合
-        let final_data = if dst_width != src_width || dst_height != src_height {
-            resize_image_impl(&buffer, src_width, src_height, dst_width, dst_height)?
+            // Get shared handle
+            if let Ok(dxgi_resource) = shared_tex.cast::<IDXGIResource>() {
+                if let Ok(handle) = unsafe { dxgi_resource.GetSharedHandle() } {
+                    texture_handle = Some(handle.0 as u64);
+                }
+            }
+        }
+
+        // Check for screenshot request first to decide if we need CPU buffer
+        let need_cpu_buffer = if let Ok(guard) = self.screenshot_tx.try_lock() {
+            guard.is_some()
         } else {
-            buffer
+            false
         };
 
-        // Arc化してコストなしで共有可能にする
-        let final_data = Arc::new(final_data);
+        // If screenshot is requested, read buffer. Otherwise use empty.
+        // Also capture buffer if we failed to get a texture handle (fallback)
+        let final_data: Arc<Vec<u8>> = if need_cpu_buffer || texture_handle.is_none() {
+            // ... existing CPU buffer logic ...
+            // FrameBufferを取得してRGBAデータを読み取る
+            let mut frame_buffer = frame.buffer()?;
+            let row_pitch = frame_buffer.row_pitch() as usize;
+            let width_usize = frame_buffer.width() as usize;
+            let height_usize = frame_buffer.height() as usize;
 
-        // core_types::Frameに変換
-        // frame.timestamp() は100ナノ秒単位の TimeSpan を返す
-        // TimeSpan を Duration に変換してから、100ナノ秒単位の値を取得
+            let raw_buffer = frame_buffer.as_raw_buffer();
+            let row_size = width_usize * 4;
+
+            let mut buffer = Vec::with_capacity(row_size * height_usize);
+
+            for y in 0..height_usize {
+                let start = y * row_pitch;
+                let end = start + row_size;
+                if end <= raw_buffer.len() {
+                    buffer.extend_from_slice(&raw_buffer[start..end]);
+                }
+            }
+
+            Arc::new(buffer)
+        } else {
+            Arc::new(Vec::new())
+        };
+
         let timespan = frame.timestamp()?;
         let duration: std::time::Duration = timespan.into();
-        // Duration から100ナノ秒単位の値を取得（as_nanos() はナノ秒単位なので、100で割る）
         let windows_timespan = (duration.as_nanos() / 100) as u64;
 
         let core_frame = Frame {
-            width: dst_width,
-            height: dst_height,
+            width,
+            height,
             data: final_data.clone(),
             windows_timespan,
             id: frame_id,
+            texture_handle,
         };
 
         // 最新フレームをキャッシュ（スクリーンショット用）
@@ -151,12 +201,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         }
 
         // スクリーンショット要求があるかチェックして処理
-        // ロックを取得して確認 (try_lockで競合時はスキップ、またはlockで待機しても非同期コンテキストでないので注意)
-        // ここはキャプチャスレッドなので、lockしても一瞬ならOK
         if let Ok(mut guard) = self.screenshot_tx.lock() {
             if let Some(tx) = guard.take() {
                 info!("Handling screenshot request in on_frame_arrived");
-                // スクリーンショット用にデータを送信（Arcなのでコピーコストはほぼゼロ）
                 let _ = tx.send(core_frame.clone());
             }
         }
@@ -165,7 +212,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let send_span = span!(Level::DEBUG, "send_frame", frame_id = frame_id);
         let _send_guard = send_span.enter();
 
-        // tokio::sync::mpscを使って非同期送信（try_sendで詰まってる場合はドロップ）
         match self.frame_tx.try_send(core_frame) {
             Ok(_) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {

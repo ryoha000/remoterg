@@ -40,6 +40,7 @@ mod tests {
             enqueue_at: Instant::now(),
             request_keyframe: false,
             frame_id: 0,
+            texture_handle: None,
         }
     }
 

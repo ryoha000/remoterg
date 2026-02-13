@@ -246,6 +246,7 @@ impl CaptureService {
                 .as_nanos() as u64
                 / 100,
             id: frame_index,
+            texture_handle: None,
         }
     }
 }

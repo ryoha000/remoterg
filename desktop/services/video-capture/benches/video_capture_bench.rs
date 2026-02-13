@@ -109,6 +109,7 @@ fn bench_frame_processing(c: &mut Criterion) {
                         / 100,
                 ),
                 id: 0,
+                texture_handle: None,
             };
             // チャンネル送信（実際には送信しないが、構造体の作成を測定）
             let _ = tx.send(black_box(frame));
@@ -132,6 +133,7 @@ fn bench_frame_processing(c: &mut Criterion) {
                         / 100,
                 ),
                 id: 0,
+                texture_handle: None,
             };
             let _ = tx.send(black_box(frame));
         });
@@ -154,6 +156,7 @@ fn bench_frame_processing(c: &mut Criterion) {
                         / 100,
                 ),
                 id: 0,
+                texture_handle: None,
             };
             let _ = tx.send(black_box(frame));
         });

@@ -220,6 +220,7 @@ pub async fn run_frame_router(
                                 enqueue_at: pipeline_start,
                                 request_keyframe,
                                 frame_id: frame.id,
+                                texture_handle: frame.texture_handle,
                             });
 
                             let job_send_dur = job_send_start.elapsed();

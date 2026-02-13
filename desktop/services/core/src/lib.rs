@@ -61,6 +61,7 @@ pub struct Frame {
     pub data: Arc<Vec<u8>>,
     pub windows_timespan: u64,
     pub id: u64,
+    pub texture_handle: Option<u64>,
 }
 
 /// ビデオコーデックの種類
@@ -92,6 +93,7 @@ pub struct EncodeJob {
     pub enqueue_at: Instant,
     pub request_keyframe: bool,
     pub frame_id: u64,
+    pub texture_handle: Option<u64>,
 }
 
 /// エンコード結果

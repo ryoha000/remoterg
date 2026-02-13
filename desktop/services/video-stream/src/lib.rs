@@ -2,7 +2,8 @@ mod frame_processor;
 mod track_writer;
 
 use anyhow::Result;
-use core_types::{Frame, VideoEncoderFactory, VideoStreamMessage};
+use core_types::{Frame, VideoCodec, VideoEncoderFactory, VideoStreamMessage};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,7 +16,7 @@ use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSa
 /// 責務: ビデオフレーム受信 → エンコード → ビデオトラック書き込み
 pub struct VideoStreamService {
     frame_rx: mpsc::Receiver<Frame>,
-    video_encoder_factory: Arc<dyn VideoEncoderFactory>,
+    encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
     video_stream_msg_rx: mpsc::Receiver<VideoStreamMessage>,
 }
 
@@ -23,13 +24,13 @@ impl VideoStreamService {
     /// 新しいVideoStreamServiceを作成
     pub fn new(
         frame_rx: mpsc::Receiver<Frame>,
-        video_encoder_factory: Arc<dyn VideoEncoderFactory>,
+        encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
         video_stream_msg_rx: mpsc::Receiver<VideoStreamMessage>,
     ) -> Self {
         info!("VideoStreamService::new");
         Self {
             frame_rx,
-            video_encoder_factory,
+            encoder_factories,
             video_stream_msg_rx,
         }
     }
@@ -42,6 +43,7 @@ impl VideoStreamService {
             Arc<TrackLocalStaticSample>,
             Arc<RTCRtpSender>,
             Arc<AtomicBool>, // connection_ready
+            VideoCodec,
         )>,
     ) -> Result<()> {
         info!("VideoStreamService started");
@@ -56,89 +58,31 @@ impl VideoStreamService {
         let mut current_video_track: Option<Arc<TrackLocalStaticSample>> = None;
         let mut current_connection_ready: Option<Arc<AtomicBool>> = None;
 
-        // ビデオフレームをエンコーダーに転送するタスクをスポーン
-        // Note: connection_ready はここでは直接渡さず、
-        // frame_router内では「エンコードすべきか」の判断に使われるかもしれないが、
-        // 現状の実装では frame_router に渡す connection_ready は不変のArcなので、
-        // 動的に変更するためには frame_router も変更する必要がある。
-        // しかし、frame_router はエンコードを行うだけで、送信は track_writer が行う。
-        // connection_ready が false の場合でもエンコードは続けても良いが（キーフレーム生成のため）、
-        // 無駄なCPUリソースを使わないためには止めたほうが良い。
-        //
-        // 今回の要件では「接続がある状態」での再接続なので、
-        // 常に「誰かしら」が見ている可能性が高い。
-        // frame_router には「グローバルな」connection_ready フラグを渡すか、
-        // あるいは frame_router 側で制御するのをやめて、
-        // ここで encode_job_slot に送るかどうかを制御する形にするのが本来は望ましい。
-        //
-        // 既存の frame_processor::run_frame_router を見ると、
-        // connection_ready をチェックしてエンコードジョブを投げるか判断している。
-        // これを動的に更新できるようにするために、
-        // 新しい connection_ready を共有できる仕組みが必要。
-        //
-        // 簡易的な対応として、グローバルな AtomicBool を作成し、
-        // トラック更新時にその値を書き換える... というのは AtomicBool 自体が共有されているので難しい。
-        //
-        // 最も確実なのは、frame_router に渡す connection_ready を
-        // 「現在の接続状態」を示す AtomicBool への参照を持つラッパーにするか、
-        // あるいは frame_router を修正すること。
-        //
-        // ここでは、frame_router に渡す connection_ready は「ダミー（常にTrue）」にして、
-        // 実際の送信制御（track_writer）と、エンコード要否判断（ここで制御）を行う形にしたいが、
-        // frame_router は別タスクで動いており、channel で frame_rx を持っていってしまっている。
-        //
-        // 既存のロジックを生かすため、
-        // 「現在アクティブな connection_ready」を指す AtomicBool を
-        // frame_router と共有するのは、Arcの差し替えができないためスレッド間共有では難しい。
-        //
-        // 解決策:
-        // frame_router に渡す connection_ready は、
-        // 「VideoStreamServiceが管理する、現在有効な接続があるか」を示すフラグにする。
-        // 個別の接続の connection_ready の状態はこのフラグにミラーリングする。
-        //
-        // つまり、
-        // 1. service_connection_ready = Arc::new(AtomicBool::new(false)) を作る
-        // 2. frame_router にはこれだけを渡す
-        // 3. track_rx で新しい接続を受け取ったら、
-        //    その接続の connection_ready を監視するタスクを別途立てて、
-        //    service_connection_ready に反映する... のは複雑。
-        //
-        // そもそも connection_ready は「ICE/DTLS接続完了」を示すもの。
-        // 再接続時は一時的に false になるはず。
-        //
-        // シンプルにするため、frame_router には「常にTrue」に近いものを渡しておき（あるいは既存のものを渡すが無視させる）、
-        // エンコード結果を受け取った後の track_writer の手前で
-        // current_connection_ready をチェックして書き込みをスキップする形が良いか？
-        // -> frame_router で connection_ready が false だとエンコード自体がスキップされる。
-        // エンコードがスキップされるとキーフレームが生成されないので、
-        // 接続直後に映像が出ない可能性がある（IDR待ちになる）。
-        //
-        // frame_router の実装を確認（view_fileしていないが推測）。
-        // 恐らく connection_ready が false なら drop している。
-        //
-        // 方針:
-        // frame_router には「サービスとしてアクティブか」を示す global_connection_ready を渡す。
-        // トラック切り替え時、新しい connection_ready の状態を監視し、
-        // global_connection_ready に反映させるループを作る必要があるが、
-        // AtomicBool の変更検知はポーリングになる。
-        //
-        // 代替案:
-        // frame_router に渡す connection_ready は「常にtrue」にする。
-        // エンコードは常に回す（負荷はかかるが、アイドル時もH.264のIDR生成などは必要かもしれない）。
-        // 送信側（ここ）で current_connection_ready を見て drop する。
-        // これなら frame_router の変更は最小限で済む（あるいは変更不要でダミーを渡す）。
-
         let global_encode_enable = Arc::new(AtomicBool::new(false)); // 初期値はfalse
         let keyframe_requested_clone = keyframe_requested.clone();
 
         // frame_router 用に clone
         let global_encode_enable_for_router = global_encode_enable.clone();
 
+        // frame_router はエンコーダーファクトリが必要だが、コーデックが決まるまで開始できない可能性がある。
+        // また、実行中にコーデックが変更される場合も考慮する必要がある。
+        // そのため、初期ファクトリ（またはデフォルト）で開始し、
+        // factory_update_tx/rx を通じて動的にファクトリを更新する仕組みを採用する。
+        
+        let (factory_update_tx, factory_update_rx) = mpsc::channel(1);
+        
+        // デフォルトファクトリ（H264があればH264、なければ適当に）
+        let initial_factory = self.encoder_factories.get(&VideoCodec::H264)
+            .or_else(|| self.encoder_factories.values().next())
+            .expect("No encoder factories available")
+            .clone();
+
         let frame_router_handle = tokio::spawn(async move {
             frame_processor::run_frame_router(
                 self.frame_rx,
                 encode_result_tx,
-                self.video_encoder_factory.clone(),
+                initial_factory,
+                factory_update_rx,
                 global_encode_enable_for_router, // エンコード可否はここで制御
                 keyframe_requested_clone,
             )
@@ -160,8 +104,20 @@ impl VideoStreamService {
                 // 1. 新しいトラック・接続情報の受信
                 new_track = track_rx.recv() => {
                     match new_track {
-                        Some((track, sender, connection_ready)) => {
-                            info!("Switched to new video track");
+                        Some((track, sender, connection_ready, codec)) => {
+                            info!("Switched to new video track (codec: {:?})", codec);
+
+                            // コーデックに対応するファクトリを取得
+                            if let Some(factory) = self.encoder_factories.get(&codec) {
+                                // ファクトリ更新を通知
+                                if let Err(e) = factory_update_tx.send(factory.clone()).await {
+                                    warn!("Failed to update encoder factory: {}", e);
+                                } else {
+                                    info!("Encoder factory updated for codec {:?}", codec);
+                                }
+                            } else {
+                                warn!("No encoder factory found for codec {:?}, keeping current", codec);
+                            }
 
                             // 古いRTCPタスクをキャンセル
                             if let Some(handle) = rtcp_drain_handle.take() {

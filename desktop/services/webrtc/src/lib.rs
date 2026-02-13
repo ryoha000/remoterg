@@ -2,6 +2,7 @@ mod connection;
 
 use anyhow::Result;
 use core_types::VideoStreamMessage;
+use core_types::VideoCodec;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -26,6 +27,7 @@ pub struct WebRtcService {
             Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
             Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
             Arc<AtomicBool>, // connection_ready
+            VideoCodec,
         )>,
     >,
     video_stream_msg_tx: Option<mpsc::Sender<VideoStreamMessage>>,
@@ -47,6 +49,7 @@ impl WebRtcService {
                 Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
                 Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
                 Arc<AtomicBool>,
+                VideoCodec,
             )>,
         >,
         video_stream_msg_tx: Option<mpsc::Sender<VideoStreamMessage>>,
@@ -211,7 +214,7 @@ impl WebRtcService {
 
                                     // ビデオトラック情報をVideoStreamServiceに送信
                                     if let Some(ref tx) = self.video_track_tx {
-                                        if tx.send((result.video_track, result.video_sender, connection_ready.clone())).await.is_ok() {
+                                        if tx.send((result.video_track, result.video_sender, connection_ready.clone(), result.codec)).await.is_ok() {
                                             info!("Video track sent to VideoStreamService");
                                         } else {
                                             warn!("Failed to send video track: receiver dropped");

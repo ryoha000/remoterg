@@ -161,6 +161,7 @@ async fn main() -> Result<()> {
         Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
         Arc<webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender>,
         Arc<std::sync::atomic::AtomicBool>, // connection_ready
+        VideoCodec,
     )>(10);
 
     // 音声トラック情報を受け渡すためのチャンネル
@@ -184,10 +185,10 @@ async fn main() -> Result<()> {
     let (audio_frame_tx, audio_frame_rx) = mpsc::channel::<AudioFrame>(100);
 
     // デフォルトのビデオエンコーダーを選択
-    let default_video_encoder = encoder_factories
-        .get(&VideoCodec::AV1)
-        .expect("AV1 encoder must be available")
-        .clone();
+    // let default_video_encoder = encoder_factories
+    //     .get(&VideoCodec::AV1)
+    //     .expect("AV1 encoder must be available")
+    //     .clone();
 
     // 音声エンコーダーファクトリを作成
     let audio_encoder_factory = Arc::new(OpusEncoderFactory::new());
@@ -214,7 +215,7 @@ async fn main() -> Result<()> {
     };
     // VideoStreamService を作成
     let video_stream_service =
-        VideoStreamService::new(frame_rx, default_video_encoder, video_stream_msg_rx);
+        VideoStreamService::new(frame_rx, encoder_factories, video_stream_msg_rx);
 
     // WebRTCサービスの起動
     // Outgoing DataChannelメッセージ用チャネル (InputService -> WebRtcService)

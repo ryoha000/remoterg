@@ -87,6 +87,7 @@ pub struct SetOfferResult {
     pub video_sender: Arc<RTCRtpSender>,
     pub audio_track: Arc<TrackLocalStaticSample>,
     pub audio_sender: Arc<RTCRtpSender>,
+    pub codec: VideoCodec,
 }
 
 /// SetOfferメッセージを処理
@@ -596,6 +597,7 @@ pub async fn handle_set_offer(
         video_sender: sender,
         audio_track,
         audio_sender,
+        codec: selected_codec,
     })
 }
 

@@ -101,7 +101,7 @@ pub async fn handle_set_offer(
     webrtc_msg_tx: mpsc::Sender<WebRtcMessage>,
     active_data_channel: Arc<std::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
 ) -> Result<SetOfferResult> {
-    info!("SetOffer received, generating answer");
+    debug!("SetOffer received, generating answer");
 
     // video codec を選択（デフォルトは H264）
     let selected_codec = codec.unwrap_or(VideoCodec::H264);
@@ -158,7 +158,7 @@ pub async fn handle_set_offer(
 
     // OfferをRemoteDescriptionとして設定
     let offer = RTCSessionDescription::offer(sdp).context("Failed to parse offer SDP")?;
-    info!("Offer SDP received:\n{}", offer.sdp);
+    debug!("Offer SDP received:\n{}", offer.sdp);
     pc.set_remote_description(offer)
         .await
         .context("Failed to set remote description")?;
@@ -181,10 +181,10 @@ pub async fn handle_set_offer(
         .await
         .context("Failed to add video track")?;
 
-    info!("Video track added to peer connection");
+    debug!("Video track added to peer connection");
 
     // 音声トラックを追加
-    info!("Adding audio track with Opus codec");
+    debug!("Adding audio track with Opus codec");
     let audio_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_OPUS.to_string(),
@@ -199,7 +199,7 @@ pub async fn handle_set_offer(
         .await
         .context("Failed to add audio track")?;
 
-    info!("Audio track added to peer connection");
+    debug!("Audio track added to peer connection");
 
     // RTCP 受信ループを開始し、PLI/FIR を受けたら VideoStreamService にキーフレーム要求を送信
     let video_stream_msg_tx_rtcp = video_stream_msg_tx.clone();
@@ -243,12 +243,12 @@ pub async fn handle_set_offer(
         Box::pin(async move {
             let label = dc.label();
             let label_str = label.to_string();
-            info!("DataChannel opened: {}", label_str);
+            debug!("DataChannel opened: {}", label_str);
 
             // Active Data Channelとして保存
             if label_str == "input" { // "input" チャンネルのみを対象にする場合
                  *active_dc_for_open.lock().unwrap() = Some(dc.clone());
-                 info!("DataChannel 'input' registered as active output channel");
+                 debug!("DataChannel 'input' registered as active output channel");
             } else {
                 // 必要なら他のチャンネルも
                  *active_dc_for_open.lock().unwrap() = Some(dc.clone());
@@ -340,7 +340,7 @@ pub async fn handle_set_offer(
                 let ping_task_closed_for_close = ping_task_closed_for_close.clone();
                 let active_dc_for_close = active_dc_for_close.clone();
                 Box::pin(async move {
-                    info!("DataChannel closed: {}", label_str);
+                    debug!("DataChannel closed: {}", label_str);
                     ping_task_closed_for_close.store(true, Ordering::Relaxed);
                     // Close 時に active_data_channel をクリア
                     *active_dc_for_close.lock().unwrap() = None;
@@ -354,7 +354,7 @@ pub async fn handle_set_offer(
         .create_answer(None)
         .await
         .context("Failed to create answer")?;
-    info!("Answer SDP generated:\n{}", answer.sdp);
+    debug!("Answer SDP generated:\n{}", answer.sdp);
 
     // ICE candidateのイベントハンドラを LocalDescription 設定前に登録して、
     // 初期ホスト候補を取りこぼさないようにする
@@ -369,7 +369,7 @@ pub async fn handle_set_offer(
                     // 仕様準拠の形式で取得できる
                     match candidate.to_json() {
                         Ok(candidate_init) => {
-                            info!(
+                            debug!(
                                 "ICE candidate: {} (mid: {:?}, mline_index: {:?}, username_fragment: {:?})",
                                 candidate_init.candidate,
                                 candidate_init.sdp_mid,
@@ -398,7 +398,7 @@ pub async fn handle_set_offer(
                 }
                 None => {
                     // ICE gathering完了通知
-                    info!("ICE candidate gathering complete");
+                    debug!("ICE candidate gathering complete");
                     if let Err(e) = signaling_tx
                         .send(SignalingResponse::IceCandidateComplete)
                         .await
@@ -424,7 +424,7 @@ pub async fn handle_set_offer(
     {
         error!("Failed to send answer to signaling service: {}", e);
     } else {
-        info!("Answer sent to signaling service");
+        debug!("Answer sent to signaling service");
     }
 
     // PeerConnection状態の監視
@@ -437,22 +437,22 @@ pub async fn handle_set_offer(
         Box::pin(async move {
             match state {
                 RTCPeerConnectionState::New => {
-                    info!("PeerConnection state: New");
+                    debug!("PeerConnection state: New");
                 }
                 RTCPeerConnectionState::Connecting => {
-                    info!("PeerConnection state: Connecting");
+                    debug!("PeerConnection state: Connecting");
                     let was_ready = connection_ready_pc.load(Ordering::Relaxed);
                     connection_ready_pc.store(false, Ordering::Relaxed);
                     if was_ready {
-                        info!("connection_ready flag set to false (PeerConnection Connecting)");
+                        debug!("connection_ready flag set to false (PeerConnection Connecting)");
                     }
                 }
                 RTCPeerConnectionState::Connected => {
-                    info!("PeerConnection state: Connected - Media stream should be active");
+                    debug!("PeerConnection state: Connected - Media stream should be active");
                     let was_ready = connection_ready_pc.load(Ordering::Relaxed);
                     connection_ready_pc.store(true, Ordering::Relaxed);
                     if !was_ready {
-                        info!("connection_ready flag set to true (PeerConnection Connected)");
+                        debug!("connection_ready flag set to true (PeerConnection Connected)");
                     }
                     // 接続確立時に即座にキーフレーム送出を要求
                     let _ = video_stream_msg_tx_on_connect
@@ -501,24 +501,24 @@ pub async fn handle_set_offer(
         Box::pin(async move {
             match state {
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::New => {
-                    info!("ICE connection state: New");
+                    debug!("ICE connection state: New");
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Checking => {
-                    info!("ICE connection state: Checking");
+                    debug!("ICE connection state: Checking");
                     let was_ready = connection_ready_ice.load(Ordering::Relaxed);
                     connection_ready_ice.store(false, Ordering::Relaxed);
                     if was_ready {
-                        info!("connection_ready flag set to false (ICE Checking)");
+                        debug!("connection_ready flag set to false (ICE Checking)");
                     }
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Connected => {
-                    info!("ICE connection state: Connected - ICE connection established");
+                    debug!("ICE connection state: Connected - ICE connection established");
                     // 猶予期間中にConnectedに戻った場合は、タイマーを無効化
                     grace_period_active.store(false, Ordering::Relaxed);
                     let was_ready = connection_ready_ice.load(Ordering::Relaxed);
                     connection_ready_ice.store(true, Ordering::Relaxed);
                     if !was_ready {
-                        info!("connection_ready flag set to true (ICE Connected)");
+                        debug!("connection_ready flag set to true (ICE Connected)");
                         // ICE接続確立時にもキーフレーム送出を要求
                         let _ = video_stream_msg_tx_ice
                             .send(VideoStreamMessage::RequestKeyframe)
@@ -526,13 +526,13 @@ pub async fn handle_set_offer(
                     }
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Completed => {
-                    info!("ICE connection state: Completed - ICE gathering complete");
+                    debug!("ICE connection state: Completed - ICE gathering complete");
                     // 猶予期間中にCompletedになった場合も、タイマーを無効化
                     grace_period_active.store(false, Ordering::Relaxed);
                     let was_ready = connection_ready_ice.load(Ordering::Relaxed);
                     connection_ready_ice.store(true, Ordering::Relaxed);
                     if !was_ready {
-                        info!("connection_ready flag set to true (ICE Completed)");
+                        debug!("connection_ready flag set to true (ICE Completed)");
                     }
                 }
                 webrtc_rs::ice_transport::ice_connection_state::RTCIceConnectionState::Failed => {
@@ -561,7 +561,7 @@ pub async fn handle_set_offer(
                                 if let Err(e) = webrtc_msg_tx_grace.send(WebRtcMessage::TriggerIceRestart).await {
                                     warn!("Failed to send TriggerIceRestart message: {}", e);
                                 } else {
-                                    info!("TriggerIceRestart message sent to WebRtcService");
+                                    debug!("TriggerIceRestart message sent to WebRtcService");
                                 }
                             }
                         });

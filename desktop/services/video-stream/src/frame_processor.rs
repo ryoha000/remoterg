@@ -29,7 +29,7 @@ impl FrameStats {
             let elapsed_sec = self.last_perf_log.elapsed().as_secs_f32();
             let receive_fps = self.frames_received as f32 / elapsed_sec;
             let queue_fps = self.frames_queued as f32 / elapsed_sec;
-            tracing::info!(
+            tracing::debug!(
                 "Frame processing stats (last {}s): received={} ({:.1} fps), queued={} ({:.1} fps), dropped_not_ready={}, dropped_no_encoder={}",
                 elapsed_sec,
                 self.frames_received,
@@ -102,7 +102,7 @@ pub async fn run_frame_router(
                         // ICE/DTLS 接続完了まで映像送出を保留
                         if !connection_ready.load(Ordering::Relaxed) {
                             stats.frames_dropped_not_ready += 1;
-                            if stats.frames_dropped_not_ready == 1 || stats.frames_dropped_not_ready % 100 == 0 {
+                            if stats.frames_dropped_not_ready == 1 || stats.frames_dropped_not_ready % 500 == 0 {
                                 warn!(
                                     "Connection not ready yet, dropped {} frames (connection_ready: false)",
                                     stats.frames_dropped_not_ready

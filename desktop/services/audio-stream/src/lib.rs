@@ -130,13 +130,13 @@ impl AudioStreamService {
                                         if elapsed.as_secs_f32() >= 5.0 {
                                             if audio_silent_count == audio_frame_count && audio_frame_count > 0
                                             {
-                                                warn!(
+                                                debug!(
                                                     "Audio frames sent: {} (last {}s) - ALL FRAMES ARE SILENT! No audio detected.",
                                                     audio_frame_count,
                                                     elapsed.as_secs()
                                                 );
                                             } else {
-                                                info!(
+                                                debug!(
                                                     "Audio frames sent: {} (last {}s), silent: {} ({:.1}%)",
                                                     audio_frame_count,
                                                     elapsed.as_secs(),

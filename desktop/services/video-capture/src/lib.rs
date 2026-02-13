@@ -390,7 +390,7 @@ impl CaptureService {
         let settings = Settings::new(
             window,
             CursorCaptureSettings::Default,
-            DrawBorderSettings::Default,
+            DrawBorderSettings::WithoutBorder,
             SecondaryWindowSettings::Default,
             MinimumUpdateIntervalSettings::Custom(fps_ms),
             DirtyRegionSettings::Default,

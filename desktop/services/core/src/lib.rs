@@ -42,8 +42,8 @@ pub enum CaptureMessage {
         size: CaptureSize,
         fps: u32,
     },
-    RequestFrame {
-        tx: tokio::sync::oneshot::Sender<Frame>,
+    GetScreenshot {
+        tx: tokio::sync::oneshot::Sender<ScreenshotFrame>,
     },
 }
 
@@ -53,15 +53,23 @@ pub type CaptureFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 pub type CaptureFrameSender = Sender<Frame>;
 pub type CaptureCommandReceiver = Receiver<CaptureMessage>;
 
-/// キャプチャフレーム
+/// キャプチャフレーム (GPU texture handle のみ)
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub data: Arc<Vec<u8>>,
     pub windows_timespan: u64,
     pub id: u64,
     pub texture_handle: Option<u64>,
+}
+
+/// スクリーンショット用のフレームデータ (CPU buffer を含む)
+#[derive(Debug, Clone)]
+pub struct ScreenshotFrame {
+    pub width: u32,
+    pub height: u32,
+    pub data: Arc<Vec<u8>>, // RGBA CPU buffer
+    pub timestamp: u64,
 }
 
 /// ビデオコーデックの種類
@@ -88,7 +96,6 @@ impl std::str::FromStr for VideoCodec {
 pub struct EncodeJob {
     pub width: u32,
     pub height: u32,
-    pub rgba: Arc<Vec<u8>>,
     pub timestamp: u64,
     pub enqueue_at: Instant,
     pub request_keyframe: bool,

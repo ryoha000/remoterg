@@ -8,7 +8,7 @@ use uuid::Uuid;
 use tagger::TaggerService;
 
 use core_types::{
-    CaptureMessage, DataChannelMessage, Frame, OutgoingDataChannelMessage,
+    CaptureMessage, DataChannelMessage, OutgoingDataChannelMessage, ScreenshotFrame,
     ScreenshotMetadataPayload,
 };
 
@@ -156,40 +156,35 @@ impl InputService {
     }
 
     async fn handle_screenshot_request(&self) -> Result<()> {
-        // 1. Request frame from CaptureService
-        let (tx, rx) = oneshot::channel::<Frame>();
+        // 1. Request screenshot from CaptureService
+        let (tx, rx) = oneshot::channel::<ScreenshotFrame>();
         self.capture_cmd_tx
-            .send(CaptureMessage::RequestFrame { tx })
+            .send(CaptureMessage::GetScreenshot { tx })
             .await?;
 
-        // Wait for frame (with timeout)
-        let frame = match tokio::time::timeout(tokio::time::Duration::from_millis(500), rx).await {
-            Ok(Ok(frame)) => frame,
-            Ok(Err(e)) => {
-                error!("Failed to receive frame from CaptureService: {}", e);
-                return Ok(());
-            }
-            Err(_) => {
-                error!("Timeout waiting for frame from CaptureService");
-                return Ok(());
-            }
-        };
+        // Wait for screenshot (with timeout)
+        let screenshot =
+            match tokio::time::timeout(tokio::time::Duration::from_millis(500), rx).await {
+                Ok(Ok(screenshot)) => screenshot,
+                Ok(Err(e)) => {
+                    error!("Failed to receive screenshot from CaptureService: {}", e);
+                    return Ok(());
+                }
+                Err(_) => {
+                    error!("Timeout waiting for screenshot from CaptureService");
+                    return Ok(());
+                }
+            };
 
         // 2. Encode to JPEG for performance
-        // The frame data is BGRA (Windows Capture default)
-        // Convert BGRA to RGBA if needed, or just tell the encoder strictly.
-        // image crate supports Bgra8 so we can use that if available, or just swap.
-        // But let's check `image` crate features. Usually `ColorType::Rgba8` expects R,G,B,A.
-        // Windows Desktop Duplication usually returns BGRA.
-        // `Frame` struct in `core` has raw bytes.
-        // Let's assume we need to swap B and R.
-        let width = frame.width;
-        let height = frame.height;
+        // The screenshot data is RGBA
+        let width = screenshot.width;
+        let height = screenshot.height;
 
         let mut jpeg_data = Vec::new();
         // Use JPEG with quality 80
         let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_data, 80);
-        encoder.write_image(&frame.data, width, height, ColorType::Rgba8.into())?;
+        encoder.write_image(&screenshot.data, width, height, ColorType::Rgba8.into())?;
 
         // 3. Create Metadata
         let id = Uuid::new_v4().to_string();

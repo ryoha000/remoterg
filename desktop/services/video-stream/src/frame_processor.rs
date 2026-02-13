@@ -215,7 +215,6 @@ pub async fn run_frame_router(
                             job_slot.set(EncodeJob {
                                 width: frame.width,
                                 height: frame.height,
-                                rgba: frame.data,
                                 timestamp: frame.windows_timespan,
                                 enqueue_at: pipeline_start,
                                 request_keyframe,

@@ -68,11 +68,11 @@ pub fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
             None, // デフォルトアダプター
             D3D_DRIVER_TYPE_HARDWARE,
             HMODULE::default(), // ソフトウェアデバイスなし
-            windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_FLAG::default(),
-            None, // 機能レベル配列
+            windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_BGRA_SUPPORT, // windows-captureと同じ
+            None,
             D3D11_SDK_VERSION,
             Some(&mut device),
-            None, // 機能レベル
+            None,
             Some(&mut context),
         )
         .context("Failed to create D3D11 device")?;

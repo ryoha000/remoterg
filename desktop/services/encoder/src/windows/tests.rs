@@ -3,7 +3,7 @@ mod tests {
     use crate::windows::av1::factory::MediaFoundationAV1EncoderFactory;
     use crate::windows::h264::MediaFoundationH264EncoderFactory;
     use core_types::{EncodeJob, VideoCodec, VideoEncoderFactory}; // VideoCodec added
-    use std::sync::{Arc, Once};
+    use std::sync::Once;
     use std::time::{Duration, Instant};
     use tokio::time::timeout;
 
@@ -30,18 +30,35 @@ mod tests {
         rgba
     }
 
-    fn create_encode_job(width: u32, height: u32, rgba: Vec<u8>) -> EncodeJob {
-        let arc_rgba = Arc::new(rgba);
-        EncodeJob {
+    fn create_encode_job(
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> (
+        EncodeJob,
+        gpu_texture::D3D11Device,
+        gpu_texture::SharedTexture,
+    ) {
+        // デバイスを作成（テストのライフタイム全体で保持する必要がある）
+        let device = gpu_texture::D3D11Device::new().expect("Failed to create D3D11 device");
+
+        // テクスチャを作成（テストのライフタイム全体で保持する必要がある）
+        let texture = gpu_texture::SharedTexture::from_rgba(&device, &rgba, width, height)
+            .expect("Failed to create shared texture from RGBA data");
+
+        let texture_handle = texture.handle();
+
+        let job = EncodeJob {
             width,
             height,
-            rgba: arc_rgba,
             timestamp: 0,
             enqueue_at: Instant::now(),
             request_keyframe: false,
             frame_id: 0,
-            texture_handle: None,
-        }
+            texture_handle: Some(texture_handle),
+        };
+
+        (job, device, texture)
     }
 
     struct TestCase {
@@ -92,7 +109,8 @@ mod tests {
             let (job_slot, mut receiver) = factory.setup();
 
             let rgba = create_solid_color_rgba(case.width, case.height, 255, 0, 0, 255);
-            let job = create_encode_job(case.width, case.height, rgba);
+            let (job, _device, _texture) = create_encode_job(case.width, case.height, rgba);
+            // _deviceと_textureはこのスコープが終わるまで保持される（重要！）
 
             job_slot.set(job);
 

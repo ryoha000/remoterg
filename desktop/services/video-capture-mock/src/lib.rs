@@ -1,7 +1,7 @@
 use anyhow::Result;
 use core_types::{
     CaptureBackend, CaptureCommandReceiver, CaptureConfig, CaptureFrameSender, CaptureFuture,
-    CaptureMessage, Frame,
+    CaptureMessage, Frame, ScreenshotFrame,
 };
 use std::time::Instant;
 #[cfg(test)]
@@ -124,21 +124,27 @@ impl CaptureService {
                                 regen_start.elapsed().as_millis()
                             );
                         }
-                        Some(CaptureMessage::RequestFrame { tx }) => {
-                            info!("RequestFrame (mock)");
-                             if !precomputed_frames.is_empty() {
-                                let idx = (frame_index as usize) % precomputed_frames.len();
-                                let mut frame = precomputed_frames[idx].clone();
-                                 let now = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap();
-                                frame.windows_timespan = now.as_nanos() as u64 / 100;
-                                let _ = tx.send(frame);
-                            } else {
-                                // No frames available yet
-                                tracing::warn!("RequestFrame (mock): No frames available");
-                            }
+                        Some(CaptureMessage::GetScreenshot { tx }) => {
+                        info!("GetScreenshot (mock)");
+                         if !precomputed_frames.is_empty() {
+                            let idx = (frame_index as usize) % precomputed_frames.len();
+                            let frame = &precomputed_frames[idx];
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap();
+                            // CPU buffer を読み取り (mock では同じデータを再利用)
+                            let screenshot = ScreenshotFrame {
+                                width: frame.width,
+                                height: frame.height,
+                                data: Self::generate_mock_data(frame.width, frame.height, frame_index),
+                                timestamp: now.as_nanos() as u64 / 100,
+                            };
+                            let _ = tx.send(screenshot);
+                        } else {
+                            // No frames available yet
+                            tracing::warn!("GetScreenshot (mock): No frames available");
                         }
+                    }
                         None => {
                             debug!("Command channel closed");
                             break;
@@ -213,11 +219,25 @@ impl CaptureService {
             core_types::CaptureSize::Custom { width, height } => (*width, *height),
         };
 
+        Frame {
+            width,
+            height,
+            windows_timespan: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64
+                / 100,
+            id: frame_index,
+            texture_handle: None,
+        }
+    }
+
+    /// Mock データ生成ヘルパー (スクリーンショット用)
+    fn generate_mock_data(width: u32, height: u32, frame_index: u64) -> std::sync::Arc<Vec<u8>> {
         let size = (width * height * 4) as usize;
         let mut data = vec![0u8; size];
 
         // フレームごとの色相オフセット (360度 / 90フレーム = 4度/フレーム)
-        // 元は 450フレームで360度だったので 0.8度/フレーム
         let frame_hue_offset = (frame_index as f32 / PREGENERATED_FRAMES as f32) * 360.0;
 
         for y in 0..height {
@@ -236,18 +256,7 @@ impl CaptureService {
             }
         }
 
-        Frame {
-            width,
-            height,
-            data: std::sync::Arc::new(data),
-            windows_timespan: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as u64
-                / 100,
-            id: frame_index,
-            texture_handle: None,
-        }
+        std::sync::Arc::new(data)
     }
 }
 
@@ -301,11 +310,8 @@ mod tests {
 
         assert_eq!(frame.width, 640);
         assert_eq!(frame.height, 480);
-        assert_eq!(frame.data.len(), 640 * 480 * 4);
 
-        // フレーム0と中間フレームで異なることを確認
-        let mid_frame = PREGENERATED_FRAMES as u64 / 2;
-        let frame2 = CaptureService::generate_gradient_frame(&config, mid_frame);
-        assert_ne!(frame.data, frame2.data);
+        // Frame は texture_handle のみを持つため、data フィールドをテストしない
+        // スクリーンショットのデータは generate_mock_data で別途生成される
     }
 }

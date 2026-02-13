@@ -1,10 +1,9 @@
-use core_types::Frame;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::sync::{mpsc, Arc};
+use gpu_texture::rgba_to_shared_handle;
 use video_capture::resize_image_impl;
 
 /// ダミーのRGBAデータを生成する
-fn generate_rgba_data(width: u32, height: u32) -> Arc<Vec<u8>> {
+fn generate_rgba_data(width: u32, height: u32) -> Vec<u8> {
     let mut data = Vec::with_capacity((width * height * 4) as usize);
     for y in 0..height {
         for x in 0..width {
@@ -19,7 +18,7 @@ fn generate_rgba_data(width: u32, height: u32) -> Arc<Vec<u8>> {
             data.push(a);
         }
     }
-    Arc::new(data)
+    data
 }
 
 fn bench_resize_image(c: &mut Criterion) {
@@ -88,82 +87,42 @@ fn bench_resize_image(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_frame_processing(c: &mut Criterion) {
-    let mut group = c.benchmark_group("frame_processing");
+fn bench_texture_creation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("texture_creation");
 
-    // 1920x1080のフレーム処理
-    group.bench_function("1920x1080_frame", |b| {
+    // 1920x1080 のテクスチャ作成
+    group.bench_function("1920x1080_texture", |b| {
         let rgba_data = generate_rgba_data(1920, 1080);
-        let (tx, _rx) = mpsc::channel();
         b.iter(|| {
-            // Frame構造体の作成
-            let frame = Frame {
-                width: black_box(1920),
-                height: black_box(1080),
-                data: black_box(rgba_data.clone()),
-                windows_timespan: black_box(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as u64
-                        / 100,
-                ),
-                id: 0,
-                texture_handle: None,
-            };
-            // チャンネル送信（実際には送信しないが、構造体の作成を測定）
-            let _ = tx.send(black_box(frame));
+            // RGBA → Shared Texture Handle
+            let handle =
+                rgba_to_shared_handle(black_box(&rgba_data), black_box(1920), black_box(1080));
+            black_box(handle)
         });
     });
 
-    // 1280x720のフレーム処理
-    group.bench_function("1280x720_frame", |b| {
+    // 1280x720 のテクスチャ作成
+    group.bench_function("1280x720_texture", |b| {
         let rgba_data = generate_rgba_data(1280, 720);
-        let (tx, _rx) = mpsc::channel();
         b.iter(|| {
-            let frame = Frame {
-                width: black_box(1280),
-                height: black_box(720),
-                data: black_box(rgba_data.clone()),
-                windows_timespan: black_box(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as u64
-                        / 100,
-                ),
-                id: 0,
-                texture_handle: None,
-            };
-            let _ = tx.send(black_box(frame));
+            let handle =
+                rgba_to_shared_handle(black_box(&rgba_data), black_box(1280), black_box(720));
+            black_box(handle)
         });
     });
 
-    // 640x360のフレーム処理
-    group.bench_function("640x360_frame", |b| {
+    // 640x360 のテクスチャ作成
+    group.bench_function("640x360_texture", |b| {
         let rgba_data = generate_rgba_data(640, 360);
-        let (tx, _rx) = mpsc::channel();
         b.iter(|| {
-            let frame = Frame {
-                width: black_box(640),
-                height: black_box(360),
-                data: black_box(rgba_data.clone()),
-                windows_timespan: black_box(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos() as u64
-                        / 100,
-                ),
-                id: 0,
-                texture_handle: None,
-            };
-            let _ = tx.send(black_box(frame));
+            let handle =
+                rgba_to_shared_handle(black_box(&rgba_data), black_box(640), black_box(360));
+            black_box(handle)
         });
     });
 
     group.finish();
 }
 
-criterion_group!(benches, bench_resize_image, bench_frame_processing);
+criterion_group!(benches, bench_resize_image, bench_texture_creation);
 criterion_main!(benches);

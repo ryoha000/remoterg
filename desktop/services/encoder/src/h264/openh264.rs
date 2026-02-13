@@ -92,15 +92,49 @@ fn start_encode_worker() -> (
             );
             let _encode_frame_guard = encode_frame_span.enter();
 
+            // texture_handle から RGBA データを読み取る
+            let rgba_data = if let Some(handle_val) = job.texture_handle {
+                // gpu-texture を使用して RGBA データを読み取る
+                let device = match gpu_texture::D3D11Device::new() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        warn!("encoder worker: failed to create D3D11 device: {}", e);
+                        encode_failures += 1;
+                        continue;
+                    }
+                };
+
+                match gpu_texture::SharedTexture::from_handle(&device, handle_val) {
+                    Ok(texture) => match texture.to_rgba(&device) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            warn!("encoder worker: failed to read texture: {}", e);
+                            encode_failures += 1;
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        warn!("encoder worker: failed to open texture: {}", e);
+                        encode_failures += 1;
+                        continue;
+                    }
+                }
+            } else {
+                // texture_handle がない場合はエラー
+                warn!("encoder worker: no texture_handle provided");
+                encode_failures += 1;
+                continue;
+            };
+
             // 前処理: RGBA→YUV変換を span で計測
             let rgba_to_yuv_span = span!(Level::DEBUG, "rgba_to_yuv");
             let _rgba_to_yuv_guard = rgba_to_yuv_span.enter();
-            let rgba_src = &job.rgba;
             let src_width = job.width as usize;
             let dst_width = encode_width as usize;
             let dst_height = encode_height as usize;
 
-            let yuv_data = rgba_to_yuv::rgba_to_yuv420(rgba_src, dst_width, dst_height, src_width);
+            let yuv_data =
+                rgba_to_yuv::rgba_to_yuv420(&rgba_data, dst_width, dst_height, src_width);
             let yuv = YUVBuffer::from_vec(yuv_data, dst_width, dst_height);
             drop(_rgba_to_yuv_guard);
 

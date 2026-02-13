@@ -4,6 +4,7 @@ mod tests {
     use anyhow::{Context, Result};
     use core_types::{CaptureBackend, CaptureMessage, EncodeJob, Frame, VideoEncoderFactory};
     use encoder::windows::h264::MediaFoundationH264EncoderFactory;
+    use gpu_texture::rgba_to_shared_handle;
     use std::path::PathBuf;
     use std::sync::Once;
     use std::time::{Duration, Instant};
@@ -28,6 +29,24 @@ mod tests {
     /// テスト用のデスクトップウィンドウのHWNDを取得
     unsafe fn get_desktop_window() -> HWND {
         GetDesktopWindow()
+    }
+
+    /// テスト用の RGBA グラデーションデータを生成
+    fn generate_test_rgba(width: u32, height: u32) -> Vec<u8> {
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let r = ((x * 255) / width.max(1)) as u8;
+                let g = ((y * 255) / height.max(1)) as u8;
+                let b = ((x + y) % 256) as u8;
+                let a = 255u8;
+                data.push(r);
+                data.push(g);
+                data.push(b);
+                data.push(a);
+            }
+        }
+        data
     }
 
     /// エンコード結果をrawストリームとして保存
@@ -123,19 +142,65 @@ mod tests {
         Ok(())
     }
 
-    /// キャプチャとエンコードをパイプライン化して実行（実運用に近い方式）
-    async fn capture_and_encode_pipeline(
-        encoder_factory: &dyn VideoEncoderFactory,
-        capture_duration: Duration,
-    ) -> Result<(
-        Vec<Vec<u8>>,
-        usize,
-        Duration,
-        u32,
-        u32,
-        f32,
-        tokio::task::JoinHandle<Result<()>>,
-    )> {
+    /// gpu-texture を使用した簡易テスト
+    #[tokio::test]
+    async fn test_gpu_texture_encode() -> Result<()> {
+        init_tracing();
+
+        // テスト用の RGBA データを生成
+        let width = 1920;
+        let height = 1080;
+        let rgba = generate_test_rgba(width, height);
+
+        // RGBA から shared texture handle を作成
+        let texture_handle =
+            rgba_to_shared_handle(&rgba, width, height).context("Failed to create texture")?;
+
+        println!(
+            "gpu-texture test: created texture handle: 0x{:x}",
+            texture_handle
+        );
+
+        // エンコーダーファクトリを作成
+        let encoder_factory = MediaFoundationH264EncoderFactory::new();
+        let (job_slot, mut encode_result_rx) = encoder_factory.setup();
+
+        // EncodeJob を作成（texture_handle を使用）
+        let job = EncodeJob {
+            width,
+            height,
+            timestamp: 0,
+            enqueue_at: Instant::now(),
+            request_keyframe: true,
+            frame_id: 0,
+            texture_handle: Some(texture_handle),
+        };
+
+        // ジョブを送信
+        job_slot.set(job);
+
+        // エンコード結果を受信
+        let result = timeout(Duration::from_secs(5), encode_result_rx.recv())
+            .await
+            .context("Timeout waiting for encode result")?
+            .context("Failed to receive encode result")?;
+
+        println!(
+            "gpu-texture test: encoded sample size: {} bytes",
+            result.sample_data.len()
+        );
+
+        assert!(
+            !result.sample_data.is_empty(),
+            "Encoded data should not be empty"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_capture_encode_integration_h264() -> Result<()> {
+        init_tracing();
         // キャプチャ可能なウィンドウを探す
         use windows_capture::window::Window;
         let windows = Window::enumerate()
@@ -161,12 +226,12 @@ mod tests {
 
         // エンコーダーを初期化
         println!("エンコーダーを初期化中...");
+        let encoder_factory = MediaFoundationH264EncoderFactory::new();
         let (job_slot, encode_result_rx) = encoder_factory.setup();
         println!("エンコードワーカーを起動しました");
 
         // エンコード結果を収集するタスクを起動
         let (encode_samples_tx, mut encode_samples_rx) = tokio_mpsc::unbounded_channel::<Vec<u8>>();
-        let mut encode_result_rx_clone = encode_result_rx;
         let encode_collector_handle = tokio::spawn(async move {
             let mut samples: Vec<Vec<u8>> = Vec::new();
             while let Some(sample) = encode_samples_rx.recv().await {
@@ -176,6 +241,7 @@ mod tests {
         });
 
         // エンコード結果を受信するタスクを起動
+        let mut encode_result_rx_clone = encode_result_rx;
         let encode_samples_tx_clone = encode_samples_tx.clone();
         let result_receiver_handle = tokio::spawn(async move {
             let mut count = 0;
@@ -198,7 +264,9 @@ mod tests {
                     let throughput = count as f64 / elapsed.as_secs_f64();
                     println!(
                         "  受信済みエンコード結果: {}フレーム (経過: {:.1}s, スループット: {:.2} fps)",
-                        count, elapsed.as_secs_f32(), throughput
+                        count,
+                        elapsed.as_secs_f32(),
+                        throughput
                     );
                     last_log = Instant::now();
                 }
@@ -219,6 +287,7 @@ mod tests {
             .await
             .context("キャプチャ開始に失敗")?;
 
+        let capture_duration = Duration::from_secs(4);
         println!(
             "キャプチャを開始しました。{}秒間フレームを収集・エンコードします...",
             capture_duration.as_secs()
@@ -249,7 +318,6 @@ mod tests {
                     let job = EncodeJob {
                         width: frame.width,
                         height: frame.height,
-                        rgba: frame.data,
                         timestamp: frame.windows_timespan,
                         enqueue_at: Instant::now(),
                         request_keyframe: false,
@@ -351,59 +419,6 @@ mod tests {
 
         if samples.is_empty() {
             anyhow::bail!("エンコードされたサンプルが1つもありませんでした");
-        }
-
-        Ok((
-            samples,
-            encoded_count,
-            total_video_duration,
-            width,
-            height,
-            actual_duration_sec,
-            service_handle,
-        ))
-    }
-
-    #[tokio::test]
-    async fn test_capture_encode_integration_h264() -> Result<()> {
-        init_tracing();
-        // エンコーダーファクトリを作成（Media Foundation H.264エンコーダーを使用）
-        let encoder_factory = MediaFoundationH264EncoderFactory::new();
-
-        // パイプライン化: キャプチャしながら逐次エンコード
-        let capture_duration = Duration::from_secs(8);
-        let (
-            samples,
-            encoded_count,
-            total_video_duration,
-            width,
-            height,
-            actual_duration_sec,
-            service_handle,
-        ) = capture_and_encode_pipeline(&encoder_factory, capture_duration).await?;
-
-        // 統計情報を出力
-        println!(
-            "  実際のキャプチャ時間（タイムスタンプ差分）: {:.2}秒",
-            actual_duration_sec
-        );
-        println!(
-            "  プレーヤーが推測する再生時間（30fps想定）: {:.2}秒",
-            encoded_count as f32 / 30.0
-        );
-        println!(
-            "  プレーヤーが推測する再生時間（60fps想定）: {:.2}秒",
-            encoded_count as f32 / 60.0
-        );
-
-        // durationの合計と実際のキャプチャ時間を比較
-        if total_video_duration.as_secs_f32() < actual_duration_sec * 0.8 {
-            println!(
-                "  警告: duration合計 ({:.2}秒) が実際のキャプチャ時間 ({:.2}秒) より大幅に短いです。",
-                total_video_duration.as_secs_f32(),
-                actual_duration_sec
-            );
-            println!("  フレーム間隔の計算に問題がある可能性があります。");
         }
 
         // 実際のフレームレートを計算

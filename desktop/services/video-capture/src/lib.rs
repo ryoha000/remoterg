@@ -1,7 +1,7 @@
 use anyhow::Result;
 use core_types::{
     CaptureBackend, CaptureCommandReceiver, CaptureConfig, CaptureFrameSender, CaptureFuture,
-    CaptureMessage, Frame,
+    CaptureMessage, Frame, ScreenshotFrame,
 };
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
@@ -47,8 +47,8 @@ use windows::Win32::Graphics::Dxgi::IDXGIResource;
 /// windows-captureのハンドラ実装
 struct CaptureHandler {
     frame_tx: mpsc::Sender<Frame>,
-    screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
-    last_captured_frame: Arc<Mutex<Option<Frame>>>,
+    screenshot_tx: Arc<Mutex<Option<oneshot::Sender<ScreenshotFrame>>>>,
+    last_captured_frame: Arc<Mutex<Option<ScreenshotFrame>>>,
     _config: CaptureConfig,
     frame_counter: u64,
     shared_texture: Option<ID3D11Texture2D>,
@@ -147,66 +147,19 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             }
         }
 
-        // Check for screenshot request first to decide if we need CPU buffer
-        let need_cpu_buffer = if let Ok(guard) = self.screenshot_tx.try_lock() {
-            guard.is_some()
-        } else {
-            false
-        };
-
-        // If screenshot is requested, read buffer. Otherwise use empty.
-        // Also capture buffer if we failed to get a texture handle (fallback)
-        let final_data: Arc<Vec<u8>> = if need_cpu_buffer || texture_handle.is_none() {
-            // ... existing CPU buffer logic ...
-            // FrameBufferを取得してRGBAデータを読み取る
-            let mut frame_buffer = frame.buffer()?;
-            let row_pitch = frame_buffer.row_pitch() as usize;
-            let width_usize = frame_buffer.width() as usize;
-            let height_usize = frame_buffer.height() as usize;
-
-            let raw_buffer = frame_buffer.as_raw_buffer();
-            let row_size = width_usize * 4;
-
-            let mut buffer = Vec::with_capacity(row_size * height_usize);
-
-            for y in 0..height_usize {
-                let start = y * row_pitch;
-                let end = start + row_size;
-                if end <= raw_buffer.len() {
-                    buffer.extend_from_slice(&raw_buffer[start..end]);
-                }
-            }
-
-            Arc::new(buffer)
-        } else {
-            Arc::new(Vec::new())
-        };
-
+        // タイムスタンプを計算
         let timespan = frame.timestamp()?;
         let duration: std::time::Duration = timespan.into();
         let windows_timespan = (duration.as_nanos() / 100) as u64;
 
+        // 通常フレーム (CPU buffer なし)
         let core_frame = Frame {
             width,
             height,
-            data: final_data.clone(),
             windows_timespan,
             id: frame_id,
             texture_handle,
         };
-
-        // 最新フレームをキャッシュ（スクリーンショット用）
-        if let Ok(mut guard) = self.last_captured_frame.lock() {
-            *guard = Some(core_frame.clone());
-        }
-
-        // スクリーンショット要求があるかチェックして処理
-        if let Ok(mut guard) = self.screenshot_tx.lock() {
-            if let Some(tx) = guard.take() {
-                info!("Handling screenshot request in on_frame_arrived");
-                let _ = tx.send(core_frame.clone());
-            }
-        }
 
         // フレーム送信を span で計測
         let send_span = span!(Level::DEBUG, "send_frame", frame_id = frame_id);
@@ -225,6 +178,35 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         }
 
         drop(_send_guard);
+
+        // スクリーンショット要求がある場合のみ CPU buffer を読み取り
+        if let Ok(guard) = self.screenshot_tx.try_lock() {
+            if guard.is_some() {
+                // CPU buffer を読み取り
+                let cpu_buffer = self.read_cpu_buffer(frame)?;
+                let screenshot = ScreenshotFrame {
+                    width,
+                    height,
+                    data: Arc::new(cpu_buffer),
+                    timestamp: windows_timespan,
+                };
+
+                // キャッシュ更新
+                if let Ok(mut cache) = self.last_captured_frame.lock() {
+                    *cache = Some(screenshot.clone());
+                }
+
+                // 送信
+                drop(guard);
+                if let Ok(mut guard) = self.screenshot_tx.lock() {
+                    if let Some(tx) = guard.take() {
+                        info!("Handling screenshot request in on_frame_arrived");
+                        let _ = tx.send(screenshot);
+                    }
+                }
+            }
+        }
+
         drop(_frame_guard);
 
         Ok(())
@@ -233,6 +215,30 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     fn on_closed(&mut self) -> Result<(), Self::Error> {
         info!("Capture session closed");
         Ok(())
+    }
+}
+
+impl CaptureHandler {
+    /// CPU buffer を読み取るヘルパーメソッド
+    fn read_cpu_buffer(&self, frame: &mut WindowsFrame) -> Result<Vec<u8>> {
+        let mut frame_buffer = frame.buffer()?;
+        let row_pitch = frame_buffer.row_pitch() as usize;
+        let width_usize = frame_buffer.width() as usize;
+        let height_usize = frame_buffer.height() as usize;
+
+        let raw_buffer = frame_buffer.as_raw_buffer();
+        let row_size = width_usize * 4;
+        let mut buffer = Vec::with_capacity(row_size * height_usize);
+
+        for y in 0..height_usize {
+            let start = y * row_pitch;
+            let end = start + row_size;
+            if end <= raw_buffer.len() {
+                buffer.extend_from_slice(&raw_buffer[start..end]);
+            }
+        }
+
+        Ok(buffer)
     }
 }
 
@@ -276,9 +282,10 @@ impl CaptureService {
         let mut config = CaptureConfig::default();
 
         // スクリーンショット要求を保持する共有ステート
-        let screenshot_req: Arc<Mutex<Option<oneshot::Sender<Frame>>>> = Arc::new(Mutex::new(None));
+        let screenshot_req: Arc<Mutex<Option<oneshot::Sender<ScreenshotFrame>>>> =
+            Arc::new(Mutex::new(None));
         // 最新フレームのキャッシュ（共有）
-        let last_captured_frame: Arc<Mutex<Option<Frame>>> = Arc::new(Mutex::new(None));
+        let last_captured_frame: Arc<Mutex<Option<ScreenshotFrame>>> = Arc::new(Mutex::new(None));
 
         loop {
             tokio::select! {
@@ -349,8 +356,8 @@ impl CaptureService {
                                 }
                             }
                         }
-                        Some(CaptureMessage::RequestFrame { tx }) => {
-                            info!("RequestFrame received");
+                        Some(CaptureMessage::GetScreenshot { tx }) => {
+                            info!("GetScreenshot received");
                             // まずキャッシュをチェック
                             let cached_frame = if let Ok(guard) = last_captured_frame.lock() {
                                 guard.clone()
@@ -358,11 +365,11 @@ impl CaptureService {
                                 None
                             };
 
-                            if let Some(frame) = cached_frame {
-                                info!("Returning cached frame for screenshot");
-                                let _ = tx.send(frame);
+                            if let Some(screenshot) = cached_frame {
+                                info!("Returning cached screenshot");
+                                let _ = tx.send(screenshot);
                             } else {
-                                info!("No cached frame, queuing for next frame");
+                                info!("No cached screenshot, queuing for next frame");
                                 if let Ok(mut guard) = screenshot_req.lock() {
                                     *guard = Some(tx);
                                 } else {
@@ -392,8 +399,8 @@ impl CaptureService {
         hwnd: u64,
         config: &CaptureConfig,
         frame_tx: mpsc::Sender<Frame>,
-        screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
-        last_captured_frame: Arc<Mutex<Option<Frame>>>,
+        screenshot_tx: Arc<Mutex<Option<oneshot::Sender<ScreenshotFrame>>>>,
+        last_captured_frame: Arc<Mutex<Option<ScreenshotFrame>>>,
     ) -> Result<CaptureControl<CaptureHandler, anyhow::Error>> {
         info!("start_capture called for HWND: {hwnd}");
 
@@ -451,6 +458,6 @@ impl CaptureService {
 struct CaptureConfigWithSender {
     config: CaptureConfig,
     frame_tx: mpsc::Sender<Frame>,
-    screenshot_tx: Arc<Mutex<Option<oneshot::Sender<Frame>>>>,
-    last_captured_frame: Arc<Mutex<Option<Frame>>>,
+    screenshot_tx: Arc<Mutex<Option<oneshot::Sender<ScreenshotFrame>>>>,
+    last_captured_frame: Arc<Mutex<Option<ScreenshotFrame>>>,
 }

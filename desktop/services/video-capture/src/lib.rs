@@ -37,12 +37,7 @@ impl CaptureBackend for CaptureService {
     }
 }
 
-use windows::core::Interface;
-use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT,
-};
-use windows::Win32::Graphics::Dxgi::IDXGIResource;
+use gpu_texture::{copy_resource, D3D11Device, SharedTexture, TextureBuilder};
 
 /// windows-captureのハンドラ実装
 struct CaptureHandler {
@@ -51,8 +46,7 @@ struct CaptureHandler {
     last_captured_frame: Arc<Mutex<Option<ScreenshotFrame>>>,
     _config: CaptureConfig,
     frame_counter: u64,
-    shared_texture: Option<ID3D11Texture2D>,
-    texture_desc: Option<D3D11_TEXTURE2D_DESC>,
+    shared_texture: Option<SharedTexture>,
 }
 
 impl GraphicsCaptureApiHandler for CaptureHandler {
@@ -68,7 +62,6 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             _config: ctx.flags.config.clone(),
             frame_counter: 0,
             shared_texture: None,
-            texture_desc: None,
         })
     }
 
@@ -88,63 +81,37 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let desc = frame.desc(); // D3D11_TEXTURE2D_DESC
 
         // Check if we need to recreate the shared texture
-        if self.shared_texture.is_none()
-            || self
-                .texture_desc
-                .as_ref()
-                .map(|d| d.Width != width || d.Height != height || d.Format != desc.Format)
-                .unwrap_or(true)
-        {
+        let needs_recreate = if let Some(st) = &self.shared_texture {
+            st.width() != width || st.height() != height
+        } else {
+            true
+        };
+
+        if needs_recreate {
             info!(
                 "Creating/Recreating shared texture: {}x{} format:{:?}",
                 width, height, desc.Format
             );
 
-            let device = frame.device();
-            let new_desc = D3D11_TEXTURE2D_DESC {
-                Width: width,
-                Height: height,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: desc.Format,
-                SampleDesc: desc.SampleDesc,
-                Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                CPUAccessFlags: 0,
-                MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32, // Important!
-            };
+            let gpu_device =
+                D3D11Device::from_raw(frame.device().clone(), frame.device_context().clone());
+            let texture = TextureBuilder::new(width, height)
+                .format(desc.Format)
+                .bind_shader_resource()
+                .shared()
+                .build(&gpu_device)?;
 
-            let mut texture: Option<ID3D11Texture2D> = None;
-            unsafe {
-                if let Err(e) = device.CreateTexture2D(&new_desc, None, Some(&mut texture)) {
-                    error!("Failed to create shared texture: {:?}", e);
-                    // Fallback or error handling
-                }
-            };
-
-            if let Some(tex) = texture {
-                self.shared_texture = Some(tex);
-                self.texture_desc = Some(new_desc);
-            }
+            self.shared_texture = Some(SharedTexture::new(texture)?);
         }
 
         let mut texture_handle: Option<u64> = None;
 
         // Copy to shared texture
         if let Some(shared_tex) = &self.shared_texture {
-            let context = frame.device_context();
-            let src_texture = frame.as_raw_texture();
-
-            unsafe {
-                context.CopyResource(shared_tex, src_texture);
-            }
-
-            // Get shared handle
-            if let Ok(dxgi_resource) = shared_tex.cast::<IDXGIResource>() {
-                if let Ok(handle) = unsafe { dxgi_resource.GetSharedHandle() } {
-                    texture_handle = Some(handle.0 as u64);
-                }
-            }
+            let gpu_device =
+                D3D11Device::from_raw(frame.device().clone(), frame.device_context().clone());
+            copy_resource(&gpu_device, shared_tex.texture(), frame.as_raw_texture());
+            texture_handle = Some(shared_tex.handle());
         }
 
         // タイムスタンプを計算

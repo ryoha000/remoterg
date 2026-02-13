@@ -109,6 +109,21 @@ impl SharedTexture {
             })
         }
     }
+    /// 既存のID3D11Texture2DからSharedTextureを作成
+    pub fn new(texture: ID3D11Texture2D) -> Result<Self> {
+        unsafe {
+            let handle = Self::get_shared_handle(&texture)?;
+            let mut desc = std::mem::zeroed();
+            texture.GetDesc(&mut desc);
+
+            Ok(Self {
+                texture,
+                handle,
+                width: desc.Width,
+                height: desc.Height,
+            })
+        }
+    }
 
     /// Shared handle を取得
     fn get_shared_handle(texture: &ID3D11Texture2D) -> Result<u64> {
@@ -129,6 +144,21 @@ impl SharedTexture {
     /// Shared handle を取得
     pub fn handle(&self) -> u64 {
         self.handle
+    }
+
+    /// 幅を取得
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// 高さを取得
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Textureへの参照を取得
+    pub fn texture(&self) -> &ID3D11Texture2D {
+        &self.texture
     }
 
     /// Texture から RGBA データを読み取る
@@ -198,5 +228,103 @@ impl SharedTexture {
 
             Ok(rgba_data)
         }
+    }
+}
+
+/// テクスチャ間でリソースをコピー
+pub fn copy_resource(device: &D3D11Device, dst: &ID3D11Texture2D, src: &ID3D11Texture2D) {
+    unsafe {
+        device.context().CopyResource(dst, src);
+    }
+}
+
+/// テクスチャのディスクリプタを取得
+pub fn get_texture_desc(texture: &ID3D11Texture2D) -> D3D11_TEXTURE2D_DESC {
+    unsafe {
+        let mut desc = std::mem::zeroed();
+        texture.GetDesc(&mut desc);
+        desc
+    }
+}
+
+/// テクスチャにデータをアップロード
+pub fn upload_data(
+    device: &D3D11Device,
+    texture: &ID3D11Texture2D,
+    data: &[u8],
+    width: u32,
+    _height: u32,
+) {
+    let row_pitch = width * 4;
+    unsafe {
+        device.context().UpdateSubresource(
+            texture,
+            0,
+            None,
+            data.as_ptr() as *const _,
+            row_pitch,
+            0,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_copy_resource() {
+        let device = D3D11Device::new().expect("Failed to create device");
+
+        // ソーステクスチャを作成してデータをアップロード
+        let width = 64;
+        let height = 64;
+        let rgba_data = vec![255u8; (width * height * 4) as usize];
+
+        let src_texture = SharedTexture::from_rgba(&device, &rgba_data, width, height)
+            .expect("Failed to create source texture");
+
+        // 宛先テクスチャを作成
+        let dst_texture = SharedTexture::from_rgba(
+            &device,
+            &vec![0u8; (width * height * 4) as usize],
+            width,
+            height,
+        )
+        .expect("Failed to create destination texture");
+
+        // コピー
+        copy_resource(&device, dst_texture.texture(), src_texture.texture());
+
+        // データが一致することを確認
+        let copied_data = dst_texture
+            .to_rgba(&device)
+            .expect("Failed to read copied data");
+        assert_eq!(rgba_data.len(), copied_data.len());
+    }
+
+    #[test]
+    fn test_get_texture_desc() {
+        let device = D3D11Device::new().expect("Failed to create device");
+        let texture = SharedTexture::from_rgba(&device, &vec![0u8; 64 * 64 * 4], 64, 64)
+            .expect("Failed to create texture");
+
+        let desc = get_texture_desc(texture.texture());
+        assert_eq!(desc.Width, 64);
+        assert_eq!(desc.Height, 64);
+    }
+
+    #[test]
+    fn test_upload_data() {
+        let device = D3D11Device::new().expect("Failed to create device");
+        let texture = SharedTexture::from_rgba(&device, &vec![0u8; 64 * 64 * 4], 64, 64)
+            .expect("Failed to create texture");
+
+        let new_data = vec![128u8; 64 * 64 * 4];
+        upload_data(&device, texture.texture(), &new_data, 64, 64);
+
+        // データが更新されたことを確認
+        let read_data = texture.to_rgba(&device).expect("Failed to read data");
+        assert_eq!(new_data, read_data);
     }
 }

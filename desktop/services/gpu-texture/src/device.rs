@@ -12,6 +12,11 @@ pub struct D3D11Device {
 }
 
 impl D3D11Device {
+    /// 既存のデバイスとコンテキストから D3D11Device を作成
+    pub fn from_raw(device: ID3D11Device, context: ID3D11DeviceContext) -> Self {
+        Self { device, context }
+    }
+
     /// 新しい D3D11 デバイスを作成
     pub fn new() -> Result<Self> {
         unsafe {
@@ -34,7 +39,7 @@ impl D3D11Device {
             let device = device.context("Device is None")?;
             let context = context.context("Context is None")?;
 
-            Ok(Self { device, context })
+            Ok(Self::from_raw(device, context))
         }
     }
 

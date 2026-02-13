@@ -68,11 +68,13 @@ impl VideoStreamService {
         // また、実行中にコーデックが変更される場合も考慮する必要がある。
         // そのため、初期ファクトリ（またはデフォルト）で開始し、
         // factory_update_tx/rx を通じて動的にファクトリを更新する仕組みを採用する。
-        
+
         let (factory_update_tx, factory_update_rx) = mpsc::channel(1);
-        
+
         // デフォルトファクトリ（H264があればH264、なければ適当に）
-        let initial_factory = self.encoder_factories.get(&VideoCodec::H264)
+        let initial_factory = self
+            .encoder_factories
+            .get(&VideoCodec::H264)
             .or_else(|| self.encoder_factories.values().next())
             .expect("No encoder factories available")
             .clone();

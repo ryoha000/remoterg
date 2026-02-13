@@ -31,3 +31,8 @@ tasks:
     dir: "client/apps/mobile"
     cmds:
       - pnpm run android
+
+  fmt:hostd:
+    dir: "desktop/services"
+    cmds:
+      - cargo fmt

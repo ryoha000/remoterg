@@ -1,8 +1,8 @@
 mod connection;
 
 use anyhow::Result;
-use core_types::VideoStreamMessage;
 use core_types::VideoCodec;
+use core_types::VideoStreamMessage;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;

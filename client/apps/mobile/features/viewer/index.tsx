@@ -1,7 +1,9 @@
 import { useRouter } from "expo-router"
 import { StatusBar } from "expo-status-bar"
 import { useRef, useEffect, useState, useCallback } from "react"
-import { View, StyleSheet } from "react-native"
+import { View, StyleSheet, Platform } from "react-native"
+
+import * as Pip from "@/modules/pip"
 
 import { ScreenshotFlash, ScreenshotFlashHandle } from "./components/ScreenshotFlash"
 import { VideoPlayer } from "./components/VideoPlayer"
@@ -11,6 +13,7 @@ import { useViewerContext } from "./context/ViewerContext"
 export function ViewerScreen() {
   const flashRef = useRef<ScreenshotFlashHandle>(null)
   const router = useRouter()
+  const [isInPip, setIsInPip] = useState(false)
 
   const {
     sessionId,
@@ -26,14 +29,36 @@ export function ViewerScreen() {
     latestScreenshotUri,
   } = useViewerContext()
 
-  // Navigation guard
+  // PiP モード変更のリッスン (Android のみ)
   useEffect(() => {
-    if (!isConnected) {
+    if (Platform.OS !== "android") return
+
+    const sub = Pip.addPipModeListener((event) => {
+      setIsInPip(event.isInPipMode)
+    })
+    return () => sub.remove()
+  }, [])
+
+  // ストリームがアクティブな時に自動 PiP を有効化 (Android のみ)
+  useEffect(() => {
+    if (Platform.OS !== "android") return
+
+    if (isConnected && remoteStream) {
+      Pip.setAutoEnterEnabled(true)
+    }
+    return () => {
+      Pip.setAutoEnterEnabled(false)
+    }
+  }, [isConnected, remoteStream])
+
+  // Navigation guard: PiP モード中はリダイレクトを抑制
+  useEffect(() => {
+    if (!isConnected && !isInPip) {
       router.replace("/")
     }
-  }, [isConnected, router])
+  }, [isConnected, isInPip, router])
 
-  // Update flash layout when stream dimensions change
+  // Flash レイアウト更新
   useEffect(() => {
     if (remoteStream) {
       const track = remoteStream.getVideoTracks()[0]
@@ -46,7 +71,7 @@ export function ViewerScreen() {
     }
   }, [remoteStream])
 
-  // Flash trigger
+  // Flash トリガー
   useEffect(() => {
     if (latestScreenshotUri) {
       flashRef.current?.showResult(latestScreenshotUri)
@@ -61,13 +86,13 @@ export function ViewerScreen() {
   const [showOverlay, setShowOverlay] = useState(true)
   const [lastInteraction, setLastInteraction] = useState(Date.now())
 
-  // Auto-hide overlay
+  // オーバーレイの自動非表示
   useEffect(() => {
     if (!showOverlay || !isConnected) return
 
     const timer = setTimeout(() => {
       setShowOverlay(false)
-    }, 4000) // Hide after 4 seconds
+    }, 4000)
 
     return () => clearTimeout(timer)
   }, [showOverlay, isConnected, lastInteraction])
@@ -82,29 +107,33 @@ export function ViewerScreen() {
   }, [])
 
   if (!isConnected || !remoteStream) {
-    // Should handle by navigation guard, but for safety return null or loading
     return <View style={styles.container} />
   }
 
   return (
     <View style={styles.container}>
-      <StatusBar hidden={isConnected && !showOverlay} />
+      {/* PiP モード中は StatusBar を非表示 */}
+      <StatusBar hidden={(isConnected && !showOverlay) || isInPip} />
       <View style={styles.videoContainer}>
         <VideoPlayer stream={remoteStream} onTap={toggleOverlay} />
-        <ViewerOverlay
-          visible={showOverlay}
-          status={status}
-          onDisconnect={disconnect}
-          sessionId={sessionId}
-          stats={stats}
-          onInteraction={onInteraction}
-          onRequestScreenshot={requestScreenshot}
-          onRequestAnalyze={requestAnalyze}
-          analysisResults={analysisResults}
-          isAnalyzingMap={isAnalyzingMap}
-        />
+        {/* PiP モード中はオーバーレイを非表示 */}
+        {!isInPip && (
+          <ViewerOverlay
+            visible={showOverlay}
+            status={status}
+            onDisconnect={disconnect}
+            sessionId={sessionId}
+            stats={stats}
+            onInteraction={onInteraction}
+            onRequestScreenshot={requestScreenshot}
+            onRequestAnalyze={requestAnalyze}
+            analysisResults={analysisResults}
+            isAnalyzingMap={isAnalyzingMap}
+          />
+        )}
       </View>
-      <ScreenshotFlash ref={flashRef} />
+      {/* PiP モード中はフラッシュも非表示 */}
+      {!isInPip && <ScreenshotFlash ref={flashRef} />}
     </View>
   )
 }

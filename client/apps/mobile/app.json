@@ -28,6 +28,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withAndroidPip",
       [
         "expo-splash-screen",
         {

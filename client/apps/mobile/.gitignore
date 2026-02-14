@@ -41,3 +41,6 @@ app-example
 # generated native folders
 /ios
 /android
+
+# ローカルモジュールの Android ビルド成果物
+modules/*/android/build/

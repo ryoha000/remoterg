@@ -13,22 +13,6 @@ fn create_rgba_image(width: usize, height: usize, r: u8, g: u8, b: u8, a: u8) ->
     image
 }
 
-/// YUV420バッファからY、U、V平面を抽出するヘルパー関数
-fn extract_yuv_planes(
-    yuv_buffer: &[u8],
-    width: usize,
-    height: usize,
-) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    let y_plane_size = width * height;
-    let uv_plane_size = y_plane_size / 4;
-
-    let y = yuv_buffer[0..y_plane_size].to_vec();
-    let u = yuv_buffer[y_plane_size..y_plane_size + uv_plane_size].to_vec();
-    let v = yuv_buffer[y_plane_size + uv_plane_size..y_plane_size + 2 * uv_plane_size].to_vec();
-
-    (y, u, v)
-}
-
 /// NV12形式のUV平面からUとVを分離するヘルパー関数
 /// UV平面はインターリーブ形式: [U0, V0, U1, V1, ...]
 fn extract_uv_from_nv12(uv_plane: &[u8]) -> (Vec<u8>, Vec<u8>) {
@@ -293,10 +277,10 @@ fn test_value_ranges() {
         assert_eq!(result, 0);
     }
 
-    // すべての値が0-255の範囲内にあることを確認
-    assert!(y.iter().all(|&x| x <= 255), "All Y values should be <= 255");
-    assert!(u.iter().all(|&x| x <= 255), "All U values should be <= 255");
-    assert!(v.iter().all(|&x| x <= 255), "All V values should be <= 255");
+    // すべての値が有効な範囲内にあることを確認（u8型なので0-255の範囲は保証されている）
+    assert!(!y.is_empty(), "Y plane should not be empty");
+    assert!(!u.is_empty(), "U plane should not be empty");
+    assert!(!v.is_empty(), "V plane should not be empty");
 }
 
 #[test]

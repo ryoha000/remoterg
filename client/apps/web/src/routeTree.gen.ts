@@ -10,17 +10,11 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ApiSignalRouteImport } from './routes/api/signal'
 import { Route as ViewerSessionIdCodecRouteImport } from './routes/viewer.$sessionId.$codec'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiSignalRoute = ApiSignalRouteImport.update({
-  id: '/api/signal',
-  path: '/api/signal',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ViewerSessionIdCodecRoute = ViewerSessionIdCodecRouteImport.update({
@@ -31,31 +25,27 @@ const ViewerSessionIdCodecRoute = ViewerSessionIdCodecRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/api/signal': typeof ApiSignalRoute
   '/viewer/$sessionId/$codec': typeof ViewerSessionIdCodecRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/api/signal': typeof ApiSignalRoute
   '/viewer/$sessionId/$codec': typeof ViewerSessionIdCodecRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/api/signal': typeof ApiSignalRoute
   '/viewer/$sessionId/$codec': typeof ViewerSessionIdCodecRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/signal' | '/viewer/$sessionId/$codec'
+  fullPaths: '/' | '/viewer/$sessionId/$codec'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/signal' | '/viewer/$sessionId/$codec'
-  id: '__root__' | '/' | '/api/signal' | '/viewer/$sessionId/$codec'
+  to: '/' | '/viewer/$sessionId/$codec'
+  id: '__root__' | '/' | '/viewer/$sessionId/$codec'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  ApiSignalRoute: typeof ApiSignalRoute
   ViewerSessionIdCodecRoute: typeof ViewerSessionIdCodecRoute
 }
 
@@ -66,13 +56,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/signal': {
-      id: '/api/signal'
-      path: '/api/signal'
-      fullPath: '/api/signal'
-      preLoaderRoute: typeof ApiSignalRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/viewer/$sessionId/$codec': {
@@ -87,7 +70,6 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  ApiSignalRoute: ApiSignalRoute,
   ViewerSessionIdCodecRoute: ViewerSessionIdCodecRoute,
 }
 export const routeTree = rootRouteImport

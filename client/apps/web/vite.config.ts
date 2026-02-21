@@ -4,17 +4,12 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
-import { cloudflare } from "@cloudflare/vite-plugin";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 
 const config = defineConfig({
   plugins: [
     devtools(),
-    cloudflare({
-      viteEnvironment: { name: "ssr" },
-      configPath: "./wrangler.jsonc",
-    }),
-    // this is the plugin that enables path aliases
+    // パスエイリアスを有効にするプラグイン
     viteTsConfigPaths({
       projects: ["./tsconfig.json"],
     }),
@@ -38,7 +33,8 @@ const config = defineConfig({
     exclude: ["@remoterg/core", "@remoterg/webrtc", "@remoterg/ui"],
   },
   server: {
-    host: true,
+    host: '0.0.0.0',
+    allowedHosts: true,
   },
 });
 

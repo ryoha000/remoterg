@@ -84,7 +84,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import moe.ryoha.remoterg.ui.viewmodel.ViewerViewModel
 import moe.ryoha.remoterg.webrtc.WebRtcVideoRenderer
-
 /**
  * 映像表示画面
  *
@@ -104,103 +103,39 @@ fun ViewerScreen(
     onNavigateToGallery: () -> Unit,
 ) {
     val context = LocalContext.current
-    val videoTrack by viewModel.webRtcManager.remoteVideoTrack.collectAsState()
-    val isConnected by viewModel.webRtcManager.isConnected.collectAsState()
+    val videoTrack by viewModel.remoteVideoTrack.collectAsState()
+    val isConnected by viewModel.isConnected.collectAsState()
     val rtcStats by viewModel.rtcStats.collectAsState()
     
     val activity = context as? ComponentActivity
-    var isInPipMode by remember { mutableStateOf(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) activity?.isInPictureInPictureMode == true else false) }
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        DisposableEffect(activity) {
-            val listener = Consumer<PictureInPictureModeChangedInfo> { info ->
-                isInPipMode = info.isInPictureInPictureMode
-            }
-            activity?.addOnPictureInPictureModeChangedListener(listener)
-            onDispose {
-                activity?.removeOnPictureInPictureModeChangedListener(listener)
-            }
-        }
+    // PiP 状態管理（リスナー登録・アスペクト比設定・自動PiP を State Holder にカプセル化）
+    val isInPipMode = rememberPipState(
+        activity = activity,
+        frameWidth = rtcStats.frameWidth,
+        frameHeight = rtcStats.frameHeight
+    )
 
-        LaunchedEffect(rtcStats.frameWidth, rtcStats.frameHeight, activity) {
-            val width = rtcStats.frameWidth.takeIf { it > 0 } ?: 16
-            val height = rtcStats.frameHeight.takeIf { it > 0 } ?: 9
-
-            val builder = android.app.PictureInPictureParams.Builder()
-            try {
-                // アスペクト比が極端な場合はクラッシュ防止のためデフォルト値を設定
-                builder.setAspectRatio(android.util.Rational(width, height))
-            } catch (e: Exception) {
-                builder.setAspectRatio(android.util.Rational(16, 9))
-            }
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setAutoEnterEnabled(true)
-            }
-            try {
-                activity?.setPictureInPictureParams(builder.build())
-            } catch (e: Exception) {
-            }
-        }
-
-        DisposableEffect(activity) {
-            onDispose {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    try {
-                        activity?.setPictureInPictureParams(
-                            android.app.PictureInPictureParams.Builder()
-                                .setAutoEnterEnabled(false)
-                                .build()
-                        )
-                    } catch (e: Exception) {}
-                }
-            }
-        }
-    }
-    
     val displayMetrics = context.resources.displayMetrics
     val deviceScreenSize = "${displayMetrics.widthPixels}x${displayMetrics.heightPixels}"
 
-    // オーバーレイ状態
-    var showOverlay by remember { mutableStateOf(true) }
-    var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var showDebug by remember { mutableStateOf(false) }
-    var showConnectionDetails by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var audioVolume by remember { mutableFloatStateOf(1f) }
+    // オーバーレイ状態（State Holder に集約）
+    val overlayState = rememberOverlayState()
 
-    // ピンチズーム / パン 状態
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    val scaleAnimatable = remember { Animatable(1f) }
-    val offsetAnimatable = remember { Animatable(Offset.Zero, Offset.VectorConverter) }
+    // ピンチズーム / パン 状態（State Holder に集約）
+    val zoomPanState = rememberZoomPanState()
     val coroutineScope = rememberCoroutineScope()
-
-    // Animatable の値を scale / offset に反映
-    LaunchedEffect(scaleAnimatable.value) { scale = scaleAnimatable.value }
-    LaunchedEffect(offsetAnimatable.value) { offset = offsetAnimatable.value }
 
     LaunchedEffect(signalingUrl) {
         viewModel.connectToHost(signalingUrl, codec)
     }
 
-    // Removed DisposableEffect that calls disconnect() so navigation to Gallery doesn't disconnect WebRTC
-
     // オーバーレイの自動非表示（4秒）
-    LaunchedEffect(showOverlay, lastInteraction) {
-        if (showOverlay && isConnected) {
+    LaunchedEffect(overlayState.showOverlay, overlayState.lastInteraction) {
+        if (overlayState.showOverlay && isConnected) {
             delay(4000)
-            showOverlay = false
+            overlayState.hideOverlay()
         }
-    }
-
-    val toggleOverlay = {
-        showOverlay = !showOverlay
-        lastInteraction = System.currentTimeMillis()
-    }
-
-    val onInteraction = {
-        lastInteraction = System.currentTimeMillis()
     }
 
     Box(
@@ -210,38 +145,23 @@ fun ViewerScreen(
             // ピンチズーム & パン ジェスチャー
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
-                    val newScale = (scale * zoom).coerceAtLeast(1f)
-                    // ズーム中のみパンを許可（等倍時はパン不可）
-                    val newOffset = if (newScale > 1f) {
-                        offset + pan
-                    } else {
-                        Offset.Zero
-                    }
-                    scale = newScale
-                    offset = newOffset
-                    // Animatable の内部値も同期（次のアニメーション起点を正しく設定）
-                    coroutineScope.launch {
-                        scaleAnimatable.snapTo(newScale)
-                        offsetAnimatable.snapTo(newOffset)
-                    }
+                    zoomPanState.onTransform(pan, zoom, coroutineScope)
                 }
             }
             // シングルタップ & ダブルタップ ジェスチャー
             .pointerInput(Unit) {
                 detectTapGestures(
                     onDoubleTap = {
-                        // ダブルタップ: ズームとパンをリセット（アニメーション付き）
                         coroutineScope.launch {
-                            launch { scaleAnimatable.animateTo(1f) }
-                            launch { offsetAnimatable.animateTo(Offset.Zero) }
+                            zoomPanState.resetZoom()
                         }
                     },
                     onTap = {
                         // シングルタップ: 設定パネルが開いている場合は閉じる、そうでなければオーバーレイ切替
-                        if (showSettings) {
-                            showSettings = false
+                        if (overlayState.showSettings) {
+                            overlayState.showSettings = false
                         } else {
-                            toggleOverlay()
+                            overlayState.toggleOverlay()
                         }
                     }
                 )
@@ -252,16 +172,16 @@ fun ViewerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
+                    scaleX = zoomPanState.scale
+                    scaleY = zoomPanState.scale
+                    translationX = zoomPanState.offset.x
+                    translationY = zoomPanState.offset.y
                 }
         ) {
             if (videoTrack != null) {
                 WebRtcVideoRenderer(
                     videoTrack = videoTrack,
-                    webRtcManager = viewModel.webRtcManager,
+                    eglBaseContext = viewModel.eglBaseContext,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -277,13 +197,13 @@ fun ViewerScreen(
         // === オーバーレイ ===
         if (!isInPipMode) {
             val overlayTopPadding by animateDpAsState(
-                targetValue = if (showOverlay) 72.dp else 16.dp,
+                targetValue = if (overlayState.showOverlay) 72.dp else 16.dp,
                 label = "overlayTopPadding"
             )
 
             // トップバー
             AnimatedVisibility(
-                visible = showOverlay,
+                visible = overlayState.showOverlay,
                 enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
                 modifier = Modifier.align(Alignment.TopCenter)
@@ -295,25 +215,25 @@ fun ViewerScreen(
                         viewModel.disconnect()
                         onNavigateBack()
                     },
-                    showSettings = showSettings,
+                    showSettings = overlayState.showSettings,
                     onToggleSettings = {
-                        showSettings = !showSettings
-                        onInteraction()
+                        overlayState.showSettings = !overlayState.showSettings
+                        overlayState.onInteraction()
                     },
                     onScreenshot = {
                         viewModel.takeScreenshot()
-                        onInteraction()
+                        overlayState.onInteraction()
                     },
                     onNavigateToGallery = {
-                        onNavigateToGallery() // External navigation
+                        onNavigateToGallery()
                     },
-                    onInteraction = onInteraction
+                    onInteraction = { overlayState.onInteraction() }
                 )
             }
 
             // デバッグパネル（左側）
             AnimatedVisibility(
-                visible = showDebug,
+                visible = overlayState.showDebug,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier
@@ -328,7 +248,7 @@ fun ViewerScreen(
 
             // 設定パネル（右側）
             AnimatedVisibility(
-                visible = showSettings,
+                visible = overlayState.showSettings,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier
@@ -336,20 +256,20 @@ fun ViewerScreen(
                     .padding(end = 16.dp, top = overlayTopPadding)
             ) {
                 SettingsPanel(
-                    volume = audioVolume,
+                    volume = overlayState.audioVolume,
                     onVolumeChange = { vol ->
-                        audioVolume = vol
-                        viewModel.webRtcManager.setAudioVolume(vol.toDouble())
+                        overlayState.audioVolume = vol
+                        viewModel.setAudioVolume(vol.toDouble())
                     },
-                    showDebug = showDebug,
+                    showDebug = overlayState.showDebug,
                     onToggleDebug = {
-                        showDebug = it
-                        onInteraction()
+                        overlayState.showDebug = it
+                        overlayState.onInteraction()
                     },
                     onShowConnectionDetails = {
-                        showConnectionDetails = true
-                        onInteraction()
-                        showSettings = false
+                        overlayState.showConnectionDetails = true
+                        overlayState.onInteraction()
+                        overlayState.showSettings = false
                     },
                     onDisconnect = {
                         viewModel.disconnect()
@@ -361,16 +281,16 @@ fun ViewerScreen(
 
         // Screen Flash and Thumbnail animation
         ScreenshotFlash(
-            viewModel = viewModel
+            screenshotTriggerFlow = viewModel.screenshotTriggerFlow,
+            screenshotSavedFlow = viewModel.screenshotSavedFlow
         )
     }
 
     // 接続詳細情報ダイアログ
-    if (showConnectionDetails) {
+    if (overlayState.showConnectionDetails) {
         val connectionState by viewModel.connectionState.collectAsState()
         val selectedCodec by viewModel.selectedCodec.collectAsState()
         
-        // Extract session ID from signalingUrl (assuming format ...?session_id=UUID&...)
         val sessionId = remember(signalingUrl) {
             try {
                 val uri = android.net.Uri.parse(signalingUrl)
@@ -380,8 +300,8 @@ fun ViewerScreen(
             }
         }
         
-        val iceConnectionState by viewModel.webRtcManager.iceConnectionState.collectAsState(initial = "NEW")
-        val signalingState by viewModel.webRtcManager.signalingState.collectAsState(initial = "NEW")
+        val iceConnectionState by viewModel.iceConnectionState.collectAsState()
+        val signalingState by viewModel.signalingState.collectAsState()
         
         ConnectionDetailsDialog(
             rtcStats = rtcStats,
@@ -391,7 +311,7 @@ fun ViewerScreen(
             signalingState = signalingState,
             selectedCodec = selectedCodec,
             sessionId = sessionId,
-            onDismiss = { showConnectionDetails = false }
+            onDismiss = { overlayState.showConnectionDetails = false }
         )
     }
 }

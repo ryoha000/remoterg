@@ -30,12 +30,20 @@ import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+/**
+ * スクリーンショット撮影時のフラッシュエフェクト + サムネイル縮小アニメーション
+ *
+ * ViewModel への直接依存を排除し、必要な Flow のみを受け取る。
+ * これにより Preview / テストが容易になる。
+ */
 @Composable
 fun ScreenshotFlash(
-    viewModel: moe.ryoha.remoterg.ui.viewmodel.ViewerViewModel
+    screenshotTriggerFlow: SharedFlow<Unit>,
+    screenshotSavedFlow: SharedFlow<Uri>
 ) {
     var activeScreenshotUri by remember { mutableStateOf<Uri?>(null) }
     var flashTrigger by remember { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -43,12 +51,12 @@ fun ScreenshotFlash(
 
     LaunchedEffect(Unit) {
         launch {
-            viewModel.screenshotTriggerFlow.collect {
+            screenshotTriggerFlow.collect {
                 flashTrigger++
             }
         }
         launch {
-            viewModel.screenshotSavedFlow.collect { uri ->
+            screenshotSavedFlow.collect { uri ->
                 activeScreenshotUri = uri
             }
         }

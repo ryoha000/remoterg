@@ -40,41 +40,46 @@ import javax.inject.Singleton
  * 3. setupConnection() で recvonly transceiver 追加 → DataChannel 作成 → Offer 生成
  */
 @Singleton
-class WebRtcManager @Inject constructor() {
+class WebRtcManager @Inject constructor() : IWebRtcManager {
 
     private val rootEglBase: EglBase = EglBase.create()
-    val eglBaseContext: EglBase.Context get() = rootEglBase.eglBaseContext
+    override val eglBaseContext: EglBase.Context get() = rootEglBase.eglBaseContext
 
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var dataChannel: DataChannel? = null
 
-    // シグナリングコールバック
-    var onLocalOfferCreated: ((String) -> Unit)? = null
-    var onLocalAnswerCreated: ((String) -> Unit)? = null
-    var onIceCandidateCreated: ((IceCandidate) -> Unit)? = null
+    // シグナリングイベント（コールバック → SharedFlow）
+    private val _localOfferCreated = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    override val localOfferCreated: SharedFlow<String> = _localOfferCreated.asSharedFlow()
+
+    private val _localAnswerCreated = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    override val localAnswerCreated: SharedFlow<String> = _localAnswerCreated.asSharedFlow()
+
+    private val _iceCandidateCreated = MutableSharedFlow<IceCandidate>(extraBufferCapacity = 10)
+    override val iceCandidateCreated: SharedFlow<IceCandidate> = _iceCandidateCreated.asSharedFlow()
 
     private val _remoteVideoTrack = MutableStateFlow<VideoTrack?>(null)
-    val remoteVideoTrack: StateFlow<VideoTrack?> = _remoteVideoTrack.asStateFlow()
+    override val remoteVideoTrack: StateFlow<VideoTrack?> = _remoteVideoTrack.asStateFlow()
 
     private var remoteAudioTrack: AudioTrack? = null
 
     private val _isConnected = MutableStateFlow(false)
-    val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+    override val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     private val _iceConnectionState = MutableStateFlow("NEW")
-    val iceConnectionState: StateFlow<String> = _iceConnectionState.asStateFlow()
+    override val iceConnectionState: StateFlow<String> = _iceConnectionState.asStateFlow()
 
     private val _signalingState = MutableStateFlow("NEW")
-    val signalingState: StateFlow<String> = _signalingState.asStateFlow()
+    override val signalingState: StateFlow<String> = _signalingState.asStateFlow()
 
     private val _dataChannelMessages = MutableSharedFlow<DataChannelMessage>(extraBufferCapacity = 8192)
-    val dataChannelMessages: SharedFlow<DataChannelMessage> = _dataChannelMessages.asSharedFlow()
+    override val dataChannelMessages: SharedFlow<DataChannelMessage> = _dataChannelMessages.asSharedFlow()
 
     private val scope = CoroutineScope(Dispatchers.IO)
 
     private val _rtcStats = MutableStateFlow(WebRtcStats())
-    val rtcStats: StateFlow<WebRtcStats> = _rtcStats.asStateFlow()
+    override val rtcStats: StateFlow<WebRtcStats> = _rtcStats.asStateFlow()
 
     private var statsJob: kotlinx.coroutines.Job? = null
     private var lastBytesReceived = 0L
@@ -164,7 +169,7 @@ class WebRtcManager @Inject constructor() {
      * PeerConnectionFactory を初期化する
      * 他のメソッドを呼ぶ前に必ず一度呼ぶこと
      */
-    fun init(context: Context) {
+    override fun init(context: Context) {
         if (peerConnectionFactory != null) {
             Log.d(TAG, "PeerConnectionFactory は既に初期化されています")
             return
@@ -201,7 +206,7 @@ class WebRtcManager @Inject constructor() {
      * PeerConnection を作成する
      * onRenegotiationNeeded では Offer を自動生成しない（setupConnection で明示的に行う）
      */
-    fun createPeerConnection() {
+    override fun createPeerConnection() {
         Log.d(TAG, "PeerConnection を作成中")
 
         val rtcConfig = PeerConnection.RTCConfiguration(
@@ -231,7 +236,7 @@ class WebRtcManager @Inject constructor() {
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let {
                     Log.d(TAG, "ローカル ICE Candidate 生成: ${it.sdp}")
-                    onIceCandidateCreated?.invoke(it)
+                    _iceCandidateCreated.tryEmit(it)
                 }
             }
 
@@ -287,7 +292,7 @@ class WebRtcManager @Inject constructor() {
      * 2. DataChannel を作成
      * 3. Offer を生成して送信
      */
-    fun setupConnection(codec: String = "h264") {
+    override fun setupConnection(codec: String) {
         Log.d(TAG, "接続セットアップ開始 (codec: $codec)")
         this.preferredCodec = codec
 
@@ -346,7 +351,7 @@ class WebRtcManager @Inject constructor() {
         })
     }
 
-    fun sendDataChannelMessage(message: String) {
+    override fun sendDataChannelMessage(message: String) {
         val buffer = DataChannel.Buffer(java.nio.ByteBuffer.wrap(message.toByteArray()), false)
         dataChannel?.send(buffer)
     }
@@ -365,13 +370,13 @@ class WebRtcManager @Inject constructor() {
                     
                     peerConnection?.setLocalDescription(SimpleSdpObserver(), mungedDesc)
                     Log.d(TAG, "Offer を作成・設定しました (コーデック優先: $preferredCodec)")
-                    onLocalOfferCreated?.invoke(mungedDesc.description)
+                    _localOfferCreated.tryEmit(mungedDesc.description)
                 }
             }
         }, constraints)
     }
 
-    fun handleRemoteDescription(type: String, sdp: String) {
+    override fun handleRemoteDescription(type: String, sdp: String) {
         val sdpType = SessionDescription.Type.fromCanonicalForm(type.lowercase())
         val description = SessionDescription(sdpType, sdp)
         peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {
@@ -391,13 +396,13 @@ class WebRtcManager @Inject constructor() {
                 desc?.let {
                     peerConnection?.setLocalDescription(SimpleSdpObserver(), it)
                     Log.d(TAG, "Answer を作成・設定しました")
-                    onLocalAnswerCreated?.invoke(it.description)
+                    _localAnswerCreated.tryEmit(it.description)
                 }
             }
         }, constraints)
     }
 
-    fun handleIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
+    override fun handleIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
         val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
         peerConnection?.addIceCandidate(iceCandidate)
         Log.d(TAG, "リモート ICE Candidate を追加しました")
@@ -407,13 +412,13 @@ class WebRtcManager @Inject constructor() {
      * リモート音声トラックの音量を設定する
      * @param volume 0.0（ミュート）〜 1.0（最大）の範囲
      */
-    fun setAudioVolume(volume: Double) {
+    override fun setAudioVolume(volume: Double) {
         val clamped = volume.coerceIn(0.0, 1.0)
         remoteAudioTrack?.setVolume(clamped)
         Log.d(TAG, "音声ボリュームを設定: ${(clamped * 100).toInt()}%")
     }
 
-    fun close() {
+    override fun close() {
         dataChannel?.close()
         dataChannel = null
         

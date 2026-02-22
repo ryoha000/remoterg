@@ -30,7 +30,7 @@ import javax.inject.Singleton
  * identify メッセージは不要。接続 URL 自体に認証情報が含まれる。
  */
 @Singleton
-class SignalingClient @Inject constructor() {
+class SignalingClient @Inject constructor() : ISignalingClient {
     private val client = HttpClient(OkHttp) {
         install(WebSockets)
     }
@@ -50,7 +50,7 @@ class SignalingClient @Inject constructor() {
         extraBufferCapacity = 10,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
-    val messages: SharedFlow<IncomingMessage> = _messages.asSharedFlow()
+    override val messages: SharedFlow<IncomingMessage> = _messages.asSharedFlow()
 
     /**
      * シグナリングサーバーに接続する
@@ -60,7 +60,7 @@ class SignalingClient @Inject constructor() {
      * @param onConnected WebSocket 接続完了時に呼ばれるコールバック。
      *   RN の ws.onopen に相当し、ここで PeerConnection のセットアップを行う。
      */
-    fun connect(url: String, onConnected: (() -> Unit)? = null) {
+    override fun connect(url: String, onConnected: (() -> Unit)?) {
         job?.cancel()
         job = scope.launch {
             try {
@@ -91,19 +91,17 @@ class SignalingClient @Inject constructor() {
     }
 
     /** Offer SDP を送信する（指定された codec を付与） */
-    fun sendOffer(sdp: String, codec: String = "h264") {
+    override fun sendOffer(sdp: String, codec: String) {
         val msg = OfferMessage(sdp = sdp, codec = codec)
         scope.launch { sendMessage(json.encodeToString(msg)) }
     }
 
-    /** Answer SDP を送信する */
-    fun sendAnswer(sdp: String) {
+    override fun sendAnswer(sdp: String) {
         val msg = AnswerMessage(sdp = sdp)
         scope.launch { sendMessage(json.encodeToString(msg)) }
     }
 
-    /** ICE Candidate を送信する */
-    fun sendIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
+    override fun sendIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
         val msg = IceCandidateMessage(
             candidate = candidate,
             sdpMid = sdpMid,
@@ -121,7 +119,7 @@ class SignalingClient @Inject constructor() {
         }
     }
 
-    fun disconnect() {
+    override fun disconnect() {
         scope.launch {
             session?.close()
             job?.cancel()

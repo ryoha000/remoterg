@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
@@ -22,7 +23,7 @@ import org.webrtc.VideoTrack
 @Composable
 fun WebRtcVideoRenderer(
     videoTrack: VideoTrack?,
-    webRtcManager: WebRtcManager,
+    eglBaseContext: EglBase.Context,
     modifier: Modifier = Modifier
 ) {
     val rendererRef = remember { mutableListOf<SurfaceViewRenderer?>(null) }
@@ -33,7 +34,7 @@ fun WebRtcVideoRenderer(
     AndroidView(
         factory = { context ->
             SurfaceViewRenderer(context).apply {
-                init(webRtcManager.eglBaseContext, null)
+                init(eglBaseContext, null)
                 setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                 setEnableHardwareScaler(true)
                 rendererRef[0] = this

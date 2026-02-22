@@ -18,7 +18,7 @@ import moe.ryoha.remoterg.data.local.entity.ScreenshotFavoriteEntity
 import moe.ryoha.remoterg.data.local.entity.ScreenshotMapEntity
 import moe.ryoha.remoterg.data.repository.ScreenshotRepository
 import moe.ryoha.remoterg.data.repository.MediaStoreScreenshot
-import moe.ryoha.remoterg.webrtc.WebRtcManager
+import moe.ryoha.remoterg.webrtc.IWebRtcManager
 import moe.ryoha.remoterg.data.model.AnalysisResult
 import org.json.JSONObject
 import kotlinx.serialization.json.Json
@@ -57,7 +57,7 @@ class GalleryViewModel @Inject constructor(
     private val repository: ScreenshotRepository,
     private val screenshotDao: ScreenshotDao,
     private val analysisDao: AnalysisDao,
-    private val webRtcManager: WebRtcManager
+    private val webRtcManager: IWebRtcManager
 ) : ViewModel() {
 
     private val _searchFilters = MutableStateFlow(SearchFilters())
@@ -250,77 +250,14 @@ class GalleryViewModel @Inject constructor(
 
     // -------------------
 
-    private val TARGET_ROW_HEIGHT_VALUE = 180f
-    private val SPACING_VALUE = 4f
-
     val sections = combine(screenshots, _screenWidthDp, favorites) { screenshotList, screenWidthDp, favList ->
-        if (screenWidthDp <= 0f || screenshotList.isEmpty()) return@combine emptyList()
-
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val calculatedSections = mutableListOf<DateSection>()
-            val containerWidthDp = screenWidthDp - (SPACING_VALUE * 2)
             val favIds = favList.map { it.localId }.toSet()
-
-            // Group by start of the day using a single reused Calendar instance
-            val cal = java.util.Calendar.getInstance()
-            val groupedByDate = screenshotList.groupBy { screenshot ->
-                cal.timeInMillis = screenshot.dateAdded * 1000L
-                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-                cal.set(java.util.Calendar.MINUTE, 0)
-                cal.set(java.util.Calendar.SECOND, 0)
-                cal.set(java.util.Calendar.MILLISECOND, 0)
-                cal.timeInMillis
-            }
-
-            val sortedDates = groupedByDate.keys.sortedDescending()
-
-        for (date in sortedDates) {
-            val dateScreenshots = groupedByDate[date] ?: continue
-            val rows = mutableListOf<JustifiedRow>()
-            
-            var currentRow = mutableListOf<Pair<MediaStoreScreenshot, Float>>()
-            var currentRowAspectRatio = 0f
-
-            for (screenshot in dateScreenshots) {
-                val aspectRatio = if (screenshot.width > 0 && screenshot.height > 0) {
-                    screenshot.width.toFloat() / screenshot.height.toFloat()
-                } else {
-                    16f / 9f
-                }
-                
-                currentRow.add(screenshot to aspectRatio)
-                currentRowAspectRatio += aspectRatio
-
-                val estimatedWidth = currentRowAspectRatio * TARGET_ROW_HEIGHT_VALUE
-
-                if (estimatedWidth >= containerWidthDp) {
-                    val spacingTotal = (currentRow.size - 1) * SPACING_VALUE
-                    val rowHeight = (containerWidthDp - spacingTotal) / currentRowAspectRatio
-                    
-                    rows.add(JustifiedRow(
-                        items = currentRow.map { (ss, ar) ->
-                            JustifiedItem(ss, favIds.contains(ss.localId), ar, ar * rowHeight)
-                        },
-                        isLastRow = false,
-                        rowHeightDp = rowHeight
-                    ))
-                    currentRow = mutableListOf()
-                    currentRowAspectRatio = 0f
-                }
-            }
-            if (currentRow.isNotEmpty()) {
-                rows.add(JustifiedRow(
-                    items = currentRow.map { (ss, ar) ->
-                        JustifiedItem(ss, favIds.contains(ss.localId), ar, ar * TARGET_ROW_HEIGHT_VALUE)
-                    },
-                    isLastRow = true,
-                    rowHeightDp = TARGET_ROW_HEIGHT_VALUE
-                ))
-            }
-            
-            calculatedSections.add(DateSection(formatDateHeader(date), rows))
-        }
-        calculatedSections
+            moe.ryoha.remoterg.ui.util.JustifiedLayoutCalculator.calculateSections(
+                screenshots = screenshotList,
+                favoriteIds = favIds,
+                screenWidthDp = screenWidthDp
+            )
         }
     }.stateIn(
         scope = viewModelScope,
@@ -328,31 +265,6 @@ class GalleryViewModel @Inject constructor(
         initialValue = emptyList()
     )
 
-    private fun formatDateHeader(timestampMs: Long): String {
-        val cal = java.util.Calendar.getInstance()
-        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-        cal.set(java.util.Calendar.MINUTE, 0)
-        cal.set(java.util.Calendar.SECOND, 0)
-        cal.set(java.util.Calendar.MILLISECOND, 0)
-        val todayStart = cal.timeInMillis
-        
-        cal.add(java.util.Calendar.DAY_OF_YEAR, -1)
-        val yesterdayStart = cal.timeInMillis
-        
-        val targetCal = java.util.Calendar.getInstance()
-        targetCal.timeInMillis = timestampMs
-        targetCal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-        targetCal.set(java.util.Calendar.MINUTE, 0)
-        targetCal.set(java.util.Calendar.SECOND, 0)
-        targetCal.set(java.util.Calendar.MILLISECOND, 0)
-        val targetStart = targetCal.timeInMillis
-        
-        if (targetStart == todayStart) return "今日"
-        if (targetStart == yesterdayStart) return "昨日"
-        
-        val format = java.text.SimpleDateFormat("yyyy年M月d日", java.util.Locale.US)
-        return format.format(java.util.Date(timestampMs))
-    }
 
     fun updateFilters(newFilters: SearchFilters) {
         _searchFilters.value = newFilters

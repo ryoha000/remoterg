@@ -11,9 +11,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import moe.ryoha.remoterg.domain.ScreenshotProcessor
-import moe.ryoha.remoterg.webrtc.WebRtcManager
+import moe.ryoha.remoterg.webrtc.IWebRtcManager
 import moe.ryoha.remoterg.webrtc.WebRtcStats
-import moe.ryoha.remoterg.webrtc.signaling.SignalingClient
+import moe.ryoha.remoterg.webrtc.signaling.ISignalingClient
+import org.webrtc.EglBase
+import org.webrtc.VideoTrack
 import javax.inject.Inject
 
 /**
@@ -27,8 +29,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class ViewerViewModel @Inject constructor(
-    val webRtcManager: WebRtcManager,
-    private val signalingClient: SignalingClient,
+    private val webRtcManager: IWebRtcManager,
+    private val signalingClient: ISignalingClient,
     private val screenshotProcessor: ScreenshotProcessor,
     private val application: Application
 ) : ViewModel() {
@@ -41,6 +43,14 @@ class ViewerViewModel @Inject constructor(
     val selectedCodec: StateFlow<String> = _selectedCodec.asStateFlow()
     
     val rtcStats: StateFlow<WebRtcStats> = webRtcManager.rtcStats
+
+    // Screen に必要な WebRTC 状態を ViewModel から直接公開
+    // Screen が webRtcManager を直接参照しないようにするため
+    val remoteVideoTrack: StateFlow<VideoTrack?> = webRtcManager.remoteVideoTrack
+    val isConnected: StateFlow<Boolean> = webRtcManager.isConnected
+    val iceConnectionState: StateFlow<String> = webRtcManager.iceConnectionState
+    val signalingState: StateFlow<String> = webRtcManager.signalingState
+    val eglBaseContext: EglBase.Context get() = webRtcManager.eglBaseContext
 
     val screenshotSavedFlow = screenshotProcessor.onScreenshotSaved
 
@@ -81,23 +91,29 @@ class ViewerViewModel @Inject constructor(
     }
 
     /**
-     * WebRTC コールバックをシグナリングクライアントに接続する
+     * WebRTC イベント（SharedFlow）をシグナリングクライアントに接続する
      */
     private fun setupWebRtcCallbacks() {
-        webRtcManager.onLocalOfferCreated = { sdp ->
-            Log.d(TAG, "Offer を送信中 (codec=${selectedCodec.value})")
-            signalingClient.sendOffer(sdp, selectedCodec.value)
+        viewModelScope.launch {
+            webRtcManager.localOfferCreated.collect { sdp ->
+                Log.d(TAG, "Offer を送信中 (codec=${selectedCodec.value})")
+                signalingClient.sendOffer(sdp, selectedCodec.value)
+            }
         }
-        webRtcManager.onLocalAnswerCreated = { sdp ->
-            Log.d(TAG, "Answer を送信中")
-            signalingClient.sendAnswer(sdp)
+        viewModelScope.launch {
+            webRtcManager.localAnswerCreated.collect { sdp ->
+                Log.d(TAG, "Answer を送信中")
+                signalingClient.sendAnswer(sdp)
+            }
         }
-        webRtcManager.onIceCandidateCreated = { candidate ->
-            signalingClient.sendIceCandidate(
-                candidate = candidate.sdp,
-                sdpMid = candidate.sdpMid,
-                sdpMLineIndex = candidate.sdpMLineIndex
-            )
+        viewModelScope.launch {
+            webRtcManager.iceCandidateCreated.collect { candidate ->
+                signalingClient.sendIceCandidate(
+                    candidate = candidate.sdp,
+                    sdpMid = candidate.sdpMid,
+                    sdpMLineIndex = candidate.sdpMLineIndex
+                )
+            }
         }
     }
 
@@ -138,6 +154,13 @@ class ViewerViewModel @Inject constructor(
     fun takeScreenshot() {
         screenshotProcessor.requestScreenshot()
         _screenshotTriggerFlow.tryEmit(Unit)
+    }
+
+    /**
+     * リモート音声トラックの音量を設定する
+     */
+    fun setAudioVolume(volume: Double) {
+        webRtcManager.setAudioVolume(volume)
     }
 
     override fun onCleared() {

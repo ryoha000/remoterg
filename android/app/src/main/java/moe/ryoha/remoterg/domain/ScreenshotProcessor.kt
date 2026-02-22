@@ -14,13 +14,13 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import moe.ryoha.remoterg.data.repository.ScreenshotRepository
 import moe.ryoha.remoterg.webrtc.DataChannelMessage
-import moe.ryoha.remoterg.webrtc.WebRtcManager
+import moe.ryoha.remoterg.webrtc.IWebRtcManager
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ScreenshotProcessor @Inject constructor(
-    private val webRtcManager: WebRtcManager,
+    private val webRtcManager: IWebRtcManager,
     private val repository: ScreenshotRepository
 ) {
     private var observeJob: Job? = null

@@ -41,6 +41,9 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 room {
@@ -81,6 +84,9 @@ dependencies {
     implementation(libs.coil.compose)
 
     testImplementation(libs.junit)
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("app.cash.turbine:turbine:1.2.0")
+    testImplementation("io.mockk:mockk:1.13.13")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

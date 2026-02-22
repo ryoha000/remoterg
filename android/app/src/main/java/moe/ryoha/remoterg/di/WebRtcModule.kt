@@ -5,7 +5,9 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import moe.ryoha.remoterg.webrtc.IWebRtcManager
 import moe.ryoha.remoterg.webrtc.WebRtcManager
+import moe.ryoha.remoterg.webrtc.signaling.ISignalingClient
 import moe.ryoha.remoterg.webrtc.signaling.SignalingClient
 import javax.inject.Singleton
 
@@ -20,13 +22,13 @@ object WebRtcModule {
 
     @Provides
     @Singleton
-    fun provideWebRtcManager(): WebRtcManager {
+    fun provideWebRtcManager(): IWebRtcManager {
         return WebRtcManager()
     }
 
     @Provides
     @Singleton
-    fun provideSignalingClient(): SignalingClient {
+    fun provideSignalingClient(): ISignalingClient {
         return SignalingClient()
     }
 }

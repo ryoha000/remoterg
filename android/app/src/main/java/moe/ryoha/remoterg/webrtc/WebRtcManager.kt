@@ -1,7 +1,9 @@
 package moe.ryoha.remoterg.webrtc
 
 import android.content.Context
+import android.media.AudioManager
 import android.util.Log
+import dagger.hilt.android.qualifiers.ApplicationContext
 import org.webrtc.audio.JavaAudioDeviceModule
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,7 +42,9 @@ import javax.inject.Singleton
  * 3. setupConnection() で recvonly transceiver 追加 → DataChannel 作成 → Offer 生成
  */
 @Singleton
-class WebRtcManager @Inject constructor() : IWebRtcManager {
+class WebRtcManager @Inject constructor(
+    @ApplicationContext private val context: Context
+) : IWebRtcManager {
 
     private val rootEglBase: EglBase = EglBase.create()
     override val eglBaseContext: EglBase.Context get() = rootEglBase.eglBaseContext
@@ -182,7 +186,13 @@ class WebRtcManager @Inject constructor() : IWebRtcManager {
         )
 
         // 音声デバイスモジュールを初期化（受信音声の再生に必要）
+        val audioAttributes = android.media.AudioAttributes.Builder()
+            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+            .build()
+            
         val audioDeviceModule = JavaAudioDeviceModule.builder(context)
+            .setAudioAttributes(audioAttributes)
             .setUseHardwareAcousticEchoCanceler(false)
             .setUseHardwareNoiseSuppressor(false)
             .createAudioDeviceModule()
@@ -228,6 +238,13 @@ class WebRtcManager @Inject constructor() : IWebRtcManager {
                 _iceConnectionState.value = state?.name ?: "UNKNOWN"
                 _isConnected.value = state == PeerConnection.IceConnectionState.CONNECTED ||
                                      state == PeerConnection.IceConnectionState.COMPLETED
+
+                if (_isConnected.value) {
+                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.mode = AudioManager.MODE_NORMAL
+                    audioManager.isSpeakerphoneOn = false
+                    Log.d(TAG, "AudioManagerを通常モードに切り替えました (メディア音量調整用)")
+                }
             }
 
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}

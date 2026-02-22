@@ -1,9 +1,11 @@
 package moe.ryoha.remoterg.di
 
 import android.app.Application
+import android.content.Context
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import moe.ryoha.remoterg.webrtc.IWebRtcManager
 import moe.ryoha.remoterg.webrtc.WebRtcManager
@@ -22,8 +24,8 @@ object WebRtcModule {
 
     @Provides
     @Singleton
-    fun provideWebRtcManager(): IWebRtcManager {
-        return WebRtcManager()
+    fun provideWebRtcManager(@ApplicationContext context: Context): IWebRtcManager {
+        return WebRtcManager(context)
     }
 
     @Provides

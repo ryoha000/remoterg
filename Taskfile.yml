@@ -32,6 +32,11 @@ tasks:
     cmds:
       - pnpm run android
 
+  android:check:
+    dir: "android"
+    cmds:
+      - PowerShell -Command ".\gradlew.bat assembleDebug 2>&1 | Select-Object -Last 10"
+
   fmt:hostd:
     dir: "desktop/services"
     cmds:

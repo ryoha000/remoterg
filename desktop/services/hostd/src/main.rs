@@ -32,7 +32,7 @@ use webrtc::WebRtcService;
 #[command(about = "RemoteRG Host Daemon")]
 struct Args {
     /// Cloudflare WebSocket URL (e.g., wss://example.com/api/signal)
-    #[arg(long, default_value = "ws://localhost:3000/api/signal")]
+    #[arg(long, default_value = "ws://localhost:8787/api/signal")]
     cloudflare_url: String,
 
     /// Session ID

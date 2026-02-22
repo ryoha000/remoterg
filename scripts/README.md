@@ -77,3 +77,32 @@ dtype: float64
   トレースファイルに `frame_id` 引数が含まれていません。`hostd` 側の `ChromeLayerBuilder` 設定で `.include_args(true)` が有効になっているか確認してください。
 - **"File not found"**:
   指定したJSONファイルのパスが正しいか確認してください。
+
+## analyze_android_trace.py
+
+Android端末（特にKotlin製ネイティブアプリ）側で生成された `cpu-perfetto-*.trace` (Perfetto形式) を解析し、スレッドごとのCPU使用時間や長時間ブロックされているメソッド（Jankの原因）を抽出するスクリプトです。
+
+### 必須要件
+
+- Python 3.12+ (uv 経由での実行を推奨)
+- `perfetto`, `pandas` ライブラリが含まれています（`uv` 実行時に自動解決されます）
+
+### 使用方法
+
+1. **トレースファイルの生成**
+   Android Studio の Profiler や Perfetto ツールから取得した `.trace` ファイルを使用します。
+
+2. **解析の実行**
+   生成されたトレースファイルを引数に指定してスクリプトを実行します。
+
+   ```bash
+   cd scripts
+   uv run --with perfetto python analyze_android_trace.py ../android/cpu-perfetto-20260222T113449.trace
+   ```
+
+### 出力内容
+
+以下の情報が表示されます：
+- 関連するプロセスIDと名前
+- 全スレッドのCPU消費時間の合計ランキング
+- スレッドに関わらず5ミリ秒 (`5000000` ns) 以上実行された関数の出現回数と平均・最大実行時間のランキング

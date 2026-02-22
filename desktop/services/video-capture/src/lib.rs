@@ -324,24 +324,11 @@ impl CaptureService {
                             }
                         }
                         Some(CaptureMessage::GetScreenshot { tx }) => {
-                            info!("GetScreenshot received");
-                            // まずキャッシュをチェック
-                            let cached_frame = if let Ok(guard) = last_captured_frame.lock() {
-                                guard.clone()
+                            info!("GetScreenshot received, queuing for next frame");
+                            if let Ok(mut guard) = screenshot_req.lock() {
+                                *guard = Some(tx);
                             } else {
-                                None
-                            };
-
-                            if let Some(screenshot) = cached_frame {
-                                info!("Returning cached screenshot");
-                                let _ = tx.send(screenshot);
-                            } else {
-                                info!("No cached screenshot, queuing for next frame");
-                                if let Ok(mut guard) = screenshot_req.lock() {
-                                    *guard = Some(tx);
-                                } else {
-                                    error!("Failed to lock screenshot_req mutex");
-                                }
+                                error!("Failed to lock screenshot_req mutex");
                             }
                         }
                         None => {

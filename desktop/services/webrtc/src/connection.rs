@@ -28,51 +28,6 @@ use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_rs::track::track_local::TrackLocal;
 
-/// RTCIceCandidateから完全なSDP candidate文字列を生成
-///
-/// 注意: この関数はICE candidate送信では使用しない。
-/// ICE candidate送信にはRTCIceCandidate::to_json()を使用する。
-#[allow(dead_code)]
-pub fn format_ice_candidate(candidate: &RTCIceCandidate) -> String {
-    // webrtc-rsのRTCIceCandidateから完全なSDP candidate文字列を生成
-    // フォーマット: candidate:<foundation> <component> <protocol> <priority> <address> <port> typ <type> [raddr <raddr>] [rport <rport>] [generation <generation>]
-
-    let mut candidate_str = format!(
-        "candidate:{} {} {} {} {} {}",
-        candidate.foundation,
-        candidate.component,
-        candidate.protocol,
-        candidate.priority,
-        candidate.address,
-        candidate.port
-    );
-
-    // candidate typeを追加
-    // RTCIceCandidateにはcandidate_typeフィールドがある可能性があるが、
-    // 実際の構造を確認する必要がある。とりあえず、addressから推測する
-    let candidate_type = if candidate.address.starts_with("127.")
-        || candidate.address.starts_with("192.168.")
-        || candidate.address.starts_with("10.")
-        || candidate.address.starts_with("172.")
-        || candidate.address == "::1"
-        || candidate.address.starts_with("fe80:")
-    {
-        "host"
-    } else if candidate.address.starts_with("169.254.") {
-        "host" // Link-local address
-    } else {
-        "srflx" // Server reflexive (STUN経由)
-    };
-
-    candidate_str.push_str(&format!(" typ {}", candidate_type));
-
-    // related addressがある場合は追加
-    // RTCIceCandidateにはrelated_addressフィールドがある可能性があるが、
-    // 実際の構造を確認する必要がある
-
-    candidate_str
-}
-
 pub fn codec_to_mime_type(codec: VideoCodec) -> String {
     match codec {
         VideoCodec::H264 => MIME_TYPE_H264.to_owned(),

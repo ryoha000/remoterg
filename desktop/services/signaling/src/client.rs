@@ -291,7 +291,7 @@ impl SignalingClient {
                                 warn!("Received OfferForRestart message as host (unexpected)");
                             }
                             Err(e) => {
-                                error!("Failed to parse message: {}", e);
+                                error!("Failed to parse message: {} (raw: {})", e, text);
                             }
                         }
                     }

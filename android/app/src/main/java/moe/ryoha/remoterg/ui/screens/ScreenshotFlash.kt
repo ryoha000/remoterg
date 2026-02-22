@@ -50,7 +50,6 @@ fun ScreenshotFlash(
         launch {
             viewModel.screenshotSavedFlow.collect { uri ->
                 activeScreenshotUri = uri
-                android.widget.Toast.makeText(context, "Screenshot saved!", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }

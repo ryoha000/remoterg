@@ -6,6 +6,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -42,6 +45,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import android.widget.Toast
 import androidx.compose.runtime.Composable
@@ -86,7 +93,7 @@ import moe.ryoha.remoterg.webrtc.WebRtcVideoRenderer
  * - 4秒後に自動的に非表示
  * - トップバー: 戻るボタン、ステータスバッジ、loss バッジ、右側にデバッグ/ギャラリー/カメラ/設定ボタン
  * - デバッグパネル: FPS/Bitrate/Loss/Session 表示
- * - 設定パネル: Audio ボリューム（モック）、Disconnect ボタン
+ * - 設定パネル: Audio ボリューム、Disconnect ボタン
  */
 @Composable
 fun ViewerScreen(
@@ -158,8 +165,9 @@ fun ViewerScreen(
     var showOverlay by remember { mutableStateOf(true) }
     var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var showDebug by remember { mutableStateOf(false) }
-    var showDebugDetail by remember { mutableStateOf(false) }
+    var showConnectionDetails by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var audioVolume by remember { mutableFloatStateOf(1f) }
 
     // ピンチズーム / パン 状態
     var scale by remember { mutableFloatStateOf(1f) }
@@ -268,11 +276,16 @@ fun ViewerScreen(
 
         // === オーバーレイ ===
         if (!isInPipMode) {
+            val overlayTopPadding by animateDpAsState(
+                targetValue = if (showOverlay) 72.dp else 16.dp,
+                label = "overlayTopPadding"
+            )
+
             // トップバー
             AnimatedVisibility(
                 visible = showOverlay,
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
                 modifier = Modifier.align(Alignment.TopCenter)
             ) {
                 TopBar(
@@ -281,15 +294,6 @@ fun ViewerScreen(
                     onBack = {
                         viewModel.disconnect()
                         onNavigateBack()
-                    },
-                    showDebug = showDebug,
-                    onToggleDebug = {
-                        showDebug = !showDebug
-                        onInteraction()
-                    },
-                    onShowDebugDetail = {
-                        showDebugDetail = true
-                        onInteraction()
                     },
                     showSettings = showSettings,
                     onToggleSettings = {
@@ -314,7 +318,7 @@ fun ViewerScreen(
                 exit = fadeOut(),
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 16.dp, top = 90.dp)
+                    .padding(start = 16.dp, top = overlayTopPadding)
             ) {
                 DebugPanel(
                     rtcStats = rtcStats,
@@ -329,9 +333,24 @@ fun ViewerScreen(
                 exit = fadeOut(),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(end = 16.dp, top = 90.dp)
+                    .padding(end = 16.dp, top = overlayTopPadding)
             ) {
                 SettingsPanel(
+                    volume = audioVolume,
+                    onVolumeChange = { vol ->
+                        audioVolume = vol
+                        viewModel.webRtcManager.setAudioVolume(vol.toDouble())
+                    },
+                    showDebug = showDebug,
+                    onToggleDebug = {
+                        showDebug = it
+                        onInteraction()
+                    },
+                    onShowConnectionDetails = {
+                        showConnectionDetails = true
+                        onInteraction()
+                        showSettings = false
+                    },
                     onDisconnect = {
                         viewModel.disconnect()
                         onNavigateBack()
@@ -346,17 +365,33 @@ fun ViewerScreen(
         )
     }
 
-    // デバッグ詳細ダイアログ
-    if (showDebugDetail) {
+    // 接続詳細情報ダイアログ
+    if (showConnectionDetails) {
         val connectionState by viewModel.connectionState.collectAsState()
         val selectedCodec by viewModel.selectedCodec.collectAsState()
         
-        DebugDetailDialog(
+        // Extract session ID from signalingUrl (assuming format ...?session_id=UUID&...)
+        val sessionId = remember(signalingUrl) {
+            try {
+                val uri = android.net.Uri.parse(signalingUrl)
+                uri.getQueryParameter("session_id") ?: "Unknown"
+            } catch (e: Exception) {
+                "Unknown"
+            }
+        }
+        
+        val iceConnectionState by viewModel.webRtcManager.iceConnectionState.collectAsState(initial = "NEW")
+        val signalingState by viewModel.webRtcManager.signalingState.collectAsState(initial = "NEW")
+        
+        ConnectionDetailsDialog(
             rtcStats = rtcStats,
             deviceScreenSize = deviceScreenSize,
             connectionState = connectionState,
+            iceConnectionState = iceConnectionState,
+            signalingState = signalingState,
             selectedCodec = selectedCodec,
-            onDismiss = { showDebugDetail = false }
+            sessionId = sessionId,
+            onDismiss = { showConnectionDetails = false }
         )
     }
 }
@@ -369,9 +404,6 @@ private fun TopBar(
     isConnected: Boolean,
     rtcStats: WebRtcStats,
     onBack: () -> Unit,
-    showDebug: Boolean,
-    onToggleDebug: () -> Unit,
-    onShowDebugDetail: () -> Unit,
     showSettings: Boolean,
     onToggleSettings: () -> Unit,
     onScreenshot: () -> Unit,
@@ -382,7 +414,6 @@ private fun TopBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color.Black.copy(alpha = 0.4f))
-            .windowInsetsPadding(WindowInsets.statusBars)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Row(
@@ -440,38 +471,6 @@ private fun TopBar(
                         fontWeight = FontWeight.Medium
                     )
                 }
-
-                // Loss バッジ（接続済みの場合のみ表示）
-                if (isConnected) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .background(
-                                Color.Black.copy(alpha = 0.4f),
-                                RoundedCornerShape(50)
-                            )
-                            .border(
-                                1.dp,
-                                Color.White.copy(alpha = 0.1f),
-                                RoundedCornerShape(50)
-                            )
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CellTower,
-                            contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.8f),
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "${rtcStats.loss}% loss",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
             }
 
             // 右側: アクションボタン群
@@ -479,14 +478,6 @@ private fun TopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // デバッグボタン
-                OverlayIconButton(
-                    icon = Icons.Default.BugReport,
-                    contentDescription = "デバッグ",
-                    isActive = showDebug,
-                    onClick = onToggleDebug,
-                    onLongClick = onShowDebugDetail
-                )
                 // ギャラリーボタン
                 OverlayIconButton(
                     icon = Icons.Default.Image,
@@ -556,6 +547,7 @@ private fun DebugPanel(
 ) {
     Column(
         modifier = Modifier
+            .width(200.dp) // 幅を制限して拡がりすぎないようにする
             .background(
                 Color.Black.copy(alpha = 0.6f),
                 RoundedCornerShape(8.dp)
@@ -572,33 +564,45 @@ private fun DebugPanel(
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace
         )
-        Text(text = "FPS: ${rtcStats.fps}", style = monoStyle)
-        Text(text = "Bitrate: ${rtcStats.bitrate} kbps", style = monoStyle)
-        Text(text = "Loss: ${rtcStats.loss}%", style = monoStyle)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(text = "FPS", style = monoStyle, modifier = Modifier.width(72.dp))
+            Text(text = "${rtcStats.fps}", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Bitrate", style = monoStyle, modifier = Modifier.width(72.dp))
+            Text(text = "${rtcStats.bitrate} kbps", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Loss", style = monoStyle, modifier = Modifier.width(72.dp))
+            Text(text = "${rtcStats.loss}%", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
     }
 }
 
 /**
- * デバッグ詳細ダイアログ: ほぼ変わらない状態を表示
+ * 通信詳細ダイアログ: 静的な接続情報等の詳細を表示
  */
 @Composable
-private fun DebugDetailDialog(
+private fun ConnectionDetailsDialog(
     rtcStats: WebRtcStats,
     deviceScreenSize: String,
     connectionState: String,
+    iceConnectionState: String,
+    signalingState: String,
     selectedCodec: String,
+    sessionId: String,
     onDismiss: () -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
-                .width(280.dp)
+                .width(320.dp) // 情報が増えるため少し幅を広げる
                 .background(Color(0xFF18181B), RoundedCornerShape(12.dp))
                 .border(1.dp, Color(0xFF27272A), RoundedCornerShape(12.dp))
                 .padding(16.dp)
         ) {
             Text(
-                text = "Debug Info",
+                text = "Connection Details",
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp,
@@ -616,11 +620,13 @@ private fun DebugDetailDialog(
             )
 
             val items = listOf(
-                "Status" to connectionState,
+                "App State" to connectionState,
+                "WebRTC" to signalingState,
+                "ICE" to iceConnectionState,
                 "Codec" to selectedCodec,
                 "Device" to deviceScreenSize,
                 "Stream" to "${rtcStats.frameWidth}x${rtcStats.frameHeight}",
-                "Session" to "--------"
+                "Session" to sessionId
             )
 
             items.forEach { (label, value) ->
@@ -629,7 +635,14 @@ private fun DebugDetailDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(text = label, style = labelStyle)
-                    Text(text = value, style = valueStyle)
+                    Text(
+                        text = value,
+                        style = valueStyle,
+                        // Session ID などが長すぎる場合は省略
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 16.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End
+                    )
                 }
             }
 
@@ -647,10 +660,15 @@ private fun DebugDetailDialog(
 }
 
 /**
- * 設定パネル: Audio ボリュームスライダー（モック）、Disconnect ボタン
+ * 設定パネル: Audio ボリュームスライダー、Disconnect ボタン
  */
 @Composable
 private fun SettingsPanel(
+    volume: Float,
+    onVolumeChange: (Float) -> Unit,
+    showDebug: Boolean,
+    onToggleDebug: (Boolean) -> Unit,
+    onShowConnectionDetails: () -> Unit,
     onDisconnect: () -> Unit
 ) {
     Column(
@@ -706,23 +724,66 @@ private fun SettingsPanel(
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
-            // モックスライダーバー
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(Color(0xFF3F3F46)) // zinc-700
+            // 音量スライダー
+            Slider(
+                value = volume,
+                onValueChange = onVolumeChange,
+                valueRange = 0f..1f,
+                modifier = Modifier.weight(1f),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color(0xFF3B82F6), // blue-500
+                    inactiveTrackColor = Color(0xFF3F3F46) // zinc-700
+                )
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "50%",
+                text = "${(volume * 100).toInt()}%",
                 color = Color(0xFF71717A),
                 fontSize = 12.sp
             )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        // 詳細情報・デバッグ設定
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Stats Overlay",
+                color = Color(0xFFA1A1AA), // zinc-400
+                fontSize = 12.sp
+            )
+            Switch(
+                checked = showDebug,
+                onCheckedChange = onToggleDebug,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Color(0xFF3B82F6), // blue-500
+                    uncheckedThumbColor = Color(0xFFA1A1AA), // zinc-400
+                    uncheckedTrackColor = Color(0xFF3F3F46), // zinc-700
+                    uncheckedBorderColor = Color.Transparent
+                )
+            )
+        }
+
+        Button(
+            onClick = onShowConnectionDetails,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF3F3F46) // zinc-700
+            )
+        ) {
+            Text(
+                text = "詳細情報を確認する",
+                color = Color.White,
+                fontSize = 12.sp
+            )
+        }
 
         // Disconnect ボタン
         Button(

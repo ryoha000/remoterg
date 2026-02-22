@@ -84,14 +84,14 @@ fun GalleryDetailScreen(
 
     if (screenshots.isEmpty()) return
 
-    val orderedScreenshots = remember(screenshots) { screenshots.reversed() }
-    val initialIndex = remember(orderedScreenshots, initialLocalId) {
-        orderedScreenshots.indexOfFirst { it.localId == initialLocalId }.takeIf { it >= 0 } ?: 0
+    // 一覧画面と同じ並び順を使用（降順）
+    val initialIndex = remember(screenshots, initialLocalId) {
+        screenshots.indexOfFirst { it.localId == initialLocalId }.takeIf { it >= 0 } ?: 0
     }
 
-    val pagerState = rememberPagerState(initialPage = initialIndex) { orderedScreenshots.size }
+    val pagerState = rememberPagerState(initialPage = initialIndex) { screenshots.size }
     
-    val currentScreenshot = orderedScreenshots.getOrNull(pagerState.currentPage)
+    val currentScreenshot = screenshots.getOrNull(pagerState.currentPage)
     
     LaunchedEffect(currentScreenshot) {
         currentScreenshot?.let { ss ->
@@ -191,7 +191,7 @@ fun GalleryDetailScreen(
                     )
                 }
         ) { page ->
-            val screenshot = orderedScreenshots[page]
+            val screenshot = screenshots[page]
 
             with(sharedTransitionScope) {
                 AsyncImage(

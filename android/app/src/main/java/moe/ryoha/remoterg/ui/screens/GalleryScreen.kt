@@ -59,6 +59,7 @@ fun GalleryScreen(
     val screenshots by viewModel.screenshots.collectAsState()
     val searchFilters by viewModel.searchFilters.collectAsState()
     val recentTitles by viewModel.recentTitles.collectAsState()
+    val isLoaded by viewModel.isScreenshotsLoaded.collectAsState()
 
     val screenWidthDp = LocalConfiguration.current.screenWidthDp.toFloat()
     val density = LocalDensity.current
@@ -180,7 +181,15 @@ fun GalleryScreen(
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         }
 
-        if (screenshots.isEmpty()) {
+        if (!isLoaded && screenshots.isEmpty()) {
+            // 読み込み中：スピナーを表示
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (screenshots.isEmpty()) {
+            // 読み込み完了後に空：画像なしメッセージを表示
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(

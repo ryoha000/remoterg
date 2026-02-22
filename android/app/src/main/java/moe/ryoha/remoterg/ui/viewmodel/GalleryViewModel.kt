@@ -63,6 +63,10 @@ class GalleryViewModel @Inject constructor(
     private val _searchFilters = MutableStateFlow(SearchFilters())
     val searchFilters: StateFlow<SearchFilters> = _searchFilters.asStateFlow()
 
+    // スクリーンショットの読み込み完了フラグ（初期値 false → 最初のデータ emit 後 true）
+    private val _isScreenshotsLoaded = MutableStateFlow(false)
+    val isScreenshotsLoaded: StateFlow<Boolean> = _isScreenshotsLoaded.asStateFlow()
+
     val favorites = screenshotDao.getAllFavorites()
         .stateIn(
             scope = viewModelScope,
@@ -75,6 +79,10 @@ class GalleryViewModel @Inject constructor(
         favorites,
         _searchFilters
     ) { allScreenshots, favs, filters ->
+        // 最初のデータが到着したら読み込み完了とする
+        if (!_isScreenshotsLoaded.value) {
+            _isScreenshotsLoaded.value = true
+        }
         val favIds = favs.map { it.localId }.toSet()
         allScreenshots.filter { item ->
             // Date filters

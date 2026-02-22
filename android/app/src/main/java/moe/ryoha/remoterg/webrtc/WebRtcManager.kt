@@ -2,6 +2,7 @@ package moe.ryoha.remoterg.webrtc
 
 import android.content.Context
 import android.util.Log
+import org.webrtc.audio.JavaAudioDeviceModule
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -25,6 +26,7 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
+import org.webrtc.AudioTrack
 import org.webrtc.VideoTrack
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -55,8 +57,16 @@ class WebRtcManager @Inject constructor() {
     private val _remoteVideoTrack = MutableStateFlow<VideoTrack?>(null)
     val remoteVideoTrack: StateFlow<VideoTrack?> = _remoteVideoTrack.asStateFlow()
 
+    private var remoteAudioTrack: AudioTrack? = null
+
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+    private val _iceConnectionState = MutableStateFlow("NEW")
+    val iceConnectionState: StateFlow<String> = _iceConnectionState.asStateFlow()
+
+    private val _signalingState = MutableStateFlow("NEW")
+    val signalingState: StateFlow<String> = _signalingState.asStateFlow()
 
     private val _dataChannelMessages = MutableSharedFlow<DataChannelMessage>(extraBufferCapacity = 8192)
     val dataChannelMessages: SharedFlow<DataChannelMessage> = _dataChannelMessages.asSharedFlow()
@@ -166,15 +176,25 @@ class WebRtcManager @Inject constructor() {
                 .createInitializationOptions()
         )
 
+        // 音声デバイスモジュールを初期化（受信音声の再生に必要）
+        val audioDeviceModule = JavaAudioDeviceModule.builder(context)
+            .setUseHardwareAcousticEchoCanceler(false)
+            .setUseHardwareNoiseSuppressor(false)
+            .createAudioDeviceModule()
+
         val encoderFactory = DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
         val decoderFactory = DefaultVideoDecoderFactory(rootEglBase.eglBaseContext)
 
         peerConnectionFactory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDeviceModule)
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
 
-        Log.d(TAG, "PeerConnectionFactory を初期化しました")
+        // AudioDeviceModule のリソース解放（Factory に渡した後は不要）
+        audioDeviceModule.release()
+
+        Log.d(TAG, "PeerConnectionFactory を初期化しました（AudioDeviceModule 設定済み）")
     }
 
     /**
@@ -195,10 +215,12 @@ class WebRtcManager @Inject constructor() {
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
             override fun onSignalingChange(state: PeerConnection.SignalingState?) {
                 Log.d(TAG, "シグナリング状態変化: $state")
+                _signalingState.value = state?.name ?: "UNKNOWN"
             }
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
                 Log.d(TAG, "ICE 接続状態変化: $state")
+                _iceConnectionState.value = state?.name ?: "UNKNOWN"
                 _isConnected.value = state == PeerConnection.IceConnectionState.CONNECTED ||
                                      state == PeerConnection.IceConnectionState.COMPLETED
             }
@@ -222,6 +244,11 @@ class WebRtcManager @Inject constructor() {
                     Log.d(TAG, "onAddStream からリモート映像トラックを取得")
                     _remoteVideoTrack.value = videoTrack
                 }
+                val audioTrack = stream?.audioTracks?.firstOrNull()
+                if (audioTrack != null) {
+                    Log.d(TAG, "onAddStream からリモート音声トラックを取得")
+                    remoteAudioTrack = audioTrack
+                }
             }
 
             override fun onRemoveStream(stream: MediaStream?) {}
@@ -243,8 +270,12 @@ class WebRtcManager @Inject constructor() {
                     Log.d(TAG, "onTrack からリモート映像トラックを取得: ${track.id()}")
                     track.setEnabled(true)
                     _remoteVideoTrack.value = track
+                } else if (track is AudioTrack) {
+                    Log.d(TAG, "onTrack からリモート音声トラックを取得: ${track.id()}")
+                    track.setEnabled(true)
+                    remoteAudioTrack = track
                 } else {
-                    Log.d(TAG, "onTrack: 非映像トラック (${track?.kind()})")
+                    Log.d(TAG, "onTrack: 不明なトラック種別 (${track?.kind()})")
                 }
             }
         })
@@ -372,6 +403,16 @@ class WebRtcManager @Inject constructor() {
         Log.d(TAG, "リモート ICE Candidate を追加しました")
     }
 
+    /**
+     * リモート音声トラックの音量を設定する
+     * @param volume 0.0（ミュート）〜 1.0（最大）の範囲
+     */
+    fun setAudioVolume(volume: Double) {
+        val clamped = volume.coerceIn(0.0, 1.0)
+        remoteAudioTrack?.setVolume(clamped)
+        Log.d(TAG, "音声ボリュームを設定: ${(clamped * 100).toInt()}%")
+    }
+
     fun close() {
         dataChannel?.close()
         dataChannel = null
@@ -382,6 +423,7 @@ class WebRtcManager @Inject constructor() {
         // factory はシングルトンのため破棄しない（再利用および SIGSEGV 防止）
         // peerConnectionFactory?.dispose()
         
+        remoteAudioTrack = null
         _remoteVideoTrack.value = null
         _isConnected.value = false
         Log.d(TAG, "WebRtcManager を閉じました")

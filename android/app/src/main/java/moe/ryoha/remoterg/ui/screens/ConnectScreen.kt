@@ -42,6 +42,9 @@ fun ConnectScreen(
     var sessionId by remember { mutableStateOf("fixed") }
     var selectedCodec by remember { mutableStateOf("av1") }
     
+    var serverMode by remember { mutableStateOf("local") }
+    var customServerUrl by remember { mutableStateOf("ws://192.168.0.10:8787") }
+
     var showSettingsDialog by remember { mutableStateOf(false) }
 
     // ランタイムパーミッションリクエスト用ランチャー
@@ -185,7 +188,12 @@ fun ConnectScreen(
                 // Connect Button
                 Button(
                     onClick = {
-                        val url = "ws://10.0.2.2:8787/api/signal?session_id=$sessionId&role=viewer"
+                        val baseUrl = when (serverMode) {
+                            "local" -> "ws://10.0.2.2:8787"
+                            "remote" -> "wss://remoterg.the7uya.workers.dev"
+                            else -> customServerUrl.trimEnd('/')
+                        }
+                        val url = "$baseUrl/api/signal?session_id=$sessionId&role=viewer"
                         onConnect(url, selectedCodec)
                     },
                     modifier = Modifier
@@ -248,6 +256,71 @@ fun ConnectScreen(
                 title = { Text("Settings") },
                 text = {
                     Column {
+                        // Signaling Server 選択
+                        Text(
+                            text = "Signaling Server",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        
+                        var serverDropdownExpanded by remember { mutableStateOf(false) }
+                        val serverOptions = listOf("local" to "Local (10.0.2.2)", "remote" to "Remote", "custom" to "Custom")
+                        
+                        ExposedDropdownMenuBox(
+                            expanded = serverDropdownExpanded,
+                            onExpandedChange = { serverDropdownExpanded = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = if (serverMode == "custom") 8.dp else 16.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = serverOptions.find { it.first == serverMode }?.second ?: "",
+                                onValueChange = {},
+                                readOnly = true,
+                                singleLine = true,
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = serverDropdownExpanded)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            ExposedDropdownMenu(
+                                expanded = serverDropdownExpanded,
+                                onDismissRequest = { serverDropdownExpanded = false }
+                            ) {
+                                serverOptions.forEach { (key, label) ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                        },
+                                        onClick = {
+                                            serverMode = key
+                                            serverDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (serverMode == "custom") {
+                            OutlinedTextField(
+                                value = customServerUrl,
+                                onValueChange = { customServerUrl = it },
+                                placeholder = { Text("ws://192.168.0.10:8787") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                        }
+
                         // Session ID 入力欄
                         Text(
                             text = "Session ID",

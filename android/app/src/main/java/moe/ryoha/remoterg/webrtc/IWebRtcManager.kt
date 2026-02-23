@@ -43,5 +43,6 @@ interface IWebRtcManager {
     fun handleIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int)
     fun setAudioVolume(volume: Double)
     fun sendDataChannelMessage(message: String)
+    fun sendMouseClick(x: Float, y: Float, button: String = "left")
     fun close()
 }

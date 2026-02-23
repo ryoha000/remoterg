@@ -221,10 +221,14 @@ class WebRtcManager @Inject constructor(
 
         val rtcConfig = PeerConnection.RTCConfiguration(
             listOf(
-                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+                PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
+                PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer()
             )
         ).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            iceConnectionReceivingTimeout = 10000 // ICE check timeout extended to 10s to alleviate trickle ICE race conditions
+            iceCheckMinInterval = 500             // Increase frequency of ICE checks
         }
 
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
@@ -248,7 +252,9 @@ class WebRtcManager @Inject constructor(
             }
 
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
+                Log.d(TAG, "ICE 収集状態変化: $state")
+            }
 
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let {
@@ -435,9 +441,20 @@ class WebRtcManager @Inject constructor(
         Log.d(TAG, "音声ボリュームを設定: ${(clamped * 100).toInt()}%")
     }
 
+    override fun sendMouseClick(x: Float, y: Float, button: String) {
+        if (dataChannel?.state() == DataChannel.State.OPEN) {
+            val jsonMessage = """{"MouseClick": {"x": $x, "y": $y, "button": "$button"}}"""
+            sendDataChannelMessage(jsonMessage)
+            Log.d(TAG, "マウスクリック送信: $jsonMessage")
+        } else {
+            Log.w(TAG, "マウスクリック送信失敗: DataChannel が開いていません")
+        }
+    }
+
     override fun close() {
         dataChannel?.close()
         dataChannel = null
+
         
         peerConnection?.close()
         peerConnection = null

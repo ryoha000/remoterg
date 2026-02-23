@@ -95,10 +95,14 @@ pub async fn handle_set_offer(
         .with_interceptor_registry(registry)
         .build();
 
-    // ICE設定（GoogleのSTUNサーバーを使用）
+    // ICE設定（複数のSTUNサーバーを使用してUDPパケットロス時の冗長性を確保）
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_string()],
+            urls: vec![
+                "stun:stun.l.google.com:19302".to_string(),
+                "stun:stun1.l.google.com:19302".to_string(),
+                "stun:stun.cloudflare.com:3478".to_string(),
+            ],
             ..Default::default()
         }],
         ..Default::default()
@@ -538,6 +542,13 @@ pub async fn handle_set_offer(
         })
     }));
 
+    // ICE gathering状態の監視（候補収集タイミングの可視化）
+    pc.on_ice_gathering_state_change(Box::new(move |state| {
+        Box::pin(async move {
+            info!("ICE gathering state changed: {:?}", state);
+        })
+    }));
+
     // Track受信のハンドラを設定
     let pc_for_track = pc.clone();
     pc_for_track.on_track(Box::new(move |track, _receiver, _transceiver| {
@@ -564,7 +575,7 @@ pub async fn handle_add_ice_candidate(
     sdp_mline_index: Option<u16>,
     username_fragment: Option<String>,
 ) -> Result<()> {
-    debug!("AddIceCandidate received");
+    info!("AddIceCandidate received: candidate={}, sdp_mid={:?}", candidate, sdp_mid);
     let ice_candidate = RTCIceCandidateInit {
         candidate,
         sdp_mid,
@@ -575,6 +586,6 @@ pub async fn handle_add_ice_candidate(
         .add_ice_candidate(ice_candidate)
         .await
         .context("Failed to add ICE candidate")?;
-    debug!("ICE candidate added");
+    info!("Remote ICE candidate added successfully");
     Ok(())
 }

@@ -163,7 +163,18 @@ class ViewerViewModel @Inject constructor(
         webRtcManager.setAudioVolume(volume)
     }
 
+    /**
+     * マウスクリックイベントを送信する
+     * @param x 0.0〜1.0 の相対X座標
+     * @param y 0.0〜1.0 の相対Y座標
+     * @param button "left", "right", "middle" など
+     */
+    fun sendMouseClick(x: Float, y: Float, button: String = "left") {
+        webRtcManager.sendMouseClick(x, y, button)
+    }
+
     override fun onCleared() {
+
         super.onCleared()
         screenshotProcessor.stopObserving()
         disconnect()

@@ -71,6 +71,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import android.os.Build
 import androidx.activity.ComponentActivity
@@ -103,6 +104,7 @@ fun ViewerScreen(
     onNavigateToGallery: () -> Unit,
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current.density
     val videoTrack by viewModel.remoteVideoTrack.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
     val rtcStats by viewModel.rtcStats.collectAsState()
@@ -156,11 +158,66 @@ fun ViewerScreen(
                             zoomPanState.resetZoom()
                         }
                     },
-                    onTap = {
-                        // シングルタップ: 設定パネルが開いている場合は閉じる、そうでなければオーバーレイ切替
+                    onTap = { offset ->
+                        // 1. 設定パネルが開いている場合は閉じる
                         if (overlayState.showSettings) {
                             overlayState.showSettings = false
-                        } else {
+                            return@detectTapGestures
+                        }
+
+                        val containerWidth = this.size.width.toFloat()
+                        val containerHeight = this.size.height.toFloat()
+                        val videoWidth = rtcStats.frameWidth.toFloat()
+                        val videoHeight = rtcStats.frameHeight.toFloat()
+                        
+                        // ヘッダー領域の判定（上部 80dp分）
+                        val headerHeightPx = 80f * density
+                        val isInHeaderArea = offset.y < headerHeightPx
+                        
+                        var isInsideVideoBounds = false
+
+                        if (videoWidth > 0f && videoHeight > 0f && containerWidth > 0f && containerHeight > 0f) {
+                            val videoRatio = videoWidth / videoHeight
+                            val containerRatio = containerWidth / containerHeight
+                            
+                            var drawWidth = containerWidth
+                            var drawHeight = containerHeight
+                            var startX = 0f
+                            var startY = 0f
+                            
+                            if (containerRatio > videoRatio) {
+                                drawWidth = containerHeight * videoRatio
+                                startX = (containerWidth - drawWidth) / 2f
+                            } else {
+                                drawHeight = containerWidth / videoRatio
+                                startY = (containerHeight - drawHeight) / 2f
+                            }
+                            
+                            val scale = zoomPanState.scale
+                            val panX = zoomPanState.offset.x
+                            val panY = zoomPanState.offset.y
+                            val centerX = containerWidth / 2f
+                            val centerY = containerHeight / 2f
+                            
+                            val originalX = (offset.x - centerX - panX) / scale + centerX
+                            val originalY = (offset.y - centerY - panY) / scale + centerY
+                            
+                            val relativeX = originalX - startX
+                            val relativeY = originalY - startY
+                            
+                            if (relativeX in 0f..drawWidth && relativeY in 0f..drawHeight) {
+                                isInsideVideoBounds = true
+                                // ヘッダー領域でなければクリックイベントを送信
+                                if (!isInHeaderArea) {
+                                    val normalizedX = relativeX / drawWidth
+                                    val normalizedY = relativeY / drawHeight
+                                    viewModel.sendMouseClick(normalizedX, normalizedY, "left")
+                                }
+                            }
+                        }
+
+                        // 2. ヘッダー領域、またはビデオ領域外（黒帯部分）をタップした場合のみ、オーバーレイを表示/非表示切り替え
+                        if (isInHeaderArea || !isInsideVideoBounds) {
                             overlayState.toggleOverlay()
                         }
                     }

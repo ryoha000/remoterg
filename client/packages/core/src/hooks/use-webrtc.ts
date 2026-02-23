@@ -247,7 +247,7 @@ export function useWebRTC(options: WebRTCOptions) {
 
       // 2. PeerConnection
       const config: RTCConfiguration = {
-        iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+        iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }],
       };
       const {
         pc,

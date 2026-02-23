@@ -44,5 +44,6 @@ interface IWebRtcManager {
     fun setAudioVolume(volume: Double)
     fun sendDataChannelMessage(message: String)
     fun sendMouseClick(x: Float, y: Float, button: String = "left")
+    fun sendKeyEvent(key: String, down: Boolean)
     fun close()
 }

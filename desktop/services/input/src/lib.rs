@@ -17,9 +17,10 @@ use window_info::WindowInfoProvider;
 use std::path::PathBuf;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
-    MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
+    SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, VK_LCONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowRect, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -112,7 +113,7 @@ impl InputService {
         match msg {
             DataChannelMessage::Key { key, down } => {
                 info!("Key input: {} (down: {})", key, down);
-                // 後でWin32 SendInputを実装
+                self.handle_key_input(&key, down).await?;
             }
             DataChannelMessage::MouseWheel { delta } => {
                 info!("Mouse wheel: {}", delta);
@@ -500,6 +501,43 @@ impl InputService {
                 },
             },
         ];
+
+        unsafe {
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        }
+
+        Ok(())
+    }
+
+    async fn handle_key_input(&self, key: &str, down: bool) -> Result<()> {
+        let vk_code = match key {
+            "Control" => VK_LCONTROL,
+            // 今後他のキーが必要になればここに追加
+            _ => {
+                debug!("Unsupported key: {}", key);
+                return Ok(());
+            }
+        };
+
+        // スキャンコードベースの入力より、仮想キーコードベースのシンプルな入力を行う
+        let dw_flags = if down {
+            windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS(0)
+        } else {
+            KEYEVENTF_KEYUP
+        };
+
+        let inputs = [INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk_code,
+                    wScan: 0,
+                    dwFlags: dw_flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
 
         unsafe {
             SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);

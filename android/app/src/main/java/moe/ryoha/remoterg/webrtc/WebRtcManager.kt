@@ -451,6 +451,16 @@ class WebRtcManager @Inject constructor(
         }
     }
 
+    override fun sendKeyEvent(key: String, down: Boolean) {
+        if (dataChannel?.state() == DataChannel.State.OPEN) {
+            val jsonMessage = """{"Key": {"key": "$key", "down": $down}}"""
+            sendDataChannelMessage(jsonMessage)
+            Log.d(TAG, "キーイベント送信: $jsonMessage")
+        } else {
+            Log.w(TAG, "キーイベント送信失敗: DataChannel が開いていません")
+        }
+    }
+
     override fun close() {
         dataChannel?.close()
         dataChannel = null

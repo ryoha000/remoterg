@@ -13,6 +13,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +42,8 @@ import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -430,6 +434,21 @@ fun ViewerScreen(
                     }
                 )
             }
+
+            // Ctrl Button (右下)
+            AnimatedVisibility(
+                visible = overlayState.showOverlay,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 16.dp)
+            ) {
+                CtrlButton(
+                    onInteraction = { overlayState.onInteraction() },
+                    onKeyEvent = { down -> viewModel.sendKeyEvent("Control", down) }
+                )
+            }
         }
 
         // Screen Flash and Thumbnail animation
@@ -673,6 +692,97 @@ private fun OverlayIconButton(
             tint = Color.White,
             modifier = Modifier.size(20.dp)
         )
+    }
+}
+
+/**
+ * Ctrlキー送信用ボタン
+ */
+@Composable
+private fun CtrlButton(
+    onInteraction: () -> Unit,
+    onKeyEvent: (Boolean) -> Unit
+) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var isPressed by remember { mutableStateOf(false) }
+
+    // 押下状態に伴うスケールアニメーション（へこむような効果）
+    val scale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (isPressed) 0.85f else 1.0f,
+        animationSpec = androidx.compose.animation.core.spring(
+            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+            stiffness = androidx.compose.animation.core.Spring.StiffnessLow
+        ),
+        label = "CtrlButtonScale"
+    )
+
+    // 押下状態に伴うカラーアニメーション
+    val bgColor by animateColorAsState(
+        targetValue = if (isPressed) Color(0xFF3B82F6).copy(alpha = 0.8f) else Color(0xFF18181B).copy(alpha = 0.5f),
+        label = "CtrlButtonBg"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isPressed) Color(0xFF60A5FA) else Color.White.copy(alpha = 0.2f),
+        label = "CtrlButtonBorder"
+    )
+
+    // 押下状態が切り替わったときにイベントを送信し、押下中は定期的にインタラクションを通知してUIが消えないようにする
+    LaunchedEffect(isPressed) {
+        onKeyEvent(isPressed)
+        if (isPressed) {
+            while (true) {
+                onInteraction() // UIが自動非表示にならないよう定期的にタイマーリセット
+                delay(1000)
+            }
+        } else {
+            onInteraction() // 離した時も一度タイマーをリセット
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(bgColor)
+            .border(width = if (isPressed) 2.dp else 1.dp, color = borderColor, shape = CircleShape)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Main)
+                        val down = event.changes.any { it.pressed }
+                        if (down != isPressed) {
+                            if (down) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            }
+                            isPressed = down
+                        }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Keyboard,
+                contentDescription = "Ctrl Key",
+                tint = if (isPressed) Color.White else Color.White.copy(alpha = 0.8f),
+                modifier = Modifier.size(24.dp)
+            )
+            Text(
+                text = "CTRL",
+                color = if (isPressed) Color.White else Color.White.copy(alpha = 0.8f),
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 10.sp,
+                letterSpacing = 1.sp
+            )
+        }
     }
 }
 

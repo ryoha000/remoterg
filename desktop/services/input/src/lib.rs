@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
     MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -421,7 +422,7 @@ impl InputService {
         Ok(())
     }
 
-    async fn handle_mouse_click(&self, x: f64, y: f64, _button: &str) -> Result<()> {
+    async fn handle_mouse_click(&self, x: f64, y: f64, button: &str) -> Result<()> {
         let (abs_x, abs_y) = if self.target_hwnd != 0 {
             let hwnd = HWND(self.target_hwnd as *mut _);
             let mut rect = windows::Win32::Foundation::RECT::default();
@@ -442,6 +443,12 @@ impl InputService {
             // Full screen mapping (assuming primary monitor or simple scaling)
             // x, y are 0.0-1.0
             ((x * 65535.0) as i32, (y * 65535.0) as i32)
+        };
+
+        let (down_flag, up_flag) = match button.to_lowercase().as_str() {
+            "right" => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+            "middle" => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+            _ => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
         };
 
         // Click sequence: Move -> Down -> Up
@@ -470,7 +477,7 @@ impl InputService {
                         dy: abs_y,
                         mouseData: 0,
                         dwFlags: MOUSEEVENTF_ABSOLUTE
-                            | MOUSEEVENTF_LEFTDOWN
+                            | down_flag
                             | MOUSEEVENTF_VIRTUALDESK,
                         time: 0,
                         dwExtraInfo: 0,
@@ -485,7 +492,7 @@ impl InputService {
                         dy: abs_y,
                         mouseData: 0,
                         dwFlags: MOUSEEVENTF_ABSOLUTE
-                            | MOUSEEVENTF_LEFTUP
+                            | up_flag
                             | MOUSEEVENTF_VIRTUALDESK,
                         time: 0,
                         dwExtraInfo: 0,

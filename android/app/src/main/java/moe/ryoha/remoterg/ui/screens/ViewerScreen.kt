@@ -132,6 +132,9 @@ fun ViewerScreen(
     // ピンチズーム / パン 状態（State Holder に集約）
     val zoomPanState = rememberZoomPanState()
     val coroutineScope = rememberCoroutineScope()
+    
+    // ジェスチャー中の最大ポインター数をトラッキングして右クリック判定に使用
+    val maxPointers = remember { intArrayOf(1) }
 
     LaunchedEffect(signalingUrl) {
         viewModel.connectToHost(signalingUrl, codec)
@@ -149,6 +152,22 @@ fun ViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            // ポインター数のトラッキング（二本指タップ判定用）
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                        val pressedCount = event.changes.count { it.pressed }
+                        val anyNewDown = event.changes.any { it.pressed && !it.previousPressed }
+                        
+                        if (anyNewDown && pressedCount == 1) {
+                            maxPointers[0] = 1
+                        } else if (pressedCount > maxPointers[0]) {
+                            maxPointers[0] = pressedCount
+                        }
+                    }
+                }
+            }
             // ピンチズーム & パン ジェスチャー
             .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
@@ -216,7 +235,8 @@ fun ViewerScreen(
                                 if (!isInHeaderArea) {
                                     val normalizedX = relativeX / drawWidth
                                     val normalizedY = relativeY / drawHeight
-                                    viewModel.sendMouseClick(normalizedX, normalizedY, "left")
+                                    val button = if (maxPointers[0] >= 2) "right" else "left"
+                                    viewModel.sendMouseClick(normalizedX, normalizedY, button)
                                 }
                             }
                         }

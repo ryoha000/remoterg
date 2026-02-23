@@ -75,6 +75,7 @@ class ViewerViewModelTest {
     private val _fakeMessages = MutableSharedFlow<IncomingMessage>(extraBufferCapacity = 10)
     private val fakeSignalingClient = object : ISignalingClient {
         override val messages: SharedFlow<IncomingMessage> = _fakeMessages
+        override val webSocketState = MutableStateFlow("Disconnected")
         var connectCalledWith: String? = null
         var disconnectCalled = false
         var lastOfferSdp: String? = null

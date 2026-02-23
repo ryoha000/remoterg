@@ -14,8 +14,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
@@ -52,6 +55,9 @@ class SignalingClient @Inject constructor() : ISignalingClient {
     )
     override val messages: SharedFlow<IncomingMessage> = _messages.asSharedFlow()
 
+    private val _webSocketState = MutableStateFlow("Disconnected")
+    override val webSocketState: StateFlow<String> = _webSocketState.asStateFlow()
+
     /**
      * シグナリングサーバーに接続する
      * URL には session_id と role がクエリパラメータとして含まれている想定
@@ -62,9 +68,11 @@ class SignalingClient @Inject constructor() : ISignalingClient {
      */
     override fun connect(url: String, onConnected: (() -> Unit)?) {
         job?.cancel()
+        _webSocketState.value = "Connecting"
         job = scope.launch {
             try {
                 session = client.webSocketSession(url)
+                _webSocketState.value = "Connected"
                 Log.d(TAG, "シグナリングサーバーに接続しました")
 
                 // WebSocket 接続完了を通知 — ここで Offer 生成等を開始できる
@@ -84,8 +92,12 @@ class SignalingClient @Inject constructor() : ISignalingClient {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "WebSocket エラー", e)
+                _webSocketState.value = "Error: ${e.message ?: e.javaClass.simpleName}"
             } finally {
                 Log.d(TAG, "シグナリングサーバーから切断されました")
+                if (!_webSocketState.value.startsWith("Error")) {
+                    _webSocketState.value = "Disconnected"
+                }
             }
         }
     }

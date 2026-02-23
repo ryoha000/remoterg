@@ -39,8 +39,10 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -108,6 +110,9 @@ fun ViewerScreen(
     val videoTrack by viewModel.remoteVideoTrack.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
     val rtcStats by viewModel.rtcStats.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
+    val webSocketState by viewModel.webSocketState.collectAsState()
+    val connectionError by viewModel.connectionError.collectAsState()
     
     val activity = context as? ComponentActivity
 
@@ -235,19 +240,89 @@ fun ViewerScreen(
                     translationY = zoomPanState.offset.y
                 }
         ) {
-            if (videoTrack != null) {
+            if (connectionState == "Failed") {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ErrorOutline,
+                        contentDescription = "Error",
+                        tint = Color(0xFFEF4444), // red-500
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Connection Failed",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                    if (connectionError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = connectionError ?: "",
+                            color = Color(0xFFA1A1AA), // zinc-400
+                            fontSize = 14.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Button(
+                        onClick = { viewModel.connectToHost(signalingUrl, codec) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("Retry")
+                    }
+                }
+            } else if (videoTrack != null) {
                 WebRtcVideoRenderer(
                     videoTrack = videoTrack,
                     eglBaseContext = viewModel.eglBaseContext,
                     modifier = Modifier.fillMaxSize()
                 )
+            } else if (connectionState == "Disconnected") {
+                // 何も表示しない（画面遷移中のため）
+                Box(modifier = Modifier.fillMaxSize().background(Color.Black))
             } else {
-                // 接続中のプレースホルダ
-                Text(
-                    text = if (isConnected) "映像トラック待機中..." else "接続中...",
-                    color = Color.White,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
                     modifier = Modifier.align(Alignment.Center)
-                )
+                ) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(32.dp),
+                        strokeWidth = 3.dp
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    // Connection State List
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        // 1. Signaling WebScoket State
+                        ConnectionPhaseRow(
+                            label = "Signaling Server",
+                            state = webSocketState
+                        )
+                        
+                        // 2. WebRTC Peer Connection State
+                        ConnectionPhaseRow(
+                            label = "Peer Connection",
+                            state = connectionState
+                        )
+                        
+                        // 3. ICE Connection State
+                        ConnectionPhaseRow(
+                            label = "ICE Transport",
+                            state = viewModel.iceConnectionState.collectAsState().value
+                        )
+                    }
+                }
             }
         }
 
@@ -267,6 +342,7 @@ fun ViewerScreen(
             ) {
                 TopBar(
                     isConnected = isConnected,
+                    connectionState = connectionState,
                     rtcStats = rtcStats,
                     onBack = {
                         viewModel.disconnect()
@@ -345,7 +421,6 @@ fun ViewerScreen(
 
     // 接続詳細情報ダイアログ
     if (overlayState.showConnectionDetails) {
-        val connectionState by viewModel.connectionState.collectAsState()
         val selectedCodec by viewModel.selectedCodec.collectAsState()
         
         val sessionId = remember(signalingUrl) {
@@ -364,6 +439,7 @@ fun ViewerScreen(
             rtcStats = rtcStats,
             deviceScreenSize = deviceScreenSize,
             connectionState = connectionState,
+            webSocketState = webSocketState,
             iceConnectionState = iceConnectionState,
             signalingState = signalingState,
             selectedCodec = selectedCodec,
@@ -374,11 +450,76 @@ fun ViewerScreen(
 }
 
 /**
+ * 接続フェーズの1行を表示するコンポーネント
+ */
+@Composable
+private fun ConnectionPhaseRow(
+    label: String,
+    state: String
+) {
+    // 状態を色付きのインジケーターにマッピングする処理
+    val (indicatorColor, displayState) = when {
+        // Connected 状態
+        state.equals("Connected", ignoreCase = true) || state.equals("COMPLETED", ignoreCase = true) ->
+            Color(0xFF22C55E) to "Connected" // green-500
+        
+        // Error / Disconnected 状態
+        state.startsWith("Error", ignoreCase = true) || 
+        state.equals("Failed", ignoreCase = true) || 
+        state.equals("Disconnected", ignoreCase = true) || 
+        state.equals("CLOSED", ignoreCase = true) ||
+        state.equals("FAILED", ignoreCase = true) ->
+            Color(0xFFEF4444) to state // red-500
+        
+        // Initial 状態（new 等）
+        state.equals("NEW", ignoreCase = true) || state.isEmpty() ->
+            Color(0xFF52525B) to "Waiting..." // zinc-500
+            
+        // その他の処理中状態 (Connecting, CHECKING 等)
+        else ->
+            Color(0xFFEAB308) to state // yellow-500
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Start,
+        modifier = Modifier.fillMaxWidth(0.6f) // 幅を制限して全体が中央寄りになるように
+    ) {
+        // インジケーター丸
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(indicatorColor)
+        )
+        
+        Spacer(modifier = Modifier.width(12.dp))
+        
+        // ラベル (例: "Signaling Server")
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f)
+        )
+        
+        // 状態テキスト (例: "Connected")
+        Text(
+            text = displayState,
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 14.sp
+        )
+    }
+}
+
+/**
  * トップバー: 戻るボタン、ステータスバッジ、アクションボタン群
  */
 @Composable
 private fun TopBar(
     isConnected: Boolean,
+    connectionState: String,
     rtcStats: WebRtcStats,
     onBack: () -> Unit,
     showSettings: Boolean,
@@ -417,6 +558,7 @@ private fun TopBar(
                 }
 
                 // ステータスバッジ
+                val isError = connectionState == "Failed"
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -437,12 +579,12 @@ private fun TopBar(
                             .size(8.dp)
                             .clip(CircleShape)
                             .background(
-                                if (isConnected) Color(0xFF22C55E) else Color(0xFFEAB308)
+                                if (isConnected) Color(0xFF22C55E) else if (isError) Color(0xFFEF4444) else Color(0xFFEAB308)
                             )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isConnected) "connected" else "connecting",
+                        text = if (isConnected) "connected" else if (isError) "error" else "connecting",
                         color = Color.White.copy(alpha = 0.9f),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -564,6 +706,7 @@ private fun ConnectionDetailsDialog(
     rtcStats: WebRtcStats,
     deviceScreenSize: String,
     connectionState: String,
+    webSocketState: String,
     iceConnectionState: String,
     signalingState: String,
     selectedCodec: String,
@@ -598,6 +741,7 @@ private fun ConnectionDetailsDialog(
 
             val items = listOf(
                 "App State" to connectionState,
+                "WebSocket" to webSocketState,
                 "WebRTC" to signalingState,
                 "ICE" to iceConnectionState,
                 "Codec" to selectedCodec,

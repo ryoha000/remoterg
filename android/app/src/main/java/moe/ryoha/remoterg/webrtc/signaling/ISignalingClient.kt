@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.SharedFlow
  */
 interface ISignalingClient {
     val messages: SharedFlow<IncomingMessage>
+    val webSocketState: kotlinx.coroutines.flow.StateFlow<String>
     fun connect(url: String, onConnected: (() -> Unit)? = null)
     fun sendOffer(sdp: String, codec: String = "h264")
     fun sendAnswer(sdp: String)

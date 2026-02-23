@@ -51,6 +51,10 @@ class ViewerViewModel @Inject constructor(
     val iceConnectionState: StateFlow<String> = webRtcManager.iceConnectionState
     val signalingState: StateFlow<String> = webRtcManager.signalingState
     val eglBaseContext: EglBase.Context get() = webRtcManager.eglBaseContext
+    val webSocketState: StateFlow<String> = signalingClient.webSocketState
+
+    private val _connectionError = MutableStateFlow<String?>(null)
+    val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
 
     val screenshotSavedFlow = screenshotProcessor.onScreenshotSaved
 
@@ -60,7 +64,43 @@ class ViewerViewModel @Inject constructor(
     init {
         setupSignaling()
         setupWebRtcCallbacks()
+        setupWebSocketStateTracking()
+        setupWebRtcStateTracking()
         screenshotProcessor.startObserving()
+    }
+
+    private fun setupWebSocketStateTracking() {
+        viewModelScope.launch {
+            signalingClient.webSocketState.collect { state ->
+                // もし既に意図的に Disconnected な状態であれば、エラー画面に遷移させない
+                if (_connectionState.value == "Disconnected") return@collect
+
+                if (state.startsWith("Error")) {
+                    _connectionError.value = state.substringAfter("Error: ").trim()
+                    _connectionState.value = "Failed"
+                } else if (state == "Disconnected" && _connectionState.value != "Failed") {
+                    _connectionError.value = "WebSocket Connection Closed"
+                    _connectionState.value = "Failed"
+                }
+            }
+        }
+    }
+
+    private fun setupWebRtcStateTracking() {
+        viewModelScope.launch {
+            webRtcManager.iceConnectionState.collect { state ->
+                // もし既に意図的に Disconnected な状態であれば、クローズ時の等によるエラー画面遷移を防ぐ
+                if (_connectionState.value == "Disconnected") return@collect
+
+                if (state == "FAILED" || state == "CLOSED") {
+                    _connectionError.value = "WebRTC Connection $state"
+                    _connectionState.value = "Failed"
+                } else if (state == "DISCONNECTED" && _connectionState.value != "Failed") {
+                    _connectionError.value = "Host Disconnected"
+                    _connectionState.value = "Failed"
+                }
+            }
+        }
     }
 
     /**
@@ -124,8 +164,9 @@ class ViewerViewModel @Inject constructor(
      * URL は session_id と role を含むシグナリングサーバーの WebSocket URL
      */
     fun connectToHost(url: String, codec: String = "h264") {
-        if (hasAttemptedConnection) return
+        if (hasAttemptedConnection && _connectionState.value != "Failed" && _connectionState.value != "Disconnected") return
         hasAttemptedConnection = true
+        _connectionError.value = null
 
         _connectionState.value = "Connecting..."
         _selectedCodec.value = codec
@@ -146,9 +187,10 @@ class ViewerViewModel @Inject constructor(
     }
 
     fun disconnect() {
+        hasAttemptedConnection = false
+        _connectionState.value = "Disconnected"
         signalingClient.disconnect()
         webRtcManager.close()
-        _connectionState.value = "Disconnected"
     }
 
     fun takeScreenshot() {

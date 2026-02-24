@@ -818,6 +818,8 @@ private fun CtrlButton(
                             }
                             isPressed = down
                         }
+                        // タップイベントが下の要素へ伝播してクリック判定になるのを防ぐ
+                        event.changes.forEach { it.consume() }
                     }
                 }
             },

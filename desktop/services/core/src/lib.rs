@@ -261,7 +261,9 @@ pub enum DataChannelMessage {
     MouseWheel {
         delta: i32,
     },
-    ScreenshotRequest,
+    ScreenshotRequest {
+        include_image: bool,
+    },
     Ping {
         timestamp: u64,
     },

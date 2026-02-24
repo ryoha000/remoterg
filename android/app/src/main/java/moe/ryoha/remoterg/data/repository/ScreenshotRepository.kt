@@ -180,19 +180,24 @@ class ScreenshotRepository @Inject constructor(
         }
     }
 
-    suspend fun saveLocalScreenshot(bitmap: Bitmap): Uri? = withContext(Dispatchers.IO) {
+    suspend fun saveLocalScreenshot(
+        bitmap: Bitmap,
+        hostId: String = "local_${System.currentTimeMillis()}",
+        windowTitle: String? = "Client Screenshot",
+        processPath: String? = "remoterg/client",
+        processName: String? = "Android Client"
+    ): Uri? = withContext(Dispatchers.IO) {
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream)
         val data = stream.toByteArray()
-        val hostId = "local_${System.currentTimeMillis()}"
 
         saveScreenshot(
             hostId = hostId,
             format = "jpeg",
             data = data,
-            windowTitle = "Client Screenshot",
-            processPath = "remoterg/client",
-            processName = "Android Client"
+            windowTitle = windowTitle,
+            processPath = processPath,
+            processName = processName
         )
     }
 

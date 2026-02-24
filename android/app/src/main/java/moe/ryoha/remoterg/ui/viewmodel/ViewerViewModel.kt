@@ -201,8 +201,10 @@ class ViewerViewModel @Inject constructor(
     }
 
     fun takeScreenshot() {
-        if (useOriginalQualityScreenshot.value) {
-            screenshotProcessor.requestScreenshot()
+        val useOriginal = useOriginalQualityScreenshot.value
+        screenshotProcessor.requestScreenshot(includeImage = useOriginal)
+        
+        if (useOriginal) {
             _screenshotTriggerFlow.tryEmit(Unit)
         } else {
             _localScreenshotTriggerFlow.tryEmit(Unit)
@@ -210,9 +212,7 @@ class ViewerViewModel @Inject constructor(
     }
 
     fun saveLocalScreenshot(bitmap: android.graphics.Bitmap) {
-        viewModelScope.launch {
-            screenshotProcessor.saveLocalScreenshot(bitmap)
-        }
+        screenshotProcessor.pendingLocalBitmap = bitmap
     }
 
     /**

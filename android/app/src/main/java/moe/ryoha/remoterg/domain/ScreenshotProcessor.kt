@@ -21,7 +21,9 @@ import javax.inject.Singleton
 @Singleton
 class ScreenshotProcessor @Inject constructor(
     private val webRtcManager: IWebRtcManager,
-    private val repository: ScreenshotRepository
+    private val repository: ScreenshotRepository,
+    private val analysisDao: moe.ryoha.remoterg.data.local.dao.AnalysisDao,
+    private val screenshotDao: moe.ryoha.remoterg.data.local.dao.ScreenshotDao
 ) {
     private var observeJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -32,6 +34,12 @@ class ScreenshotProcessor @Inject constructor(
     private var currentFormat: String = "png"
     private var currentReceived: Int = 0
     private var currentChunks = mutableListOf<ByteArray>()
+    
+    // Auto AI Analysis Buffers
+    private val analysisBuffers = mutableMapOf<String, StringBuilder>()
+
+    // Pending local bitmap to be saved when metadata arrives
+    var pendingLocalBitmap: android.graphics.Bitmap? = null
     
     // Metadata
     private var windowTitle: String? = null
@@ -76,6 +84,13 @@ class ScreenshotProcessor @Inject constructor(
                             
                             currentReceived = 0
                             currentChunks.clear()
+
+                            if (currentSize == 0) {
+                                Log.d(TAG, "Screenshot metadata size is 0, processing finished immediately using local bitmap")
+                                processFinishedScreenshot()
+                            }
+                        } else if (root.containsKey("ANALYZE_RESPONSE") || root.containsKey("ANALYZE_RESPONSE_CHUNK") || root.containsKey("ANALYZE_RESPONSE_DONE")) {
+                            handleAnalysisMessage(msg.text)
                         }
                     }
                 } catch (e: Exception) {
@@ -96,35 +111,101 @@ class ScreenshotProcessor @Inject constructor(
         }
     }
 
+    private suspend fun handleAnalysisMessage(text: String) {
+        try {
+            val jsonObject = org.json.JSONObject(text)
+            when {
+                jsonObject.has("ANALYZE_RESPONSE") -> {
+                    val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE")
+                    val id = resp.getString("id")
+                    val resultText = resp.getString("text")
+                    saveAnalysisToDb(id, resultText)
+                }
+                jsonObject.has("ANALYZE_RESPONSE_CHUNK") -> {
+                    val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_CHUNK")
+                    val id = resp.getString("id")
+                    val delta = resp.getString("delta")
+                    
+                    val buffer = analysisBuffers.getOrPut(id) { StringBuilder() }
+                    buffer.append(delta)
+                }
+                jsonObject.has("ANALYZE_RESPONSE_DONE") -> {
+                    val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_DONE")
+                    val id = resp.getString("id")
+                    val buffer = analysisBuffers.remove(id)
+                    if (buffer != null) {
+                        saveAnalysisToDb(id, buffer.toString())
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling analysis message", e)
+        }
+    }
+
+    private suspend fun saveAnalysisToDb(hostId: String, jsonString: String) {
+        try {
+            val localScreenshots = screenshotDao.getScreenshotsByHostId(hostId)
+            localScreenshots.forEach { ss ->
+                analysisDao.insertAnalysisResult(
+                    moe.ryoha.remoterg.data.local.entity.AnalysisResultEntity(
+                        localId = ss.localId, 
+                        data = jsonString, 
+                        createdAt = System.currentTimeMillis()
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save analysis result to DB: $e")
+        }
+    }
+
     private suspend fun processFinishedScreenshot() {
         val id = currentId ?: return
         val size = currentSize
         val format = currentFormat
         
-        // Assemble chunks
-        val combined = ByteArray(size)
-        var offset = 0
-        for (chunk in currentChunks) {
-            val length = minOf(chunk.size, size - offset)
-            System.arraycopy(chunk, 0, combined, offset, length)
-            offset += length
-        }
+        val uri = if (size == 0) {
+            val bitmap = pendingLocalBitmap
+            if (bitmap != null) {
+                repository.saveLocalScreenshot(
+                    bitmap = bitmap,
+                    hostId = id,
+                    windowTitle = windowTitle,
+                    processPath = processPath,
+                    processName = processName
+                )
+            } else {
+                Log.e(TAG, "Local screenshot bitmap is missing when receiving size=0 metadata")
+                null
+            }
+        } else {
+            // Assemble chunks
+            val combined = ByteArray(size)
+            var offset = 0
+            for (chunk in currentChunks) {
+                val length = minOf(chunk.size, size - offset)
+                System.arraycopy(chunk, 0, combined, offset, length)
+                offset += length
+            }
 
-        // Save
-        val uri = repository.saveScreenshot(
-            hostId = id,
-            format = format,
-            data = combined,
-            windowTitle = windowTitle,
-            processPath = processPath,
-            processName = processName
-        )
+            // Save
+            repository.saveScreenshot(
+                hostId = id,
+                format = format,
+                data = combined,
+                windowTitle = windowTitle,
+                processPath = processPath,
+                processName = processName
+            )
+        }
 
         // Reset state so it doesn't get saved again on subsequent messages
         currentId = null
         currentSize = 0
         currentReceived = 0
         currentChunks.clear()
+        pendingLocalBitmap = null
 
         if (uri != null) {
             _onScreenshotSaved.emit(uri)
@@ -134,9 +215,9 @@ class ScreenshotProcessor @Inject constructor(
     /**
      * DataChannel に Screenshot リクエストを送信する
      */
-    fun requestScreenshot() {
-        Log.d(TAG, "Sending ScreenshotRequest")
-        val req = "{\"ScreenshotRequest\":null}"
+    fun requestScreenshot(includeImage: Boolean) {
+        Log.d(TAG, "Sending ScreenshotRequest (includeImage=$includeImage)")
+        val req = "{\"ScreenshotRequest\":{\"include_image\":$includeImage}}"
         webRtcManager.sendDataChannelMessage(req)
     }
 

@@ -123,9 +123,9 @@ impl InputService {
                 // info!("Mouse click: ({}, {}) button={}", x, y, button);
                 self.handle_mouse_click(x, y, &button).await?;
             }
-            DataChannelMessage::ScreenshotRequest => {
-                info!("Screenshot requested");
-                self.handle_screenshot_request().await?;
+            DataChannelMessage::ScreenshotRequest { include_image } => {
+                info!("Screenshot requested (include_image: {})", include_image);
+                self.handle_screenshot_request(include_image).await?;
             }
             DataChannelMessage::AnalyzeRequest { id, max_edge } => {
                 info!(
@@ -157,7 +157,7 @@ impl InputService {
         Ok(())
     }
 
-    async fn handle_screenshot_request(&self) -> Result<()> {
+    async fn handle_screenshot_request(&self, include_image: bool) -> Result<()> {
         // 1. Request screenshot from CaptureService
         let (tx, rx) = oneshot::channel::<ScreenshotFrame>();
         self.capture_cmd_tx
@@ -225,7 +225,7 @@ impl InputService {
                 format: "jpeg".to_string(),
                 width,
                 height,
-                size: total_size,
+                size: if include_image { total_size } else { 0 },
                 window_title: window_info.as_ref().map(|i| i.title.clone()),
                 process_path: window_info.as_ref().map(|i| i.process_path.clone()),
                 process_name: window_info.as_ref().map(|i| i.process_name.clone()),
@@ -237,35 +237,88 @@ impl InputService {
             .send(OutgoingDataChannelMessage::Text(metadata))
             .await?;
 
-        // 5. Send Binary Chunks
-        // Chunk size 16KB (WebRTC safe limit is usually higher like 64KB or 256KB, but 16KB is safe)
-        const CHUNK_SIZE: usize = 16 * 1024;
-        let total_chunks = (jpeg_data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        // 5. Send Binary Chunks if requested
+        if include_image {
+            // Chunk size 16KB (WebRTC safe limit is usually higher like 64KB or 256KB, but 16KB is safe)
+            const CHUNK_SIZE: usize = 16 * 1024;
+            let total_chunks = (jpeg_data.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
-        for chunk in jpeg_data.chunks(CHUNK_SIZE) {
-            // We just send raw binary for now as per spec "Meta -> Binary Transfer".
-            // If the client expects just the image stream, we send chunks.
-            // But if we need ordering or ID, we might need a header.
-            // "受信側は ordered: true により順序通りに受信し、メタデータのIDと紐付けて結合する。"
-            // This implies the binary stream is PURELY the image data for that ID.
-            // Since `ordered: true`, we can just blast the bytes.
-            // But wait, what if other messages interleave?
-            // "メタデータ送信直後に画像のバイナリデータを送信する"
-            // If we send other control messages in between, the client might get confused if it blindly concatenates binary messages.
-            // But DataChannelMessage is JSON (text).
-            // Binary messages are distinct type.
-            // If we only send screenshot data as binary, then all binary messages are screenshot chunks.
-            self.outgoing_dc_tx
-                .send(OutgoingDataChannelMessage::Binary(chunk.to_vec()))
-                .await?;
+            for chunk in jpeg_data.chunks(CHUNK_SIZE) {
+                self.outgoing_dc_tx
+                    .send(OutgoingDataChannelMessage::Binary(chunk.to_vec()))
+                    .await?;
+            }
+
+            info!(
+                "Sent screenshot {} ({} bytes, {} chunks)",
+                id,
+                jpeg_data.len(),
+                total_chunks
+            );
+        } else {
+            info!("Sent screenshot metadata only for {}", id);
         }
 
-        info!(
-            "Sent screenshot {} ({} bytes, {} chunks)",
-            id,
-            jpeg_data.len(),
-            total_chunks
-        );
+        // --- Auto AI Analysis Trigger ---
+        let tagger_service = self.tagger_service.clone();
+        let outgoing_tx = self.outgoing_dc_tx.clone();
+        let image_data = jpeg_data;
+        let id_for_task = id.clone();
+        
+        tokio::spawn(async move {
+            info!("Starting background auto AI analysis for {}", id_for_task);
+            
+            // Resize for analysis
+            let image_data_for_analysis = match image::load_from_memory(&image_data) {
+                Ok(img) => {
+                    let w = img.width();
+                    let h = img.height();
+                    let max_edge = 512;
+                    if w > max_edge || h > max_edge {
+                        let resized = img.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3);
+                        let mut resized_data = Vec::new();
+                        let mut cursor = std::io::Cursor::new(&mut resized_data);
+                        if let Ok(_) = resized.write_to(&mut cursor, image::ImageOutputFormat::Png) {
+                            resized_data
+                        } else {
+                            image_data
+                        }
+                    } else {
+                        image_data
+                    }
+                }
+                Err(_) => image_data
+            };
+
+            let mut rx = match tagger_service.analyze_screenshot_stream(&image_data_for_analysis, PROMPT).await {
+                Ok(rx) => rx,
+                Err(e) => {
+                    error!("Auto AI analysis failed for {}: {}", id_for_task, e);
+                    // Optionally send an error chunk if desired, but we can also just silently abort
+                    return;
+                }
+            };
+
+            while let Some(result) = rx.recv().await {
+                match result {
+                    Ok(delta) => {
+                        let response = DataChannelMessage::AnalyzeResponseChunk {
+                            id: id_for_task.clone(),
+                            delta,
+                        };
+                        let _ = outgoing_tx.send(OutgoingDataChannelMessage::Text(response)).await;
+                    }
+                    Err(e) => {
+                        error!("Stream error during auto AI analysis: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            let response = DataChannelMessage::AnalyzeResponseDone { id: id_for_task.clone() };
+            let _ = outgoing_tx.send(OutgoingDataChannelMessage::Text(response)).await;
+            info!("Finished background auto AI analysis for {}", id_for_task);
+        });
 
         Ok(())
     }

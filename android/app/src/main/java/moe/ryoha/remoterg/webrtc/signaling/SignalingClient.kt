@@ -68,35 +68,42 @@ class SignalingClient @Inject constructor() : ISignalingClient {
      */
     override fun connect(url: String, onConnected: (() -> Unit)?) {
         job?.cancel()
-        _webSocketState.value = "Connecting"
-        job = scope.launch {
+        scope.launch {
             try {
-                session = client.webSocketSession(url)
-                _webSocketState.value = "Connected"
-                Log.d(TAG, "シグナリングサーバーに接続しました")
+                session?.close()
+            } catch (e: Exception) {
+                // Ignore close errors
+            }
+            _webSocketState.value = "Connecting"
+            job = scope.launch {
+                try {
+                    session = client.webSocketSession(url)
+                    _webSocketState.value = "Connected"
+                    Log.d(TAG, "シグナリングサーバーに接続しました")
 
-                // WebSocket 接続完了を通知 — ここで Offer 生成等を開始できる
-                onConnected?.invoke()
+                    // WebSocket 接続完了を通知 — ここで Offer 生成等を開始できる
+                    onConnected?.invoke()
 
-                for (frame in session!!.incoming) {
-                    if (frame is Frame.Text) {
-                        val text = frame.readText()
-                        Log.d(TAG, "受信: $text")
-                        try {
-                            val msg = json.decodeFromString<IncomingMessage>(text)
-                            _messages.emit(msg)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "メッセージのパースに失敗", e)
+                    for (frame in session!!.incoming) {
+                        if (frame is Frame.Text) {
+                            val text = frame.readText()
+                            Log.d(TAG, "受信: $text")
+                            try {
+                                val msg = json.decodeFromString<IncomingMessage>(text)
+                                _messages.emit(msg)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "メッセージのパースに失敗", e)
+                            }
                         }
                     }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "WebSocket エラー", e)
-                _webSocketState.value = "Error: ${e.message ?: e.javaClass.simpleName}"
-            } finally {
-                Log.d(TAG, "シグナリングサーバーから切断されました")
-                if (!_webSocketState.value.startsWith("Error")) {
-                    _webSocketState.value = "Disconnected"
+                } catch (e: Exception) {
+                    Log.e(TAG, "WebSocket エラー", e)
+                    _webSocketState.value = "Error: ${e.message ?: e.javaClass.simpleName}"
+                } finally {
+                    Log.d(TAG, "シグナリングサーバーから切断されました")
+                    if (!_webSocketState.value.startsWith("Error")) {
+                        _webSocketState.value = "Disconnected"
+                    }
                 }
             }
         }

@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import moe.ryoha.remoterg.data.repository.ScreenshotRepository
+import moe.ryoha.remoterg.data.repository.GoogleDriveRepository
 import moe.ryoha.remoterg.webrtc.DataChannelMessage
 import moe.ryoha.remoterg.webrtc.IWebRtcManager
 import javax.inject.Inject
@@ -23,7 +24,8 @@ class ScreenshotProcessor @Inject constructor(
     private val webRtcManager: IWebRtcManager,
     private val repository: ScreenshotRepository,
     private val analysisDao: moe.ryoha.remoterg.data.local.dao.AnalysisDao,
-    private val screenshotDao: moe.ryoha.remoterg.data.local.dao.ScreenshotDao
+    private val screenshotDao: moe.ryoha.remoterg.data.local.dao.ScreenshotDao,
+    private val googleDriveRepository: GoogleDriveRepository
 ) {
     private var observeJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -168,13 +170,24 @@ class ScreenshotProcessor @Inject constructor(
         val uri = if (size == 0) {
             val bitmap = pendingLocalBitmap
             if (bitmap != null) {
-                repository.saveLocalScreenshot(
+                val retUri = repository.saveLocalScreenshot(
                     bitmap = bitmap,
                     hostId = id,
                     windowTitle = windowTitle,
                     processPath = processPath,
                     processName = processName
                 )
+                
+                if (googleDriveRepository.isConnected.value) {
+                    val stream = java.io.ByteArrayOutputStream()
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, stream)
+                    val byteArray = stream.toByteArray()
+                    scope.launch {
+                        googleDriveRepository.uploadToDrive(byteArray, "jpeg", windowTitle, processName)
+                    }
+                }
+                
+                retUri
             } else {
                 Log.e(TAG, "Local screenshot bitmap is missing when receiving size=0 metadata")
                 null
@@ -190,7 +203,7 @@ class ScreenshotProcessor @Inject constructor(
             }
 
             // Save
-            repository.saveScreenshot(
+            val retUri = repository.saveScreenshot(
                 hostId = id,
                 format = format,
                 data = combined,
@@ -198,6 +211,14 @@ class ScreenshotProcessor @Inject constructor(
                 processPath = processPath,
                 processName = processName
             )
+            
+            if (googleDriveRepository.isConnected.value) {
+                scope.launch {
+                    googleDriveRepository.uploadToDrive(combined, format, windowTitle, processName)
+                }
+            }
+            
+            retUri
         }
 
         // Reset state so it doesn't get saved again on subsequent messages
@@ -228,6 +249,15 @@ class ScreenshotProcessor @Inject constructor(
         val uri = repository.saveLocalScreenshot(bitmap)
         if (uri != null) {
             _onScreenshotSaved.emit(uri)
+        }
+        
+        if (googleDriveRepository.isConnected.value) {
+            val stream = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, stream)
+            val byteArray = stream.toByteArray()
+            scope.launch {
+                googleDriveRepository.uploadToDrive(byteArray, "jpeg", "Remoterg Local Capture", "moe.ryoha.remoterg")
+            }
         }
     }
 

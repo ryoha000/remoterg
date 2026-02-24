@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.material3.Button
@@ -146,6 +147,13 @@ fun ViewerScreen(
 
     LaunchedEffect(signalingUrl) {
         viewModel.connectToHost(signalingUrl, codec)
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.googleDriveAuthUrlFlow.collect { url ->
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            context.startActivity(intent)
+        }
     }
 
     // オーバーレイの自動非表示（4秒）
@@ -497,9 +505,13 @@ fun ViewerScreen(
     // 詳細設定ダイアログ
     if (overlayState.showDetailedSettings) {
         val useOriginal by viewModel.useOriginalQualityScreenshot.collectAsState()
+        val isDriveConnected by viewModel.isGoogleDriveConnected.collectAsState()
         DetailedSettingsDialog(
             useOriginalQualityScreenshot = useOriginal,
+            isGoogleDriveConnected = isDriveConnected,
             onUseOriginalQualityScreenshotChange = { viewModel.setUseOriginalQualityScreenshot(it) },
+            onConnectGoogleDrive = { viewModel.startGoogleDriveAuth(signalingUrl) },
+            onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
             onDismiss = { overlayState.showDetailedSettings = false }
         )
     }
@@ -1134,7 +1146,10 @@ private fun SettingsPanel(
 @Composable
 private fun DetailedSettingsDialog(
     useOriginalQualityScreenshot: Boolean,
+    isGoogleDriveConnected: Boolean,
     onUseOriginalQualityScreenshotChange: (Boolean) -> Unit,
+    onConnectGoogleDrive: () -> Unit,
+    onDisconnectGoogleDrive: () -> Unit,
     onDismiss: () -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -1201,6 +1216,55 @@ private fun DetailedSettingsDialog(
                         fontSize = 12.sp,
                         lineHeight = 16.sp
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Google Drive 連携設定
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Google Drive連携",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                if (isGoogleDriveConnected) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Connected",
+                            tint = Color(0xFF22C55E), // green-500
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "連携済み",
+                            color = Color.White,
+                            fontSize = 14.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onDisconnectGoogleDrive,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)) // red-600
+                    ) {
+                        Text("連携を解除", color = Color.White)
+                    }
+                } else {
+                    Button(
+                        onClick = onConnectGoogleDrive,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)) // blue-500
+                    ) {
+                        Text("Google Driveと連携", color = Color.White)
+                    }
                 }
             }
 

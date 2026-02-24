@@ -30,12 +30,21 @@ import android.view.KeyEvent
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.content.Intent
+import javax.inject.Inject
+import moe.ryoha.remoterg.data.repository.GoogleDriveRepository
+import android.util.Log
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject lateinit var googleDriveRepository: GoogleDriveRepository
+
     @OptIn(ExperimentalSharedTransitionApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        handleIntent(intent)
+        
         enableEdgeToEdge()
 
         // ハードウェアのボリュームボタンでメディア音量を調整できるようにする
@@ -150,5 +159,21 @@ class MainActivity : ComponentActivity() {
             return true
         }
         return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        intent.data?.let { uri ->
+            if (uri.scheme == "moe.ryoha.remoterg" && uri.toString().contains("oauth2callback")) {
+                val code = uri.getQueryParameter("code")
+                if (code != null) {
+                    googleDriveRepository.authCodeFlow.tryEmit(code)
+                }
+            }
+        }
     }
 }

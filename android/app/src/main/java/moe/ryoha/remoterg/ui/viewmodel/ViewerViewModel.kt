@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import moe.ryoha.remoterg.data.repository.GoogleDriveRepository
 import moe.ryoha.remoterg.data.repository.SettingsRepository
 import moe.ryoha.remoterg.domain.ScreenshotProcessor
 import moe.ryoha.remoterg.webrtc.IWebRtcManager
@@ -34,6 +35,7 @@ class ViewerViewModel @Inject constructor(
     private val signalingClient: ISignalingClient,
     private val screenshotProcessor: ScreenshotProcessor,
     private val settingsRepository: SettingsRepository,
+    private val googleDriveRepository: GoogleDriveRepository,
     private val application: Application
 ) : ViewModel() {
 
@@ -68,12 +70,36 @@ class ViewerViewModel @Inject constructor(
     private val _localScreenshotTriggerFlow = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val localScreenshotTriggerFlow = _localScreenshotTriggerFlow.asSharedFlow()
 
+    val isGoogleDriveConnected: StateFlow<Boolean> = googleDriveRepository.isConnected
+    
+    // Auth URL triggers for screen
+    private val _googleDriveAuthUrlFlow = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val googleDriveAuthUrlFlow = _googleDriveAuthUrlFlow.asSharedFlow()
+
+    // Host session url that we are currently connecting to
+    private var currentSignalingUrl: String? = null
+
     init {
         setupSignaling()
         setupWebRtcCallbacks()
         setupWebSocketStateTracking()
         setupWebRtcStateTracking()
+        setupGoogleDriveAuthTracking()
         screenshotProcessor.startObserving()
+    }
+
+    private fun setupGoogleDriveAuthTracking() {
+        viewModelScope.launch {
+            googleDriveRepository.authCodeFlow.collect { code ->
+                currentSignalingUrl?.let { url ->
+                    try {
+                        googleDriveRepository.exchangeCodeToTokens(url, code)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to exchange Google Drive token", e)
+                    }
+                }
+            }
+        }
     }
 
     private fun setupWebSocketStateTracking() {
@@ -172,6 +198,13 @@ class ViewerViewModel @Inject constructor(
      */
     fun connectToHost(url: String, codec: String = "h264") {
         if (hasAttemptedConnection && _connectionState.value != "Failed" && _connectionState.value != "Disconnected") return
+
+        if (hasAttemptedConnection) {
+            // Clean up previous connection completely
+            Log.d(TAG, "Retrying connection: cleaning up previous state")
+            webRtcManager.close()
+        }
+
         hasAttemptedConnection = true
         _connectionError.value = null
 
@@ -224,6 +257,22 @@ class ViewerViewModel @Inject constructor(
 
     fun setUseOriginalQualityScreenshot(useOriginal: Boolean) {
         settingsRepository.setUseOriginalQualityScreenshot(useOriginal)
+    }
+
+    fun startGoogleDriveAuth(signalingUrl: String) {
+        currentSignalingUrl = signalingUrl
+        viewModelScope.launch {
+            try {
+                val url = googleDriveRepository.fetchAuthUrl(signalingUrl)
+                _googleDriveAuthUrlFlow.tryEmit(url)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get auth URL", e)
+            }
+        }
+    }
+
+    fun disconnectGoogleDrive() {
+        googleDriveRepository.disconnect()
     }
 
     fun sendMouseClick(x: Float, y: Float, button: String = "left") {

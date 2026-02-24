@@ -89,6 +89,9 @@ class WebRtcManager @Inject constructor(
     private var lastBytesReceived = 0L
     private var lastTimestampUs = 0.0
 
+    private var pendingIceCandidates = mutableListOf<IceCandidate>()
+    private var isRemoteDescriptionSet = false
+
     private var preferredCodec: String = "h264"
 
     init {
@@ -218,6 +221,9 @@ class WebRtcManager @Inject constructor(
      */
     override fun createPeerConnection() {
         Log.d(TAG, "PeerConnection を作成中")
+
+        isRemoteDescriptionSet = false
+        pendingIceCandidates.clear()
 
         val rtcConfig = PeerConnection.RTCConfiguration(
             listOf(
@@ -405,6 +411,13 @@ class WebRtcManager @Inject constructor(
         peerConnection?.setRemoteDescription(object : SimpleSdpObserver() {
             override fun onSetSuccess() {
                 Log.d(TAG, "リモートディスクリプション ($type) を設定しました")
+                isRemoteDescriptionSet = true
+                pendingIceCandidates.forEach {
+                    peerConnection?.addIceCandidate(it)
+                }
+                Log.d(TAG, "キューされたリモート ICE Candidate を追加しました (${pendingIceCandidates.size}件)")
+                pendingIceCandidates.clear()
+                
                 if (sdpType == SessionDescription.Type.OFFER) {
                     createAnswer()
                 }
@@ -427,8 +440,13 @@ class WebRtcManager @Inject constructor(
 
     override fun handleIceCandidate(candidate: String, sdpMid: String, sdpMLineIndex: Int) {
         val iceCandidate = IceCandidate(sdpMid, sdpMLineIndex, candidate)
-        peerConnection?.addIceCandidate(iceCandidate)
-        Log.d(TAG, "リモート ICE Candidate を追加しました")
+        if (isRemoteDescriptionSet) {
+            val success = peerConnection?.addIceCandidate(iceCandidate) ?: false
+            Log.d(TAG, "リモート ICE Candidate を追加しました (success=$success)")
+        } else {
+            pendingIceCandidates.add(iceCandidate)
+            Log.d(TAG, "リモート ICE Candidate をキューに追加しました (現在 ${pendingIceCandidates.size} 件)")
+        }
     }
 
     /**
@@ -472,9 +490,12 @@ class WebRtcManager @Inject constructor(
         // factory はシングルトンのため破棄しない（再利用および SIGSEGV 防止）
         // peerConnectionFactory?.dispose()
         
+        
         remoteAudioTrack = null
         _remoteVideoTrack.value = null
         _isConnected.value = false
+        isRemoteDescriptionSet = false
+        pendingIceCandidates.clear()
         Log.d(TAG, "WebRtcManager を閉じました")
     }
 

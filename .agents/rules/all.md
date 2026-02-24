@@ -75,7 +75,6 @@ remoterg/
 │   └── Ui/              # デスクトップ UI (WinUI 3 / C# XAML)
 ├── client/              # フロントエンド (pnpm モノレポ)
 │   ├── apps/web/        #   Web クライアント (TanStack Start)
-│   ├── apps/mobile/     #   モバイルクライアント (React Native) ※Kotlin移行中で状況は kotlin-walkthrough.md に保存
 │   └── packages/        #   共有パッケージ (core, ui, webrtc)
 ├── android/             # Android ネイティブ (Kotlin / Jetpack Compose)
 ├── signaling/           # シグナリングサーバー (Cloudflare Workers)

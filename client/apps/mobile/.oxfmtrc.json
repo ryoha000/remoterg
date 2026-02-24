@@ -1,8 +1,0 @@
-{
-  "$schema": "../../node_modules/oxfmt/configuration_schema.json",
-  "semi": false,
-  "experimentalSortImports": {
-    "enable": true
-  },
-  "ignorePatterns": ["components/ui/*"]
-}

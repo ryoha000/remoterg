@@ -24,7 +24,9 @@ import org.webrtc.VideoTrack
 fun WebRtcVideoRenderer(
     videoTrack: VideoTrack?,
     eglBaseContext: EglBase.Context,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onSurfaceViewCreated: ((SurfaceViewRenderer) -> Unit)? = null,
+    onSurfaceViewDestroyed: ((SurfaceViewRenderer) -> Unit)? = null
 ) {
     val rendererRef = remember { mutableListOf<SurfaceViewRenderer?>(null) }
     // 前回の VideoTrack を追跡し、addSink の重複呼び出しを防止
@@ -38,6 +40,7 @@ fun WebRtcVideoRenderer(
                 setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
                 setEnableHardwareScaler(true)
                 rendererRef[0] = this
+                onSurfaceViewCreated?.invoke(this)
             }
         },
         update = { view ->
@@ -58,6 +61,7 @@ fun WebRtcVideoRenderer(
             try {
                 lastTrackRef[0]?.removeSink(view)
             } catch (_: Exception) {}
+            onSurfaceViewDestroyed?.invoke(view)
             view.release()
         },
         modifier = modifier.wrapContentSize(Alignment.Center)

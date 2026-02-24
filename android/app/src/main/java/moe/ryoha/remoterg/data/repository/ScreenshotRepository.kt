@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import moe.ryoha.remoterg.data.local.dao.ScreenshotDao
 import moe.ryoha.remoterg.data.local.entity.ScreenshotMapEntity
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import javax.inject.Inject
@@ -177,6 +178,22 @@ class ScreenshotRepository @Inject constructor(
             Log.e(TAG, "Error saving screenshot", e)
             return@withContext null
         }
+    }
+
+    suspend fun saveLocalScreenshot(bitmap: Bitmap): Uri? = withContext(Dispatchers.IO) {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream)
+        val data = stream.toByteArray()
+        val hostId = "local_${System.currentTimeMillis()}"
+
+        saveScreenshot(
+            hostId = hostId,
+            format = "jpeg",
+            data = data,
+            windowTitle = "Client Screenshot",
+            processPath = "remoterg/client",
+            processName = "Android Client"
+        )
     }
 
     /**

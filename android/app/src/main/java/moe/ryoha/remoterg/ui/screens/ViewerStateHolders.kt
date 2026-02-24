@@ -36,6 +36,7 @@ class OverlayState {
         private set
     var showDebug by mutableStateOf(false)
     var showSettings by mutableStateOf(false)
+    var showDetailedSettings by mutableStateOf(false)
     var showConnectionDetails by mutableStateOf(false)
     var audioVolume by mutableFloatStateOf(1f)
 

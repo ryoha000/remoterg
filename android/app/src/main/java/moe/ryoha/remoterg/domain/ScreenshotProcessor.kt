@@ -140,6 +140,16 @@ class ScreenshotProcessor @Inject constructor(
         webRtcManager.sendDataChannelMessage(req)
     }
 
+    /**
+     * クライアント側でキャプチャしたスクリーンショットを保存する
+     */
+    suspend fun saveLocalScreenshot(bitmap: android.graphics.Bitmap) {
+        val uri = repository.saveLocalScreenshot(bitmap)
+        if (uri != null) {
+            _onScreenshotSaved.emit(uri)
+        }
+    }
+
     companion object {
         private const val TAG = "ScreenshotProcessor"
     }

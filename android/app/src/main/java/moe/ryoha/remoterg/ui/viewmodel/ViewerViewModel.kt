@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import moe.ryoha.remoterg.data.repository.SettingsRepository
 import moe.ryoha.remoterg.domain.ScreenshotProcessor
 import moe.ryoha.remoterg.webrtc.IWebRtcManager
 import moe.ryoha.remoterg.webrtc.WebRtcStats
@@ -32,6 +33,7 @@ class ViewerViewModel @Inject constructor(
     private val webRtcManager: IWebRtcManager,
     private val signalingClient: ISignalingClient,
     private val screenshotProcessor: ScreenshotProcessor,
+    private val settingsRepository: SettingsRepository,
     private val application: Application
 ) : ViewModel() {
 
@@ -53,6 +55,8 @@ class ViewerViewModel @Inject constructor(
     val eglBaseContext: EglBase.Context get() = webRtcManager.eglBaseContext
     val webSocketState: StateFlow<String> = signalingClient.webSocketState
 
+    val useOriginalQualityScreenshot: StateFlow<Boolean> = settingsRepository.useOriginalQualityScreenshot
+
     private val _connectionError = MutableStateFlow<String?>(null)
     val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
 
@@ -60,6 +64,9 @@ class ViewerViewModel @Inject constructor(
 
     private val _screenshotTriggerFlow = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val screenshotTriggerFlow = _screenshotTriggerFlow.asSharedFlow()
+
+    private val _localScreenshotTriggerFlow = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val localScreenshotTriggerFlow = _localScreenshotTriggerFlow.asSharedFlow()
 
     init {
         setupSignaling()
@@ -194,8 +201,18 @@ class ViewerViewModel @Inject constructor(
     }
 
     fun takeScreenshot() {
-        screenshotProcessor.requestScreenshot()
-        _screenshotTriggerFlow.tryEmit(Unit)
+        if (useOriginalQualityScreenshot.value) {
+            screenshotProcessor.requestScreenshot()
+            _screenshotTriggerFlow.tryEmit(Unit)
+        } else {
+            _localScreenshotTriggerFlow.tryEmit(Unit)
+        }
+    }
+
+    fun saveLocalScreenshot(bitmap: android.graphics.Bitmap) {
+        viewModelScope.launch {
+            screenshotProcessor.saveLocalScreenshot(bitmap)
+        }
     }
 
     /**
@@ -203,6 +220,10 @@ class ViewerViewModel @Inject constructor(
      */
     fun setAudioVolume(volume: Double) {
         webRtcManager.setAudioVolume(volume)
+    }
+
+    fun setUseOriginalQualityScreenshot(useOriginal: Boolean) {
+        settingsRepository.setUseOriginalQualityScreenshot(useOriginal)
     }
 
     fun sendMouseClick(x: Float, y: Float, button: String = "left") {

@@ -56,6 +56,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -140,6 +141,9 @@ fun ViewerScreen(
     // ジェスチャー中の最大ポインター数をトラッキングして右クリック判定に使用
     val maxPointers = remember { intArrayOf(1) }
 
+    // SurfaceViewRendererの参照を保持（ローカルスクリーンショット用）
+    var surfaceViewRenderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
+
     LaunchedEffect(signalingUrl) {
         viewModel.connectToHost(signalingUrl, codec)
     }
@@ -149,6 +153,31 @@ fun ViewerScreen(
         if (overlayState.showOverlay && isConnected) {
             delay(4000)
             overlayState.hideOverlay()
+        }
+    }
+
+    // ローカルキャプチャのトリガ処理
+    LaunchedEffect(Unit) {
+        viewModel.localScreenshotTriggerFlow.collect {
+            val svr = surfaceViewRenderer
+            if (svr != null) {
+                val listener = object : org.webrtc.EglRenderer.FrameListener {
+                    override fun onFrame(frameBitmap: Bitmap) {
+                        // コールバックは一度だけ受け取る。EglRenderer スレッド以外で removeFrameListener を呼ぶ必要がある
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            try {
+                                svr.removeFrameListener(this)
+                            } catch (e: Exception) {
+                                // Ignore
+                            }
+                        }
+                        // ViewModel 経由で保存 (ViewModel 側で IO スレッド等に切り替えて処理)
+                        viewModel.saveLocalScreenshot(frameBitmap)
+                    }
+                }
+                // scale = 1.0f を指定することで、ビデオストリーム本来の解像度で Bitmap を取得できる
+                svr.addFrameListener(listener, 1.0f)
+            }
         }
     }
 
@@ -305,7 +334,9 @@ fun ViewerScreen(
                 WebRtcVideoRenderer(
                     videoTrack = videoTrack,
                     eglBaseContext = viewModel.eglBaseContext,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    onSurfaceViewCreated = { surfaceViewRenderer = it },
+                    onSurfaceViewDestroyed = { if (surfaceViewRenderer == it) surfaceViewRenderer = null }
                 )
             } else if (connectionState == "Disconnected") {
                 // 何も表示しない（画面遷移中のため）
@@ -428,6 +459,11 @@ fun ViewerScreen(
                         overlayState.onInteraction()
                         overlayState.showSettings = false
                     },
+                    onShowDetailedSettings = {
+                        overlayState.showDetailedSettings = true
+                        overlayState.onInteraction()
+                        overlayState.showSettings = false
+                    },
                     onDisconnect = {
                         viewModel.disconnect()
                         onNavigateBack()
@@ -455,6 +491,16 @@ fun ViewerScreen(
         ScreenshotFlash(
             screenshotTriggerFlow = viewModel.screenshotTriggerFlow,
             screenshotSavedFlow = viewModel.screenshotSavedFlow
+        )
+    }
+
+    // 詳細設定ダイアログ
+    if (overlayState.showDetailedSettings) {
+        val useOriginal by viewModel.useOriginalQualityScreenshot.collectAsState()
+        DetailedSettingsDialog(
+            useOriginalQualityScreenshot = useOriginal,
+            onUseOriginalQualityScreenshotChange = { viewModel.setUseOriginalQualityScreenshot(it) },
+            onDismiss = { overlayState.showDetailedSettings = false }
         )
     }
 
@@ -920,6 +966,7 @@ private fun SettingsPanel(
     showDebug: Boolean,
     onToggleDebug: (Boolean) -> Unit,
     onShowConnectionDetails: () -> Unit,
+    onShowDetailedSettings: () -> Unit,
     onDisconnect: () -> Unit
 ) {
     Column(
@@ -1023,7 +1070,7 @@ private fun SettingsPanel(
 
         Button(
             onClick = onShowConnectionDetails,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
             shape = RoundedCornerShape(8.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = Color(0xFF3F3F46) // zinc-700
@@ -1031,6 +1078,21 @@ private fun SettingsPanel(
         ) {
             Text(
                 text = "詳細情報を確認する",
+                color = Color.White,
+                fontSize = 12.sp
+            )
+        }
+
+        Button(
+            onClick = onShowDetailedSettings,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF3F3F46) // zinc-700
+            )
+        ) {
+            Text(
+                text = "詳細設定を開く",
                 color = Color.White,
                 fontSize = 12.sp
             )
@@ -1061,6 +1123,95 @@ private fun SettingsPanel(
                     color = Color.White,
                     fontSize = 12.sp
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 詳細設定ダイアログ
+ */
+@Composable
+private fun DetailedSettingsDialog(
+    useOriginalQualityScreenshot: Boolean,
+    onUseOriginalQualityScreenshotChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(320.dp)
+                .background(Color(0xFF18181B), RoundedCornerShape(12.dp))
+                .border(1.dp, Color(0xFF27272A), RoundedCornerShape(12.dp))
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "詳細設定",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            // スクリーンショット設定
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "オリジナル画質で保存",
+                        color = Color.White,
+                        fontSize = 14.sp
+                    )
+                    Switch(
+                        checked = useOriginalQualityScreenshot,
+                        onCheckedChange = onUseOriginalQualityScreenshotChange,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFF3B82F6),
+                            uncheckedThumbColor = Color(0xFFA1A1AA),
+                            uncheckedTrackColor = Color(0xFF3F3F46),
+                            uncheckedBorderColor = Color.Transparent
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ErrorOutline,
+                        contentDescription = "Info",
+                        tint = Color(0xFF60A5FA), // blue-400
+                        modifier = Modifier.size(16.dp).padding(top = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (useOriginalQualityScreenshot) {
+                            "Host PC側からオリジナル画質のスクリーンショットを取得します。画質は良いですが、取得まで時間がかかる場合があります。"
+                        } else {
+                            "現在画面に表示されている映像を即時に保存します。画質は少し劣りますが、瞬時に保存できます。"
+                        },
+                        color = Color(0xFFA1A1AA), // zinc-400
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F3F46))
+            ) {
+                Text("閉じる", color = Color.White)
             }
         }
     }

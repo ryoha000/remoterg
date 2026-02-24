@@ -68,6 +68,7 @@ class ViewerViewModelTest {
         override fun setAudioVolume(volume: Double) { lastVolume = volume }
         override fun sendDataChannelMessage(message: String) {}
         override fun sendMouseClick(x: Float, y: Float, button: String) {}
+        override fun sendKeyEvent(key: String, down: Boolean) {}
         override fun close() { closeCalled = true }
     }
 
@@ -102,11 +103,20 @@ class ViewerViewModelTest {
         val mockApp = mockk<Application>(relaxed = true)
         every { mockApp.applicationContext } returns mockk<Context>(relaxed = true)
         val mockProcessor = mockk<ScreenshotProcessor>(relaxed = true)
+        
+        val mockSettings = mockk<moe.ryoha.remoterg.data.repository.SettingsRepository>(relaxed = true)
+        every { mockSettings.useOriginalQualityScreenshot } returns MutableStateFlow(false)
+        
+        val mockDrive = mockk<moe.ryoha.remoterg.data.repository.GoogleDriveRepository>(relaxed = true)
+        every { mockDrive.isConnected } returns MutableStateFlow(false)
+        every { mockDrive.authCodeFlow } returns MutableSharedFlow()
 
         viewModel = ViewerViewModel(
             webRtcManager = fakeWebRtcManager,
             signalingClient = fakeSignalingClient,
             screenshotProcessor = mockProcessor,
+            settingsRepository = mockSettings,
+            googleDriveRepository = mockDrive,
             application = mockApp
         )
     }

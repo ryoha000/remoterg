@@ -68,20 +68,23 @@ class SignalingClient @Inject constructor() : ISignalingClient {
      */
     override fun connect(url: String, onConnected: (() -> Unit)?) {
         job?.cancel()
-        scope.launch {
+        
+        job = scope.launch {
             try {
                 session?.close()
             } catch (e: Exception) {
                 // Ignore close errors
             }
-            _webSocketState.value = "Connecting"
-            job = scope.launch {
-                try {
-                    session = client.webSocketSession(url)
-                    _webSocketState.value = "Connected"
-                    Log.d(TAG, "シグナリングサーバーに接続しました")
+            session = null
 
-                    // WebSocket 接続完了を通知 — ここで Offer 生成等を開始できる
+            _webSocketState.value = "Connecting"
+            
+            try {
+                session = client.webSocketSession(url)
+                _webSocketState.value = "Connected"
+                Log.d(TAG, "シグナリングサーバーに接続しました")
+
+                // WebSocket 接続完了を通知 — ここで Offer 生成等を開始できる
                     onConnected?.invoke()
 
                     for (frame in session!!.incoming) {
@@ -107,7 +110,6 @@ class SignalingClient @Inject constructor() : ISignalingClient {
                 }
             }
         }
-    }
 
     /** Offer SDP を送信する（指定された codec を付与） */
     override fun sendOffer(sdp: String, codec: String) {

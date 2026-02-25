@@ -270,48 +270,45 @@ fun ViewerScreen(
                         
                         var isInsideVideoBounds = false
 
-                        if (isTrackpadModeEnabled) {
-                            if (!isInHeaderArea && !overlayState.showSettings) {
-                                val button = if (maxPointers[0] >= 2) "right" else "left"
-                                viewModel.sendCursorClick(button)
+                        if (videoWidth > 0f && videoHeight > 0f && containerWidth > 0f && containerHeight > 0f) {
+                            val videoRatio = videoWidth / videoHeight
+                            val containerRatio = containerWidth / containerHeight
+                            
+                            var drawWidth = containerWidth
+                            var drawHeight = containerHeight
+                            var startX = 0f
+                            var startY = 0f
+                            
+                            if (containerRatio > videoRatio) {
+                                drawWidth = containerHeight * videoRatio
+                                startX = (containerWidth - drawWidth) / 2f
+                            } else {
+                                drawHeight = containerWidth / videoRatio
+                                startY = (containerHeight - drawHeight) / 2f
                             }
-                        } else {
-                            if (videoWidth > 0f && videoHeight > 0f && containerWidth > 0f && containerHeight > 0f) {
-                                val videoRatio = videoWidth / videoHeight
-                                val containerRatio = containerWidth / containerHeight
-                                
-                                var drawWidth = containerWidth
-                                var drawHeight = containerHeight
-                                var startX = 0f
-                                var startY = 0f
-                                
-                                if (containerRatio > videoRatio) {
-                                    drawWidth = containerHeight * videoRatio
-                                    startX = (containerWidth - drawWidth) / 2f
-                                } else {
-                                    drawHeight = containerWidth / videoRatio
-                                    startY = (containerHeight - drawHeight) / 2f
-                                }
-                                
-                                val scale = zoomPanState.scale
-                                val panX = zoomPanState.offset.x
-                                val panY = zoomPanState.offset.y
-                                val centerX = containerWidth / 2f
-                                val centerY = containerHeight / 2f
-                                
-                                val originalX = (offset.x - centerX - panX) / scale + centerX
-                                val originalY = (offset.y - centerY - panY) / scale + centerY
-                                
-                                val relativeX = originalX - startX
-                                val relativeY = originalY - startY
-                                
-                                if (relativeX in 0f..drawWidth && relativeY in 0f..drawHeight) {
-                                    isInsideVideoBounds = true
-                                    // ヘッダー領域でなければクリックイベントを送信
-                                    if (!isInHeaderArea) {
+                            
+                            val scale = zoomPanState.scale
+                            val panX = zoomPanState.offset.x
+                            val panY = zoomPanState.offset.y
+                            val centerX = containerWidth / 2f
+                            val centerY = containerHeight / 2f
+                            
+                            val originalX = (offset.x - centerX - panX) / scale + centerX
+                            val originalY = (offset.y - centerY - panY) / scale + centerY
+                            
+                            val relativeX = originalX - startX
+                            val relativeY = originalY - startY
+                            
+                            if (relativeX in 0f..drawWidth && relativeY in 0f..drawHeight) {
+                                isInsideVideoBounds = true
+                                // ヘッダー領域でなければクリックイベントを送信
+                                if (!isInHeaderArea) {
+                                    val button = if (maxPointers[0] >= 2) "right" else "left"
+                                    if (isTrackpadModeEnabled) {
+                                        viewModel.sendCursorClick(button)
+                                    } else {
                                         val normalizedX = relativeX / drawWidth
                                         val normalizedY = relativeY / drawHeight
-                                        val button = if (maxPointers[0] >= 2) "right" else "left"
                                         viewModel.sendMouseClick(normalizedX, normalizedY, button)
                                     }
                                 }
@@ -749,7 +746,6 @@ private fun TopBar(
                 OverlayIconButton(
                     icon = if (isTrackpadModeEnabled) Icons.Default.Mouse else Icons.Default.TouchApp,
                     contentDescription = "入力モード切替",
-                    isActive = isTrackpadModeEnabled,
                     onClick = onToggleTrackpadMode
                 )
                 // ギャラリーボタン

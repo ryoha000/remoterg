@@ -58,6 +58,7 @@ class ViewerViewModel @Inject constructor(
     val webSocketState: StateFlow<String> = signalingClient.webSocketState
 
     val useOriginalQualityScreenshot: StateFlow<Boolean> = settingsRepository.useOriginalQualityScreenshot
+    val isShiftButtonEnabled: StateFlow<Boolean> = settingsRepository.isShiftButtonEnabled
 
     private val _connectionError = MutableStateFlow<String?>(null)
     val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
@@ -257,6 +258,10 @@ class ViewerViewModel @Inject constructor(
 
     fun setUseOriginalQualityScreenshot(useOriginal: Boolean) {
         settingsRepository.setUseOriginalQualityScreenshot(useOriginal)
+    }
+
+    fun setShiftButtonEnabled(enabled: Boolean) {
+        settingsRepository.setShiftButtonEnabled(enabled)
     }
 
     fun startGoogleDriveAuth(signalingUrl: String) {

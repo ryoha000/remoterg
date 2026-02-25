@@ -479,7 +479,7 @@ fun ViewerScreen(
                 )
             }
 
-            // Ctrl Button (右下)
+            // Ctrl / Shift Button (右下)
             AnimatedVisibility(
                 visible = overlayState.showOverlay,
                 enter = fadeIn(),
@@ -488,9 +488,14 @@ fun ViewerScreen(
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 16.dp)
             ) {
+                val isShift by viewModel.isShiftButtonEnabled.collectAsState()
                 CtrlButton(
+                    isShift = isShift,
                     onInteraction = { overlayState.onInteraction() },
-                    onKeyEvent = { down -> viewModel.sendKeyEvent("Control", down) }
+                    onKeyEvent = { down -> 
+                        val key = if (isShift) "Shift" else "Control"
+                        viewModel.sendKeyEvent(key, down) 
+                    }
                 )
             }
         }
@@ -506,12 +511,15 @@ fun ViewerScreen(
     if (overlayState.showDetailedSettings) {
         val useOriginal by viewModel.useOriginalQualityScreenshot.collectAsState()
         val isDriveConnected by viewModel.isGoogleDriveConnected.collectAsState()
+        val isShiftButtonEnabled by viewModel.isShiftButtonEnabled.collectAsState()
         DetailedSettingsDialog(
             useOriginalQualityScreenshot = useOriginal,
             isGoogleDriveConnected = isDriveConnected,
+            isShiftButtonEnabled = isShiftButtonEnabled,
             onUseOriginalQualityScreenshotChange = { viewModel.setUseOriginalQualityScreenshot(it) },
             onConnectGoogleDrive = { viewModel.startGoogleDriveAuth(signalingUrl) },
             onDisconnectGoogleDrive = { viewModel.disconnectGoogleDrive() },
+            onShiftButtonEnabledChange = { viewModel.setShiftButtonEnabled(it) },
             onDismiss = { overlayState.showDetailedSettings = false }
         )
     }
@@ -758,6 +766,7 @@ private fun OverlayIconButton(
  */
 @Composable
 private fun CtrlButton(
+    isShift: Boolean = false,
     onInteraction: () -> Unit,
     onKeyEvent: (Boolean) -> Unit
 ) {
@@ -831,12 +840,12 @@ private fun CtrlButton(
         ) {
             Icon(
                 imageVector = Icons.Default.Keyboard,
-                contentDescription = "Ctrl Key",
+                contentDescription = if (isShift) "Shift Key" else "Ctrl Key",
                 tint = if (isPressed) Color.White else Color.White.copy(alpha = 0.8f),
                 modifier = Modifier.size(24.dp)
             )
             Text(
-                text = "CTRL",
+                text = if (isShift) "SHIFT" else "CTRL",
                 color = if (isPressed) Color.White else Color.White.copy(alpha = 0.8f),
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 10.sp,
@@ -1149,9 +1158,11 @@ private fun SettingsPanel(
 private fun DetailedSettingsDialog(
     useOriginalQualityScreenshot: Boolean,
     isGoogleDriveConnected: Boolean,
+    isShiftButtonEnabled: Boolean,
     onUseOriginalQualityScreenshotChange: (Boolean) -> Unit,
     onConnectGoogleDrive: () -> Unit,
     onDisconnectGoogleDrive: () -> Unit,
+    onShiftButtonEnabledChange: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -1214,6 +1225,55 @@ private fun DetailedSettingsDialog(
                         } else {
                             "現在画面に表示されている映像を即時に保存します。画質は少し劣りますが、瞬時に保存できます。"
                         },
+                        color = Color(0xFFA1A1AA), // zinc-400
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // キー割り当て設定
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "修飾キーの切り替え (Ctrl / Shift)",
+                        color = Color.White,
+                        fontSize = 14.sp
+                    )
+                    Switch(
+                        checked = isShiftButtonEnabled,
+                        onCheckedChange = onShiftButtonEnabledChange,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFF3B82F6),
+                            uncheckedThumbColor = Color(0xFFA1A1AA),
+                            uncheckedTrackColor = Color(0xFF3F3F46),
+                            uncheckedBorderColor = Color.Transparent
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ErrorOutline,
+                        contentDescription = "Info",
+                        tint = Color(0xFF60A5FA), // blue-400
+                        modifier = Modifier.size(16.dp).padding(top = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "オンにすると、画面右下のボタンがShiftキーとして動作します。",
                         color = Color(0xFFA1A1AA), // zinc-400
                         fontSize = 12.sp,
                         lineHeight = 16.sp

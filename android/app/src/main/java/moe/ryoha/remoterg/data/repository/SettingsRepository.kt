@@ -25,8 +25,19 @@ class SettingsRepository @Inject constructor(
         _useOriginalQualityScreenshot.value = useOriginal
     }
 
+    private val _isShiftButtonEnabled = MutableStateFlow(
+        prefs.getBoolean(KEY_IS_SHIFT_BUTTON_ENABLED, false)
+    )
+    val isShiftButtonEnabled: StateFlow<Boolean> = _isShiftButtonEnabled.asStateFlow()
+
+    fun setShiftButtonEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_IS_SHIFT_BUTTON_ENABLED, enabled).apply()
+        _isShiftButtonEnabled.value = enabled
+    }
+
     companion object {
         private const val PREFS_NAME = "remoterg_settings"
         private const val KEY_USE_ORIGINAL_QUALITY_SCREENSHOT = "use_original_quality_screenshot"
+        private const val KEY_IS_SHIFT_BUTTON_ENABLED = "is_shift_button_enabled"
     }
 }

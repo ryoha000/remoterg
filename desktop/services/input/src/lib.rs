@@ -123,6 +123,12 @@ impl InputService {
                 // info!("Mouse click: ({}, {}) button={}", x, y, button);
                 self.handle_mouse_click(x, y, &button).await?;
             }
+            DataChannelMessage::CursorMove { dx, dy } => {
+                self.handle_cursor_move(dx, dy).await?;
+            }
+            DataChannelMessage::CursorClick { button } => {
+                self.handle_cursor_click(&button).await?;
+            }
             DataChannelMessage::ScreenshotRequest { include_image } => {
                 info!("Screenshot requested (include_image: {})", include_image);
                 self.handle_screenshot_request(include_image).await?;
@@ -548,6 +554,71 @@ impl InputService {
                         dwFlags: MOUSEEVENTF_ABSOLUTE
                             | up_flag
                             | MOUSEEVENTF_VIRTUALDESK,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+
+        unsafe {
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        }
+
+        Ok(())
+    }
+
+    async fn handle_cursor_move(&self, dx: i32, dy: i32) -> Result<()> {
+        let inputs = [INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: 0,
+                    dwFlags: MOUSEEVENTF_MOVE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        }];
+
+        unsafe {
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        }
+
+        Ok(())
+    }
+
+    async fn handle_cursor_click(&self, button: &str) -> Result<()> {
+        let (down_flag, up_flag) = match button.to_lowercase().as_str() {
+            "right" => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+            "middle" => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+            _ => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+        };
+
+        let inputs = [
+            INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: 0,
+                        dy: 0,
+                        mouseData: 0,
+                        dwFlags: down_flag,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: 0,
+                        dy: 0,
+                        mouseData: 0,
+                        dwFlags: up_flag,
                         time: 0,
                         dwExtraInfo: 0,
                     },

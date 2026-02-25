@@ -35,9 +35,20 @@ class SettingsRepository @Inject constructor(
         _isShiftButtonEnabled.value = enabled
     }
 
+    private val _isTrackpadModeEnabled = MutableStateFlow(
+        prefs.getBoolean(KEY_IS_TRACKPAD_MODE_ENABLED, false)
+    )
+    val isTrackpadModeEnabled: StateFlow<Boolean> = _isTrackpadModeEnabled.asStateFlow()
+
+    fun setTrackpadModeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_IS_TRACKPAD_MODE_ENABLED, enabled).apply()
+        _isTrackpadModeEnabled.value = enabled
+    }
+
     companion object {
         private const val PREFS_NAME = "remoterg_settings"
         private const val KEY_USE_ORIGINAL_QUALITY_SCREENSHOT = "use_original_quality_screenshot"
         private const val KEY_IS_SHIFT_BUTTON_ENABLED = "is_shift_button_enabled"
+        private const val KEY_IS_TRACKPAD_MODE_ENABLED = "is_trackpad_mode_enabled"
     }
 }

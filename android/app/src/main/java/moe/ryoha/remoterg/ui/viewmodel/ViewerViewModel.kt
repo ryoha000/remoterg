@@ -59,6 +59,7 @@ class ViewerViewModel @Inject constructor(
 
     val useOriginalQualityScreenshot: StateFlow<Boolean> = settingsRepository.useOriginalQualityScreenshot
     val isShiftButtonEnabled: StateFlow<Boolean> = settingsRepository.isShiftButtonEnabled
+    val isTrackpadModeEnabled: StateFlow<Boolean> = settingsRepository.isTrackpadModeEnabled
 
     private val _connectionError = MutableStateFlow<String?>(null)
     val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
@@ -264,6 +265,10 @@ class ViewerViewModel @Inject constructor(
         settingsRepository.setShiftButtonEnabled(enabled)
     }
 
+    fun setTrackpadModeEnabled(enabled: Boolean) {
+        settingsRepository.setTrackpadModeEnabled(enabled)
+    }
+
     fun startGoogleDriveAuth(signalingUrl: String) {
         currentSignalingUrl = signalingUrl
         viewModelScope.launch {
@@ -282,6 +287,14 @@ class ViewerViewModel @Inject constructor(
 
     fun sendMouseClick(x: Float, y: Float, button: String = "left") {
         webRtcManager.sendMouseClick(x, y, button)
+    }
+
+    fun sendCursorMove(dx: Int, dy: Int) {
+        webRtcManager.sendCursorMove(dx, dy)
+    }
+
+    fun sendCursorClick(button: String = "left") {
+        webRtcManager.sendCursorClick(button)
     }
 
     /**

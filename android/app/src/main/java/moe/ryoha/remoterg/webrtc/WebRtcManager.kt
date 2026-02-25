@@ -476,6 +476,23 @@ class WebRtcManager @Inject constructor(
         }
     }
 
+    override fun sendCursorMove(dx: Int, dy: Int) {
+        if (dataChannel?.state() == DataChannel.State.OPEN) {
+            val jsonMessage = """{"CursorMove": {"dx": $dx, "dy": $dy}}"""
+            sendDataChannelMessage(jsonMessage)
+        }
+    }
+
+    override fun sendCursorClick(button: String) {
+        if (dataChannel?.state() == DataChannel.State.OPEN) {
+            val jsonMessage = """{"CursorClick": {"button": "$button"}}"""
+            sendDataChannelMessage(jsonMessage)
+            Log.d(TAG, "カーソルクリック送信: $jsonMessage")
+        } else {
+            Log.w(TAG, "カーソルクリック送信失敗: DataChannel が開いていません")
+        }
+    }
+
     override fun sendKeyEvent(key: String, down: Boolean) {
         if (dataChannel?.state() == DataChannel.State.OPEN) {
             val jsonMessage = """{"Key": {"key": "$key", "down": $down}}"""

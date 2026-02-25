@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,6 +45,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Mouse
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -142,6 +145,8 @@ fun ViewerScreen(
     // ジェスチャー中の最大ポインター数をトラッキングして右クリック判定に使用
     val maxPointers = remember { intArrayOf(1) }
 
+    val isTrackpadModeEnabled by viewModel.isTrackpadModeEnabled.collectAsState()
+
     // SurfaceViewRendererの参照を保持（ローカルスクリーンショット用）
     var surfaceViewRenderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
 
@@ -209,10 +214,34 @@ fun ViewerScreen(
                     }
                 }
             }
-            // ピンチズーム & パン ジェスチャー
-            .pointerInput(Unit) {
+            // ジェスチャー処理 (Touch / Trackpad 共通)
+            .pointerInput(isTrackpadModeEnabled) {
+                var accumulatedPanX = 0f
+                var accumulatedPanY = 0f
+                
                 detectTransformGestures { _, pan, zoom, _ ->
-                    zoomPanState.onTransform(pan, zoom, coroutineScope)
+                    if (isTrackpadModeEnabled) {
+                        // トラックパッドモード: ズームはそのまま、パンはカーソル移動として処理
+                        zoomPanState.onTransform(androidx.compose.ui.geometry.Offset.Zero, zoom, coroutineScope)
+                        if (!overlayState.showSettings && pan != androidx.compose.ui.geometry.Offset.Zero) {
+                            // カーソル感度調整 (タッチスクリーンの移動量を1.5倍に拡張)
+                            val sensitivity = 1.5f
+                            accumulatedPanX += pan.x * sensitivity
+                            accumulatedPanY += pan.y * sensitivity
+                            
+                            val dxInt = accumulatedPanX.toInt()
+                            val dyInt = accumulatedPanY.toInt()
+                            
+                            if (dxInt != 0 || dyInt != 0) {
+                                viewModel.sendCursorMove(dxInt, dyInt)
+                                accumulatedPanX -= dxInt
+                                accumulatedPanY -= dyInt
+                            }
+                        }
+                    } else {
+                        // タッチモード: 通常のパン＆ズーム
+                        zoomPanState.onTransform(pan, zoom, coroutineScope)
+                    }
                 }
             }
             // シングルタップ & ダブルタップ ジェスチャー
@@ -241,43 +270,50 @@ fun ViewerScreen(
                         
                         var isInsideVideoBounds = false
 
-                        if (videoWidth > 0f && videoHeight > 0f && containerWidth > 0f && containerHeight > 0f) {
-                            val videoRatio = videoWidth / videoHeight
-                            val containerRatio = containerWidth / containerHeight
-                            
-                            var drawWidth = containerWidth
-                            var drawHeight = containerHeight
-                            var startX = 0f
-                            var startY = 0f
-                            
-                            if (containerRatio > videoRatio) {
-                                drawWidth = containerHeight * videoRatio
-                                startX = (containerWidth - drawWidth) / 2f
-                            } else {
-                                drawHeight = containerWidth / videoRatio
-                                startY = (containerHeight - drawHeight) / 2f
+                        if (isTrackpadModeEnabled) {
+                            if (!isInHeaderArea && !overlayState.showSettings) {
+                                val button = if (maxPointers[0] >= 2) "right" else "left"
+                                viewModel.sendCursorClick(button)
                             }
-                            
-                            val scale = zoomPanState.scale
-                            val panX = zoomPanState.offset.x
-                            val panY = zoomPanState.offset.y
-                            val centerX = containerWidth / 2f
-                            val centerY = containerHeight / 2f
-                            
-                            val originalX = (offset.x - centerX - panX) / scale + centerX
-                            val originalY = (offset.y - centerY - panY) / scale + centerY
-                            
-                            val relativeX = originalX - startX
-                            val relativeY = originalY - startY
-                            
-                            if (relativeX in 0f..drawWidth && relativeY in 0f..drawHeight) {
-                                isInsideVideoBounds = true
-                                // ヘッダー領域でなければクリックイベントを送信
-                                if (!isInHeaderArea) {
-                                    val normalizedX = relativeX / drawWidth
-                                    val normalizedY = relativeY / drawHeight
-                                    val button = if (maxPointers[0] >= 2) "right" else "left"
-                                    viewModel.sendMouseClick(normalizedX, normalizedY, button)
+                        } else {
+                            if (videoWidth > 0f && videoHeight > 0f && containerWidth > 0f && containerHeight > 0f) {
+                                val videoRatio = videoWidth / videoHeight
+                                val containerRatio = containerWidth / containerHeight
+                                
+                                var drawWidth = containerWidth
+                                var drawHeight = containerHeight
+                                var startX = 0f
+                                var startY = 0f
+                                
+                                if (containerRatio > videoRatio) {
+                                    drawWidth = containerHeight * videoRatio
+                                    startX = (containerWidth - drawWidth) / 2f
+                                } else {
+                                    drawHeight = containerWidth / videoRatio
+                                    startY = (containerHeight - drawHeight) / 2f
+                                }
+                                
+                                val scale = zoomPanState.scale
+                                val panX = zoomPanState.offset.x
+                                val panY = zoomPanState.offset.y
+                                val centerX = containerWidth / 2f
+                                val centerY = containerHeight / 2f
+                                
+                                val originalX = (offset.x - centerX - panX) / scale + centerX
+                                val originalY = (offset.y - centerY - panY) / scale + centerY
+                                
+                                val relativeX = originalX - startX
+                                val relativeY = originalY - startY
+                                
+                                if (relativeX in 0f..drawWidth && relativeY in 0f..drawHeight) {
+                                    isInsideVideoBounds = true
+                                    // ヘッダー領域でなければクリックイベントを送信
+                                    if (!isInHeaderArea) {
+                                        val normalizedX = relativeX / drawWidth
+                                        val normalizedY = relativeY / drawHeight
+                                        val button = if (maxPointers[0] >= 2) "right" else "left"
+                                        viewModel.sendMouseClick(normalizedX, normalizedY, button)
+                                    }
                                 }
                             }
                         }
@@ -407,6 +443,7 @@ fun ViewerScreen(
                     isConnected = isConnected,
                     connectionState = connectionState,
                     rtcStats = rtcStats,
+                    isTrackpadModeEnabled = isTrackpadModeEnabled,
                     onBack = {
                         viewModel.disconnect()
                         onNavigateBack()
@@ -422,6 +459,10 @@ fun ViewerScreen(
                     },
                     onNavigateToGallery = {
                         onNavigateToGallery()
+                    },
+                    onToggleTrackpadMode = {
+                        viewModel.setTrackpadModeEnabled(!isTrackpadModeEnabled)
+                        overlayState.onInteraction()
                     },
                     onInteraction = { overlayState.onInteraction() }
                 )
@@ -626,11 +667,13 @@ private fun TopBar(
     isConnected: Boolean,
     connectionState: String,
     rtcStats: WebRtcStats,
+    isTrackpadModeEnabled: Boolean,
     onBack: () -> Unit,
     showSettings: Boolean,
     onToggleSettings: () -> Unit,
     onScreenshot: () -> Unit,
     onNavigateToGallery: () -> Unit,
+    onToggleTrackpadMode: () -> Unit,
     onInteraction: () -> Unit
 ) {
     Box(
@@ -702,6 +745,13 @@ private fun TopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // トラックパッド切替ボタン
+                OverlayIconButton(
+                    icon = if (isTrackpadModeEnabled) Icons.Default.Mouse else Icons.Default.TouchApp,
+                    contentDescription = "入力モード切替",
+                    isActive = isTrackpadModeEnabled,
+                    onClick = onToggleTrackpadMode
+                )
                 // ギャラリーボタン
                 OverlayIconButton(
                     icon = Icons.Default.Image,

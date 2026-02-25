@@ -276,6 +276,13 @@ pub enum DataChannelMessage {
         y: f64,
         button: String,
     },
+    CursorMove {
+        dx: i32,
+        dy: i32,
+    },
+    CursorClick {
+        button: String,
+    },
     // LLM Analysis
     AnalyzeRequest {
         id: String,

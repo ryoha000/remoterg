@@ -348,6 +348,22 @@ pub fn start_mf_encode_workers(
 
                         // キーフレーム要求がある場合は強制
                         if job.request_keyframe {
+                            // 1. ICodecAPI を使ってエンコーダーに直接指示 (Windows 8+, H.264 ハードウェアエンコーダ用標準手法)
+                            use windows::Win32::Media::MediaFoundation::ICodecAPI;
+                            use windows::Win32::Media::MediaFoundation::CODECAPI_AVEncVideoForceKeyFrame;
+                            
+                            if let Ok(codec_api) = encoder.transform().cast::<ICodecAPI>() {
+                                let var = windows::Win32::System::Variant::VARIANT::from(1u32);
+                                if let Err(e) = codec_api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &var) {
+                                    tracing::debug!("MF encoder worker: ICodecAPI::SetValue for ForceKeyFrame failed: {}", e);
+                                } else {
+                                    tracing::debug!("MF encoder worker: Successfully forced keyframe via ICodecAPI");
+                                }
+                            } else {
+                                tracing::debug!("MF encoder worker: Encoder does not support ICodecAPI");
+                            }
+
+                            // 2. ソフトウェアエンコーダ等へのフォールバックとして MFSampleExtension_VideoEncodePictureType をサンプルに付与
                             if let Err(e) =
                                 input_sample.SetUINT32(&MFSampleExtension_VideoEncodePictureType, 1)
                             {

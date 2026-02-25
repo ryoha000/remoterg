@@ -154,4 +154,68 @@ mod tests {
             }
         }
     }
+
+    struct KeyframeTestCase {
+        name: String,
+        codec: VideoCodec,
+    }
+
+    #[tokio::test]
+    async fn test_keyframe_forcing() {
+        init_tracing();
+        let test_cases = vec![
+            KeyframeTestCase {
+                name: "H264 Keyframe Forcing".to_string(),
+                codec: VideoCodec::H264,
+            },
+            KeyframeTestCase {
+                name: "AV1 Keyframe Forcing".to_string(),
+                codec: VideoCodec::AV1,
+            },
+        ];
+
+        for case in test_cases {
+            println!("Running keyframe test case: {}", case.name);
+
+            let factory: Box<dyn VideoEncoderFactory> = match case.codec {
+                VideoCodec::H264 => Box::new(MediaFoundationH264EncoderFactory::new()),
+                VideoCodec::AV1 => Box::new(MediaFoundationAV1EncoderFactory::new()),
+            };
+
+            let (job_slot, mut receiver) = factory.setup();
+            let width = 1280;
+            let height = 720;
+            let rgba = create_solid_color_rgba(width, height, 0, 255, 0, 255);
+            let (mut job, _device, _texture) = create_encode_job(width, height, rgba);
+
+            // 1. Initial frame naturally becomes a keyframe (or because it's the first)
+            job.frame_id = 1;
+            job.request_keyframe = false;
+            job_slot.set(job);
+            
+            let result1 = timeout(Duration::from_secs(5), receiver.recv()).await.expect("Timeout on frame 1").expect("Encoder exited");
+            // Some encoders might not mark the very first frame explicitly or they do.
+            println!("[{}] Frame 1 keyframe: {}", case.name, result1.is_keyframe);
+            
+            // 2. Second frame without request_keyframe should be a P-frame (not a keyframe)
+            let rgba2 = create_solid_color_rgba(width, height, 0, 255, 0, 255);
+            let (mut job2, _device2, _texture2) = create_encode_job(width, height, rgba2);
+            job2.frame_id = 2;
+            job2.request_keyframe = false;
+            job_slot.set(job2);
+
+            let result2 = timeout(Duration::from_secs(5), receiver.recv()).await.expect("Timeout on frame 2").expect("Encoder exited");
+            assert!(!result2.is_keyframe, "[{}] Frame 2 should not be a keyframe", case.name);
+
+            // 3. Third frame with request_keyframe = true MUST be a keyframe
+            let rgba3 = create_solid_color_rgba(width, height, 0, 0, 255, 255);
+            let (mut job3, _device3, _texture3) = create_encode_job(width, height, rgba3);
+            job3.frame_id = 3;
+            job3.request_keyframe = true;
+            job_slot.set(job3);
+
+            let result3 = timeout(Duration::from_secs(5), receiver.recv()).await.expect("Timeout on frame 3").expect("Encoder exited");
+            assert!(result3.is_keyframe, "[{}] Frame 3 MUST be a keyframe due to request_keyframe=true", case.name);
+        }
+    }
 }

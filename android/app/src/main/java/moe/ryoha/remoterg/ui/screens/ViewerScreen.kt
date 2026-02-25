@@ -157,7 +157,7 @@ fun ViewerScreen(
     }
 
     // オーバーレイの自動非表示（4秒）
-    LaunchedEffect(overlayState.showOverlay, overlayState.lastInteraction) {
+    LaunchedEffect(overlayState.showOverlay, overlayState.lastInteraction, isConnected) {
         if (overlayState.showOverlay && isConnected) {
             delay(4000)
             overlayState.hideOverlay()

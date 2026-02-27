@@ -47,6 +47,8 @@ struct CaptureHandler {
     _config: CaptureConfig,
     frame_counter: u64,
     shared_texture: Option<SharedTexture>,
+    closed_tx: mpsc::Sender<()>,
+    is_stopping: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl GraphicsCaptureApiHandler for CaptureHandler {
@@ -62,6 +64,8 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             _config: ctx.flags.config.clone(),
             frame_counter: 0,
             shared_texture: None,
+            closed_tx: ctx.flags.closed_tx.clone(),
+            is_stopping: ctx.flags.is_stopping.clone(),
         })
     }
 
@@ -180,7 +184,13 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     }
 
     fn on_closed(&mut self) -> Result<(), Self::Error> {
-        info!("Capture session closed");
+        info!("Capture session closed (on_closed called)");
+        if !self.is_stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            error!("Capture target lost unexpectedly!");
+            let _ = self.closed_tx.try_send(());
+        } else {
+            info!("Capture session closed as part of intentional stop");
+        }
         Ok(())
     }
 }
@@ -247,6 +257,8 @@ impl CaptureService {
         let mut capture_control: Option<CaptureControl<CaptureHandler, anyhow::Error>> = None;
         let mut target_hwnd: Option<u64> = None;
         let mut config = CaptureConfig::default();
+        let (closed_tx, mut closed_rx) = mpsc::channel(1);
+        let mut is_stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // スクリーンショット要求を保持する共有ステート
         let screenshot_req: Arc<Mutex<Option<oneshot::Sender<ScreenshotFrame>>>> =
@@ -256,6 +268,11 @@ impl CaptureService {
 
         loop {
             tokio::select! {
+                // キャプチャ対象の消失等を検知
+                _ = closed_rx.recv() => {
+                    error!("Capture target window was lost. Shutting down capture service.");
+                    return Err(anyhow::anyhow!("Capture target lost"));
+                }
                 msg = self.command_rx.recv() => {
                     match msg {
                         Some(CaptureMessage::Start { hwnd }) => {
@@ -264,25 +281,29 @@ impl CaptureService {
 
                             // 既存のキャプチャを停止
                             if let Some(control) = capture_control.take() {
+                                is_stopping.store(true, std::sync::atomic::Ordering::SeqCst);
                                 if let Err(e) = control.stop() {
                                     error!("Failed to stop previous capture: {:?}", e);
                                 }
                             }
+                            is_stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
                             // 新しいキャプチャセッションを開始
-                            match Self::start_capture(hwnd, &config, self.frame_tx.clone(), screenshot_req.clone(), last_captured_frame.clone()).await {
+                            match Self::start_capture(hwnd, &config, self.frame_tx.clone(), screenshot_req.clone(), last_captured_frame.clone(), closed_tx.clone(), is_stopping.clone()).await {
                                 Ok(control) => {
                                     capture_control = Some(control);
                                     info!("Capture started successfully");
                                 }
                                 Err(e) => {
                                     error!("Failed to start capture: {:?}", e);
+                                    return Err(e); // Exit service to shutdown hostd
                                 }
                             }
                         }
                         Some(CaptureMessage::Stop) => {
                             info!("Stop capture");
                             if let Some(control) = capture_control.take() {
+                                is_stopping.store(true, std::sync::atomic::Ordering::SeqCst);
                                 if let Err(e) = control.stop() {
                                     error!("Failed to stop capture: {:?}", e);
                                 }
@@ -305,19 +326,22 @@ impl CaptureService {
                                 if let Some(hwnd_raw) = target_hwnd {
                                     // 既存のキャプチャを停止
                                     if let Some(control) = capture_control.take() {
+                                        is_stopping.store(true, std::sync::atomic::Ordering::SeqCst);
                                         if let Err(e) = control.stop() {
                                             error!("Failed to stop capture session: {:?}", e);
                                         }
                                     }
+                                    is_stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
                                     // 新しい設定で再開
-                                    match Self::start_capture(hwnd_raw, &config, self.frame_tx.clone(), screenshot_req.clone(), last_captured_frame.clone()).await {
+                                    match Self::start_capture(hwnd_raw, &config, self.frame_tx.clone(), screenshot_req.clone(), last_captured_frame.clone(), closed_tx.clone(), is_stopping.clone()).await {
                                         Ok(control) => {
                                             capture_control = Some(control);
                                             info!("Capture restarted with new config");
                                         }
                                         Err(e) => {
-                                            error!("Failed to restart capture session: {:?}", e);
+                                            error!("Failed to restart capture session (target lost?): {:?}", e);
+                                            return Err(e);
                                         }
                                     }
                                 }
@@ -355,6 +379,8 @@ impl CaptureService {
         frame_tx: mpsc::Sender<Frame>,
         screenshot_tx: Arc<Mutex<Option<oneshot::Sender<ScreenshotFrame>>>>,
         last_captured_frame: Arc<Mutex<Option<ScreenshotFrame>>>,
+        closed_tx: mpsc::Sender<()>,
+        is_stopping: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<CaptureControl<CaptureHandler, anyhow::Error>> {
         info!("start_capture called for HWND: {hwnd}");
 
@@ -364,7 +390,10 @@ impl CaptureService {
 
         // Windowが有効かチェック（警告のみ、デスクトップウィンドウなどは無効でも試行）
         if !window.is_valid() {
-            info!("Window is not valid for capture according to is_valid(), but will try anyway");
+            info!("Window is not valid for capture according to is_valid().");
+            if hwnd != 0 {
+                return Err(anyhow::anyhow!("Capture target window (HWND: {}) is not valid or not found", hwnd));
+            }
         } else {
             info!("Window is valid for capture");
         }
@@ -387,6 +416,8 @@ impl CaptureService {
                 frame_tx,
                 screenshot_tx,
                 last_captured_frame,
+                closed_tx,
+                is_stopping,
             },
         );
         info!("Settings created");
@@ -414,4 +445,6 @@ struct CaptureConfigWithSender {
     frame_tx: mpsc::Sender<Frame>,
     screenshot_tx: Arc<Mutex<Option<oneshot::Sender<ScreenshotFrame>>>>,
     last_captured_frame: Arc<Mutex<Option<ScreenshotFrame>>>,
+    closed_tx: mpsc::Sender<()>,
+    is_stopping: Arc<std::sync::atomic::AtomicBool>,
 }

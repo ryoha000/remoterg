@@ -450,10 +450,6 @@ fun ViewerScreen(
                         overlayState.showSettings = !overlayState.showSettings
                         overlayState.onInteraction()
                     },
-                    onScreenshot = {
-                        viewModel.takeScreenshot()
-                        overlayState.onInteraction()
-                    },
                     onNavigateToGallery = {
                         onNavigateToGallery()
                     },
@@ -517,7 +513,7 @@ fun ViewerScreen(
                 )
             }
 
-            // Ctrl / Shift Button (右下)
+            // スクリーンショット / Ctrl(Shift) ボタン (右下)
             AnimatedVisibility(
                 visible = overlayState.showOverlay,
                 enter = fadeIn(),
@@ -526,15 +522,25 @@ fun ViewerScreen(
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 16.dp)
             ) {
-                val isShift by viewModel.isShiftButtonEnabled.collectAsState()
-                CtrlButton(
-                    isShift = isShift,
-                    onInteraction = { overlayState.onInteraction() },
-                    onKeyEvent = { down -> 
-                        val key = if (isShift) "Shift" else "Control"
-                        viewModel.sendKeyEvent(key, down) 
-                    }
-                )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    ScreenshotButton(
+                        onInteraction = { overlayState.onInteraction() },
+                        onClick = { viewModel.takeScreenshot() }
+                    )
+
+                    val isShift by viewModel.isShiftButtonEnabled.collectAsState()
+                    CtrlButton(
+                        isShift = isShift,
+                        onInteraction = { overlayState.onInteraction() },
+                        onKeyEvent = { down -> 
+                            val key = if (isShift) "Shift" else "Control"
+                            viewModel.sendKeyEvent(key, down) 
+                        }
+                    )
+                }
             }
         }
 
@@ -668,7 +674,6 @@ private fun TopBar(
     onBack: () -> Unit,
     showSettings: Boolean,
     onToggleSettings: () -> Unit,
-    onScreenshot: () -> Unit,
     onNavigateToGallery: () -> Unit,
     onToggleTrackpadMode: () -> Unit,
     onInteraction: () -> Unit
@@ -754,12 +759,6 @@ private fun TopBar(
                     contentDescription = "ギャラリー",
                     onClick = onNavigateToGallery
                 )
-                // スクリーンショットボタン
-                OverlayIconButton(
-                    icon = Icons.Default.CameraAlt,
-                    contentDescription = "スクリーンショット",
-                    onClick = onScreenshot
-                )
                 // 設定ボタン
                 OverlayIconButton(
                     icon = Icons.Default.Settings,
@@ -808,13 +807,18 @@ private fun OverlayIconButton(
 }
 
 /**
- * Ctrlキー送信用ボタン
+ * ゲーム上のオーバーレイボタン（押下状態の管理やイベントのバブリング防止などを行う共通コンポーネント）
  */
 @Composable
-private fun CtrlButton(
-    isShift: Boolean = false,
+private fun GameOverlayButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    contentDescription: String,
+    isPressedColor: Color = Color(0xFF3B82F6).copy(alpha = 0.8f),
+    normalColor: Color = Color(0xFF18181B).copy(alpha = 0.5f),
     onInteraction: () -> Unit,
-    onKeyEvent: (Boolean) -> Unit
+    onPressedChange: ((Boolean) -> Unit)? = null,
+    onClick: (() -> Unit)? = null
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     var isPressed by remember { mutableStateOf(false) }
@@ -826,22 +830,22 @@ private fun CtrlButton(
             dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
             stiffness = androidx.compose.animation.core.Spring.StiffnessLow
         ),
-        label = "CtrlButtonScale"
+        label = "GameOverlayButtonScale"
     )
 
     // 押下状態に伴うカラーアニメーション
     val bgColor by animateColorAsState(
-        targetValue = if (isPressed) Color(0xFF3B82F6).copy(alpha = 0.8f) else Color(0xFF18181B).copy(alpha = 0.5f),
-        label = "CtrlButtonBg"
+        targetValue = if (isPressed) isPressedColor else normalColor,
+        label = "GameOverlayButtonBg"
     )
     val borderColor by animateColorAsState(
         targetValue = if (isPressed) Color(0xFF60A5FA) else Color.White.copy(alpha = 0.2f),
-        label = "CtrlButtonBorder"
+        label = "GameOverlayButtonBorder"
     )
 
     // 押下状態が切り替わったときにイベントを送信し、押下中は定期的にインタラクションを通知してUIが消えないようにする
     LaunchedEffect(isPressed) {
-        onKeyEvent(isPressed)
+        onPressedChange?.invoke(isPressed)
         if (isPressed) {
             while (true) {
                 onInteraction() // UIが自動非表示にならないよう定期的にタイマーリセット
@@ -870,6 +874,11 @@ private fun CtrlButton(
                         if (down != isPressed) {
                             if (down) {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            } else {
+                                // 離された時にonClickを発火
+                                if (isPressed) {
+                                    onClick?.invoke()
+                                }
                             }
                             isPressed = down
                         }
@@ -885,13 +894,13 @@ private fun CtrlButton(
             verticalArrangement = Arrangement.Center
         ) {
             Icon(
-                imageVector = Icons.Default.Keyboard,
-                contentDescription = if (isShift) "Shift Key" else "Ctrl Key",
+                imageVector = icon,
+                contentDescription = contentDescription,
                 tint = if (isPressed) Color.White else Color.White.copy(alpha = 0.8f),
                 modifier = Modifier.size(24.dp)
             )
             Text(
-                text = if (isShift) "SHIFT" else "CTRL",
+                text = label,
                 color = if (isPressed) Color.White else Color.White.copy(alpha = 0.8f),
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 10.sp,
@@ -899,6 +908,41 @@ private fun CtrlButton(
             )
         }
     }
+}
+
+/**
+ * Ctrlキー送信用ボタン
+ */
+@Composable
+private fun CtrlButton(
+    isShift: Boolean = false,
+    onInteraction: () -> Unit,
+    onKeyEvent: (Boolean) -> Unit
+) {
+    GameOverlayButton(
+        icon = Icons.Default.Keyboard,
+        label = if (isShift) "SHIFT" else "CTRL",
+        contentDescription = if (isShift) "Shift Key" else "Ctrl Key",
+        onInteraction = onInteraction,
+        onPressedChange = onKeyEvent
+    )
+}
+
+/**
+ * スクリーンショット用ボタン
+ */
+@Composable
+private fun ScreenshotButton(
+    onInteraction: () -> Unit,
+    onClick: () -> Unit
+) {
+    GameOverlayButton(
+        icon = Icons.Default.CameraAlt,
+        label = "CAP",
+        contentDescription = "スクリーンショット",
+        onInteraction = onInteraction,
+        onClick = onClick
+    )
 }
 
 /**

@@ -454,15 +454,6 @@ private fun InfoPanel(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        // パネルタイトル（RN: text-xl font-bold text-white, mt-12）
-        Text(
-            text = "情報",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            modifier = Modifier.padding(top = 48.dp, bottom = 24.dp)
-        )
-
         // 日時セクション（RN: calendar-outline + "日時"）
         InfoSectionHeader(
             icon = {

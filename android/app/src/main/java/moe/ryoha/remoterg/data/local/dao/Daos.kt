@@ -68,6 +68,9 @@ interface AnalysisDao {
     @Query("SELECT DISTINCT local_id FROM analysis_character WHERE name LIKE '%' || :query || '%'")
     suspend fun searchLocalIdsByCharacter(query: String): List<String>
 
+    @Query("SELECT DISTINCT local_id FROM analysis_dialogue WHERE speaker LIKE '%' || :query || '%'")
+    suspend fun searchLocalIdsBySpeaker(query: String): List<String>
+
     @Query("SELECT local_id FROM analysis_dialogue WHERE text LIKE '%' || :query || '%'")
     suspend fun searchLocalIdsByText(query: String): List<String>
 
@@ -86,9 +89,14 @@ interface AnalysisDao {
             FROM analysis_character c
             INNER JOIN analysis_results r ON c.local_id = r.local_id
             WHERE c.name != '' AND c.name IS NOT NULL
-            
-            UNION ALL
-            
+        )
+        GROUP BY name
+        ORDER BY MAX(created_at) DESC
+    """)
+    fun getRecentCharacters(): Flow<List<String>>
+
+    @Query("""
+        SELECT name FROM (
             SELECT d.speaker as name, r.created_at
             FROM analysis_dialogue d
             INNER JOIN analysis_results r ON d.local_id = r.local_id
@@ -97,5 +105,5 @@ interface AnalysisDao {
         GROUP BY name
         ORDER BY MAX(created_at) DESC
     """)
-    fun getRecentCharacters(): Flow<List<String>>
+    fun getRecentSpeakers(): Flow<List<String>>
 }

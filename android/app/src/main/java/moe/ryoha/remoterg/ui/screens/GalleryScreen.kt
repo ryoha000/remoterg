@@ -60,6 +60,7 @@ fun GalleryScreen(
     val searchFilters by viewModel.searchFilters.collectAsState()
     val recentTitles by viewModel.recentTitles.collectAsState()
     val recentCharacters by viewModel.recentCharacters.collectAsState()
+    val recentSpeakers by viewModel.recentSpeakers.collectAsState()
     val isLoaded by viewModel.isScreenshotsLoaded.collectAsState()
 
     val screenWidthDp = LocalConfiguration.current.screenWidthDp.toFloat()
@@ -102,6 +103,7 @@ fun GalleryScreen(
                 onFiltersChanged = viewModel::updateFilters,
                 recentTitles = recentTitles,
                 recentCharacters = recentCharacters,
+                recentSpeakers = recentSpeakers,
                 modifier = Modifier.weight(1f).padding(end = 8.dp)
             )
         }

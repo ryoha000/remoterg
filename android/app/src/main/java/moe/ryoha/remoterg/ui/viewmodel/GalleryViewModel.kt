@@ -33,6 +33,7 @@ data class SearchFilters(
     val gameTitle: String? = null,
     val charaText: String? = null,
     val dialogText: String? = null,
+    val speakerText: String? = null,
     val isFavorite: Boolean = false
 )
 
@@ -67,6 +68,7 @@ class GalleryViewModel @Inject constructor(
 
     private val _charaMatchedIds = MutableStateFlow<Set<String>?>(null)
     private val _textMatchedIds = MutableStateFlow<Set<String>?>(null)
+    private val _speakerMatchedIds = MutableStateFlow<Set<String>?>(null)
 
     // スクリーンショットの読み込み完了フラグ（初期値 false → 最初のデータ emit 後 true）
     private val _isScreenshotsLoaded = MutableStateFlow(false)
@@ -84,8 +86,16 @@ class GalleryViewModel @Inject constructor(
         favorites,
         _searchFilters,
         _charaMatchedIds,
-        _textMatchedIds
-    ) { allScreenshots, favs, filters, charaMatchedIds, textMatchedIds ->
+        _textMatchedIds,
+        _speakerMatchedIds
+    ) { params ->
+        val allScreenshots = params[0] as List<MediaStoreScreenshot>
+        val favs = params[1] as List<ScreenshotFavoriteEntity>
+        val filters = params[2] as SearchFilters
+        val charaMatchedIds = params[3] as Set<String>?
+        val textMatchedIds = params[4] as Set<String>?
+        val speakerMatchedIds = params[5] as Set<String>?
+
         // 最初のデータが到着したら読み込み完了とする
         if (!_isScreenshotsLoaded.value) {
             _isScreenshotsLoaded.value = true
@@ -106,10 +116,12 @@ class GalleryViewModel @Inject constructor(
             // Character text filter
             if (filters.charaText != null && charaMatchedIds?.contains(item.localId) != true) return@filter false
 
+            // Speaker text filter
+            if (filters.speakerText != null && speakerMatchedIds?.contains(item.localId) != true) return@filter false
+
             // Dialogue text filter
             if (filters.dialogText != null && textMatchedIds?.contains(item.localId) != true) return@filter false
 
-            // Text search (matches title or process name)
             if (filters.text.isNotBlank()) {
                 val query = filters.text.lowercase()
                 val matchTitle = item.windowTitle.lowercase().contains(query)
@@ -155,6 +167,13 @@ class GalleryViewModel @Inject constructor(
         )
 
     val recentCharacters = analysisDao.getRecentCharacters()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val recentSpeakers = analysisDao.getRecentSpeakers()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -306,6 +325,11 @@ class GalleryViewModel @Inject constructor(
                 _charaMatchedIds.value = analysisDao.searchLocalIdsByCharacter(newFilters.charaText).toSet()
             } else {
                 _charaMatchedIds.value = null
+            }
+            if (newFilters.speakerText != null) {
+                _speakerMatchedIds.value = analysisDao.searchLocalIdsBySpeaker(newFilters.speakerText).toSet()
+            } else {
+                _speakerMatchedIds.value = null
             }
             if (newFilters.dialogText != null) {
                 _textMatchedIds.value = analysisDao.searchLocalIdsByText(newFilters.dialogText).toSet()

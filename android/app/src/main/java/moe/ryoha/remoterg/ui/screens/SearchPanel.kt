@@ -49,6 +49,7 @@ fun SearchPanel(
     onFiltersChanged: (SearchFilters) -> Unit,
     recentTitles: List<Pair<String, MediaStoreScreenshot>>,
     recentCharacters: List<String>,
+    recentSpeakers: List<String>,
     modifier: Modifier = Modifier
 ) {
     var isExpanded by remember { mutableStateOf(false) }
@@ -254,35 +255,48 @@ fun SearchPanel(
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
                                 
-                                SuggestionRow(
-                                    icon = Icons.Default.VideogameAsset,
-                                    text = "\"$rawText\" をタイトルから探す",
-                                    onClick = {
-                                        onFiltersChanged(filters.copy(text = "", gameTitle = rawText))
-                                        isExpanded = false
-                                        inputText = ""
-                                    }
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                SuggestionRow(
-                                    icon = Icons.Default.Person,
-                                    text = "\"$rawText\" をキャラ名(AI)から探す",
-                                    onClick = {
-                                        onFiltersChanged(filters.copy(text = "", charaText = rawText))
-                                        isExpanded = false
-                                        inputText = ""
-                                    }
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                SuggestionRow(
-                                    icon = Icons.Default.ChatBubbleOutline,
-                                    text = "\"$rawText\" をテキスト(AI)から探す",
-                                    onClick = {
-                                        onFiltersChanged(filters.copy(text = "", dialogText = rawText))
-                                        isExpanded = false
-                                        inputText = ""
-                                    }
-                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    SuggestionRow(
+                                        icon = Icons.Default.VideogameAsset,
+                                        text = "\"$rawText\" をタイトルから探す",
+                                        onClick = {
+                                            onFiltersChanged(filters.copy(text = "", gameTitle = rawText))
+                                            isExpanded = false
+                                            inputText = ""
+                                        }
+                                    )
+                                    SuggestionRow(
+                                        icon = Icons.Default.RecordVoiceOver,
+                                        text = "\"$rawText\" を話し手から探す",
+                                        onClick = {
+                                            onFiltersChanged(filters.copy(text = "", speakerText = rawText))
+                                            isExpanded = false
+                                            inputText = ""
+                                        }
+                                    )
+                                    SuggestionRow(
+                                        icon = Icons.Default.ChatBubbleOutline,
+                                        text = "\"$rawText\" をテキストから探す",
+                                        onClick = {
+                                            onFiltersChanged(filters.copy(text = "", dialogText = rawText))
+                                            isExpanded = false
+                                            inputText = ""
+                                        }
+                                    )
+                                    SuggestionRow(
+                                        icon = Icons.Default.Person,
+                                        text = "\"$rawText\" を登場人物から探す",
+                                        onClick = {
+                                            onFiltersChanged(filters.copy(text = "", charaText = rawText))
+                                            isExpanded = false
+                                            inputText = ""
+                                        }
+                                    )
+                                }
                             }
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         }
@@ -302,10 +316,25 @@ fun SearchPanel(
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         }
 
+                        // Quick Speaker Filters
+                        if (recentSpeakers.isNotEmpty()) {
+                            FilterSuggestionGroup(
+                                title = "話し手で絞り込み",
+                                items = recentSpeakers,
+                                icon = Icons.Default.RecordVoiceOver,
+                                itemText = { it },
+                                onItemSelected = {
+                                    onFiltersChanged(filters.copy(speakerText = it))
+                                    isExpanded = false
+                                }
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
+
                         // Quick Character Filters
                         if (recentCharacters.isNotEmpty()) {
                             FilterSuggestionGroup(
-                                title = "キャラクターで絞り込み",
+                                title = "登場人物で絞り込み",
                                 items = recentCharacters,
                                 icon = Icons.Default.Person,
                                 itemText = { it },
@@ -377,8 +406,9 @@ fun SearchPanel(
                                 )
                                 HelpRow(token = "is:favorite", desc = "お気に入りのみ表示", color = Color(0xFFF472B6))
                                 HelpRow(token = "game:\"title\"", desc = "ゲームタイトルで絞り込み", color = Color(0xFFC084FC))
-                                HelpRow(token = "chara:\"name\"", desc = "AI分析のキャラ名で絞り込み", color = Color(0xFFFBBF24))
-                                HelpRow(token = "text:\"dialogue\"", desc = "AI分析のテキストで絞り込み", color = Color(0xFF34D399))
+                                HelpRow(token = "speaker:\"name\"", desc = "話し手で絞り込み", color = Color(0xFFF97316))
+                                HelpRow(token = "text:\"dialogue\"", desc = "テキストで絞り込み", color = Color(0xFF34D399))
+                                HelpRow(token = "chara:\"name\"", desc = "登場人物で絞り込み", color = Color(0xFFFBBF24))
                                 HelpRow(token = "キーワード", desc = "タイトルやプロセス名で曖昧検索", color = MaterialTheme.colorScheme.onSurface)
                             }
                         }
@@ -472,8 +502,7 @@ fun SuggestionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: S
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(8.dp),
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
+        onClick = onClick
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -495,7 +524,7 @@ fun SuggestionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: S
     }
 }
 
-enum class TokenType { Text, Since, Until, Favorite, Game, Chara, TextFilter }
+enum class TokenType { Text, Since, Until, Favorite, Game, Chara, Speaker, TextFilter }
 
 data class SearchToken(
     val type: TokenType,
@@ -510,6 +539,7 @@ fun TokenChip(token: SearchToken, onRemove: () -> Unit) {
         TokenType.Favorite -> Triple(Color(0x33EC4899), Color(0x4DEC4899), Color(0xFFF472B6))
         TokenType.Game -> Triple(Color(0x33A855F7), Color(0x4DA855F7), Color(0xFFC084FC))
         TokenType.Chara -> Triple(Color(0x33F59E0B), Color(0x4DF59E0B), Color(0xFFFBBF24))
+        TokenType.Speaker -> Triple(Color(0x33EA580C), Color(0x4DEA580C), Color(0xFFF97316))
         TokenType.TextFilter -> Triple(Color(0x3310B981), Color(0x4D10B981), Color(0xFF34D399))
         TokenType.Text -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.outline, MaterialTheme.colorScheme.onSurface)
     }
@@ -555,6 +585,9 @@ private fun parseTokens(filters: SearchFilters): List<SearchToken> {
     if (filters.charaText != null) {
         tokens.add(SearchToken(TokenType.Chara, "chara:\"${filters.charaText}\"", "👤 ${filters.charaText}"))
     }
+    if (filters.speakerText != null) {
+        tokens.add(SearchToken(TokenType.Speaker, "speaker:\"${filters.speakerText}\"", "🗣️ ${filters.speakerText}"))
+    }
     if (filters.dialogText != null) {
         tokens.add(SearchToken(TokenType.TextFilter, "text:\"${filters.dialogText}\"", "💬 ${filters.dialogText}"))
     }
@@ -569,6 +602,7 @@ private fun buildQueryString(filters: SearchFilters): String {
     if (filters.isFavorite) parts.add("is:favorite")
     if (filters.gameTitle != null) parts.add("game:\"${filters.gameTitle}\"")
     if (filters.charaText != null) parts.add("chara:\"${filters.charaText}\"")
+    if (filters.speakerText != null) parts.add("speaker:\"${filters.speakerText}\"")
     if (filters.dialogText != null) parts.add("text:\"${filters.dialogText}\"")
     return parts.joinToString(" ")
 }
@@ -638,6 +672,16 @@ private fun parseQueryString(query: String, currentFilters: SearchFilters): Sear
         currentFilters.charaText
     }
 
+    // speaker:"name"
+    val speakerRegex = Regex("speaker:\"([^\"]+)\"")
+    val speakerMatch = speakerRegex.find(text)
+    val parsedSpeakerText = if (speakerMatch != null) {
+        text = text.replace(speakerMatch.value, "")
+        speakerMatch.groupValues[1]
+    } else {
+        currentFilters.speakerText
+    }
+
     // text:"dialogue"
     val textRegex = Regex("text:\"([^\"]+)\"")
     val textMatch = textRegex.find(text)
@@ -654,6 +698,7 @@ private fun parseQueryString(query: String, currentFilters: SearchFilters): Sear
         until = until,
         gameTitle = parsedGameTitle,
         charaText = parsedCharaText,
+        speakerText = parsedSpeakerText,
         dialogText = parsedDialogText,
         isFavorite = isFavorite
     )
@@ -666,6 +711,7 @@ private fun removeTokenFromFilters(filters: SearchFilters, token: SearchToken): 
         TokenType.Favorite -> filters.copy(isFavorite = false)
         TokenType.Game -> filters.copy(gameTitle = null)
         TokenType.Chara -> filters.copy(charaText = null)
+        TokenType.Speaker -> filters.copy(speakerText = null)
         TokenType.TextFilter -> filters.copy(dialogText = null)
         TokenType.Text -> filters.copy(text = "")
     }

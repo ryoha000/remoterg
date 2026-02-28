@@ -9,7 +9,6 @@
 ```
 ScreenshotMetadataPayload {
   process_path: "G:\\game\\Heliodor\\流星ワールドアクターGB\\WorldActorGB.exe"
-  window_title: "流星ワールドアクター Gaslight Bullet"  // 補助的に使用
 }
 ```
 
@@ -91,7 +90,7 @@ process_path
 ファイル名セグメント（パスの最後の要素）が以下のいずれかに一致する場合、そのセグメントを**候補から除外**する:
 
 - **エンジン名**: `SiglusEngine`, `BGI`, `Ethornell`, `Kirikiri`, `Rio`, `AlphaROMdiS`, `CatSystem2`, `YU-RIS`, `Majiro`, `AdvHD`, `QLIE` など
-- **インストーラー/ユーティリティ**: `setup`, `install`, `uninst`, `uninstall`, `patch`, `update`, `launcher`, `config`, `readme`, `main`
+- **インストーラー/ユーティリティ**: `setup`, `install`, `uninst`, `uninstall`, `patch`, `update`, `launcher`, `config`, `readme`, `main` など
 
 > [!TIP]
 > エンジン名リストは VNDB の `engines` テーブルから取得可能（`engines.name`）。静的リストを手動管理するのではなく、VNDB データから動的に構築するのが望ましい。
@@ -121,7 +120,7 @@ Step 1 で得た各セグメントに対して、以下のルールを**順番�
 - 元の拡張子付きセグメントは保持しない（拡張子はノイズのため）
 
 #### ルール B: 区切り文字展開
-- `_`, `-` で分割し、スペースで再結合したバリエーションを追加
+- `_`, `-`, `－`（全角ハイフン）, `―`（ダッシュ）, `～`, `~` で分割し、スペースで再結合したバリエーションを追加
 - 区切り文字以降を「サブタイトル」と見なし、区切り文字より**前だけ**を抽出したバリエーションを追加（例: `サクラノ刻－櫻の森の下を歩む－` → `サクラノ刻`）
 - 元のセグメント（区切り文字付き）も保持する
 
@@ -172,19 +171,17 @@ Step 1 のセグメント: `Heliodor`, `流星ワールドアクターGB`, `Worl
 
 #### Case 2: `G:\game\いつか、届く、あの空に。\main.bin`
 
-Step 1 のセグメント: `いつか、届く、あの空に。`, `main.bin`
+Step 1 のセグメント: `いつか、届く、あの空に。`
+（`main.bin` は拡張子除去後に `main` → ファイル名ブラックリストに該当するため Step 1 で除外）
 
 | セグメント | 適用ルール | 生成されるトークン |
 |---|---|---|
 | `いつか、届く、あの空に。` | (変換なし) | `いつか、届く、あの空に。` |
-| `main.bin` | A: 拡張子除去 | `main` |
 
 **最終トークンリスト:**
 ```
-["いつか、届く、あの空に。", "main"]
+["いつか、届く、あの空に。"]
 ```
-
-※ `main` はジェネリック的だが、Step 2 ではあくまで文字列変換のみ行う。マッチング時に低スコアとなるため自然に淘汰される。
 
 ---
 
@@ -347,9 +344,14 @@ VNDB のデータから、各ゲーム (`vn.id`) に紐づく**全ての名前�
 辞書登録時とトークンマッチング時の両方で同じ正規化を適用する:
 
 1. 小文字化（ASCII のみ）
-2. 全角英数字 → 半角変換
-3. 記号類の除去: `:`, `：`, `・`, `~`, `～`, `!`, `！`, `?`, `？`
-4. 連続スペースの正規化
+2. 全角英数字 → 半角変換（NFKC 正規化）
+3. 非ワード文字・非スペース文字をスペースに置換（`[^\w\s]` → ` `）
+4. `_` をスペースに置換
+5. 連続スペースの正規化
+
+> [!NOTE]
+> 仕様の初期版では記号を個別列挙（`:`, `・`, `~` 等）していたが、実装では `[^\w\s]` による包括的な除去を採用。
+> ゲームタイトルやパスに含まれる記号は基本的にマッチングのノイズであり、包括除去のほうが保守性が高い。
 
 ```
 例:
@@ -357,13 +359,14 @@ VNDB のデータから、各ゲーム (`vn.id`) に紐づく**全ての名前�
   "Ryuusei World Actor: Gaslight Bullet" → "ryuusei world actor gaslight bullet"
   "12の月のイヴ"                         → "12の月のイヴ"
   "FuriKuru"                             → "furikuru"
+  "FuriKuru_Game"                        → "furikuru game"
 ```
 
 ### マッチングアルゴリズム
 
-Step 2 で生成した各トークンを正規化し、辞書に対して以下の **3 種類のマッチング**を試行する。
+Step 2 で生成した各トークンを正規化し、辞書に対して以下の **7 種類のマッチング**を優先度順に試行する。最初にマッチした手法が採用される。
 
-#### 3-1. 完全一致
+#### 3-1. 完全一致 (`exact`)
 
 ```
 normalized(token) == normalized(辞書の名前)
@@ -371,7 +374,28 @@ normalized(token) == normalized(辞書の名前)
 
 スコア: **1.0**
 
-#### 3-2. 包含一致（トークンが名前に含まれる）
+#### 3-2. スペース無視完全一致 (`exact_space_agnostic`)
+
+```
+remove_spaces(normalized(token)) == remove_spaces(normalized(辞書の名前))
+```
+
+例: トークン `流星ワールドアクター GB` と辞書略称 `流星ワールドアクターgb`（スペース除去後に一致）
+
+スコア: **0.95**
+
+#### 3-3. 前方一致 (`prefix`)
+
+```
+normalized(辞書の名前).startswith(normalized(token)) and len(token) >= 3
+```
+
+スコア: `0.85 * (len(token) / len(辞書の名前)) ^ 0.1`
+
+> [!NOTE]
+> `^ 0.1` の指数は、カバー率が低い場合でもスコアを極端に下げないための緩和係数。前方一致は部分一致より信頼性が高いため、カバー率の影響を抑えている。
+
+#### 3-4. 包含一致 — トークンが名前に含まれる (`token_in_name`)
 
 ```
 normalized(token) in normalized(辞書の名前)
@@ -381,25 +405,31 @@ normalized(token) in normalized(辞書の名前)
 
 スコア: `len(token) / len(辞書の名前)` （カバー率）
 
-#### 3-3. 包含一致（名前がトークンに含まれる）
+#### 3-5. 包含一致 — 名前がトークンに含まれる (`name_in_token`)
 
 ```
 normalized(辞書の名前) in normalized(token)
 ```
 
-例: トークン `流星ワールドアクターGB` にタイトル `流星ワールドアクター` が含まれる（Latin 除去後に一致するケース等）
+例: トークン `流星ワールドアクターGB` にタイトル `流星ワールドアクター` が含まれる
 
 スコア: `len(辞書の名前) / len(token)` （カバー率）
 
-#### 3-3. 包含一致（名前がトークンに含まれる）
+#### 3-6. スペース無視包含一致 — トークンが名前に含まれる (`token_in_name_space_agnostic`)
 
 ```
-normalized(辞書の名前) in normalized(token)
+remove_spaces(normalized(token)) in remove_spaces(normalized(辞書の名前)) and len(token_no_space) >= 5
 ```
 
-例: トークン `流星ワールドアクターGB` にタイトル `流星ワールドアクター` が含まれる（Latin 除去後に一致するケース等）
+スコア: `0.95 * (len(token_no_space) / len(name_no_space))`
 
-スコア: `len(辞書の名前) / len(token)` （カバー率）
+#### 3-7. スペース無視包含一致 — 名前がトークンに含まれる (`name_in_token_space_agnostic`)
+
+```
+remove_spaces(normalized(辞書の名前)) in remove_spaces(normalized(token)) and len(name_no_space) >= 5
+```
+
+スコア: `0.95 * (len(name_no_space) / len(token_no_space))`
 
 ### マッチ結果の構造
 
@@ -410,10 +440,13 @@ class MatchResult:
     match_type: str       # "title" | "title_latin" | "alias" | "brand" | "brand_latin" | "brand_alias"
                           # 略称バリエーション由来の場合は ":generated" サフィックス付き
                           # 例: "title:generated", "title_latin:generated"
-    match_method: str     # "exact" | "token_in_name" | "name_in_token"
+    match_method: str     # "exact" | "exact_space_agnostic" | "prefix" |
+                          # "token_in_name" | "name_in_token" |
+                          # "token_in_name_space_agnostic" | "name_in_token_space_agnostic"
     score: float          # 0.0 〜 1.0
     token: str            # マッチしたトークン
     matched_name: str     # マッチした辞書の名前
+    derived_rule: str     # トークンが生成されたルール（"Rule A", "Rule B" 等）。デバッグ・ログ用
 ```
 
 ---
@@ -439,14 +472,26 @@ for game_id, matches in grouped_results:
     # match_method の基礎点（完全一致を明確に優遇）
     method_base = {
         "exact": 1.0,
+        "exact_space_agnostic": 0.95,
+        "prefix": 0.85,
         "token_in_name": 0.7,
         "name_in_token": 0.7,
+        "token_in_name_space_agnostic": 0.65,
+        "name_in_token_space_agnostic": 0.65,
     }
 
     for m in matches:
         # ":generated" サフィックスを除去して type_weight を参照（重みは原典と同一）
         base_type = m.match_type.split(":")[0]
-        m.weighted_score = m.score * type_weight[base_type] * method_base[m.match_method]
+        w_score = m.score * type_weight[base_type] * method_base[m.match_method]
+
+        # 包含マッチの近接ペナルティ（完全一致・前方一致には適用しない）
+        if "exact" not in m.match_method and m.match_method != "prefix":
+            len_diff = abs(len(normalized_token) - len(normalized_name))
+            proximity_factor = 1.0 / (1.0 + len_diff * 0.05)
+            w_score *= proximity_factor
+
+        m.weighted_score = w_score
 
     best_score = max(m.weighted_score for m in matches)
     
@@ -461,7 +506,11 @@ for game_id, matches in grouped_results:
 ### 4-2. 過剰包含のペナルティ (Overlapping Title Penalty)
 
 文字列の包含マッチを利用しているため、「無印版」と「拡張版（続編など）」が辞書内に両方存在する場合、拡張版のファイル・パスから無印版にも同時に包含マッチしてしまいます。
-これを防ぐため、**「A が B を包含している（A ⊃ B）」関係にある辞書エントリが複数マッチした場合、短い方（包含されている側）にペナルティを与え**、長い方（より具体的な方）のスコアが競り勝つように調整します。
+これを防ぐため、**`name_in_token` でマッチした結果のうち、「A が B を包含している（A ⊃ B）」関係にある辞書エントリが複数マッチした場合、短い方（包含されている側）にペナルティを与え**、長い方（より具体的な方）のスコアが競り勝つように調整します。
+
+> [!NOTE]
+> このペナルティは `name_in_token` のケースにのみ適用する。
+> `token_in_name` の場合、短い名前へのマッチはカバー率スコアが自然に低くなるため、ペナルティは不要。
 
 例: `流星ワールドアクターGB` というトークンが以下の両方に `name_in_token` でマッチした場合
 * A: `流星ワールドアクター Gaslight Bullet` (の略称展開後)
@@ -470,19 +519,15 @@ for game_id, matches in grouped_results:
 このとき、A ⊃ B の関係にあるため、B (無印版) にのみペナルティを掛けることで、GB版が正しく最上位に選定されるようにします。
 
 ```python
-# 1. 共通の文字数差分による減衰 (ベース)
-len_diff = abs(len(normalized_token) - len(normalized_name))
-proximity_factor = 1.0 / (1.0 + len_diff * 0.05)
-m.weighted_score *= proximity_factor
-
-# 2. 重複を含む場合の長いタイトル優先ペナルティ
-# （同一ゲームID群を越えて、全体のマッチ結果を俯瞰して処理する）
+# 重複を含む場合の長いタイトル優先ペナルティ
+# name_in_token でマッチした結果のみを対象とする
 for m_short in all_matches:
-    for m_long in all_matches:
-        if m_short.game_id != m_long.game_id:
-            if m_short.matched_name in m_long.matched_name: # LCPのような包含関係があるか
-                # 短い方のスコアを大幅に下げる
-                m_short.weighted_score *= 0.3
+    if m_short.match_method == "name_in_token":
+        for m_long in all_matches:
+            if m_short.game_id != m_long.game_id:
+                if normalized(m_short.matched_name) in normalized(m_long.matched_name):
+                    # 短い方のスコアを大幅に下げる
+                    m_short.weighted_score *= 0.3
 ```
 
 ### 4-3. 閾値フィルタ
@@ -490,10 +535,6 @@ for m_short in all_matches:
 - `final_score < 0.4` の候補は棄却
 - 閾値は要チューニング
 
-### 4-3. window_title による補強（オプション）
-
-`window_title` が利用可能な場合、同じ辞書マッチングを `window_title` にも適用する。
-`process_path` と `window_title` の結果が同一 `game_id` を指していればさらに確信度を上げる。
 
 ### 4-4. 出力
 
@@ -505,8 +546,8 @@ for m_short in all_matches:
   "brand": "Heliodor",
   "confidence": 0.92,
   "match_details": [
-    { "token": "流星ワールドアクター", "matched": "流星ワールドアクター Gaslight Bullet", "type": "title", "method": "token_in_name", "score": 0.68 },
-    { "token": "Heliodor", "matched": "Heliodor", "type": "brand", "method": "exact", "score": 0.60 }
+    { "token": "流星ワールドアクター", "matched": "流星ワールドアクター Gaslight Bullet", "type": "title", "method": "token_in_name", "score": 0.68, "rule": "Rule D" },
+    { "token": "Heliodor", "matched": "Heliodor", "type": "brand", "method": "exact", "score": 0.60, "rule": "Original" }
   ]
 }
 ```
@@ -533,10 +574,11 @@ Step 2 で生成されたトークン: `Heliodor`, `流星ワールドアクタ�
 
 ### Case 2: `G:\game\いつか、届く、あの空に。\main.bin`
 
+（`main.bin` は Step 1 でファイル名ブラックリストにより除外済み）
+
 | トークン | マッチ方法 | マッチ先 | match_type | スコア |
 |---|---|---|---|---|
 | `いつか、届く、あの空に。` | 完全一致 | Title `いつか、届く、あの空に。` | title | **1.0** |
-| `main` | (マッチなし) | — | — | — |
 
 → title 完全一致 → **final_score = 1.0 → 正解**
 
@@ -571,8 +613,8 @@ Step 2 で生成されたトークン: `Heliodor`, `流星ワールドアクタ�
 → スコアが低い。**このケースは文字列マッチングだけでは困難**。
 
 **対策案:**
-- `window_title` からの補強が有効（ウィンドウタイトルには日本語タイトル `12の月のイヴ` が表示されている可能性が高い）
 - Alias の部分一致 `12eve` ⊂ `12mooneve` で最低限のヒントは得られる
+- 将来的には補助情報（ウィンドウタイトル等）による補強の検討が可能
 
 ### Case 6: `F:\game\サクラノ刻\sakuranotoki.exe`
 

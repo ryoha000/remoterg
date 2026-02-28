@@ -478,13 +478,10 @@ def score_and_select(matches: List[MatchResult], official_title_map: Dict[str, s
 def main():
     parser = argparse.ArgumentParser(description="Process path からゲームタイトルを推定する PoC")
     parser.add_argument("process_path", help="ゲームのプロセスパス")
-    parser.add_argument("--window-title", help="補助的なウィンドウタイトル")
     parser.add_argument("--data-dir", default=r"data\vndb-db-2026-02-28\extracted\db", help="VNDB データのディレクトリ")
     args = parser.parse_args()
     
     print(f"Input Process Path: {args.process_path}")
-    if args.window_title:
-        print(f"Input Window Title: {args.window_title}")
         
     # Step 1: Segments
     segments = extract_segments(args.process_path)
@@ -492,9 +489,6 @@ def main():
     
     # Step 2: Tokens
     tokens = generate_tokens(segments)
-    if args.window_title:
-        tokens.append(args.window_title)
-        
     print(f"Step 2 Tokens: {tokens}")
     
     # Step 3: Load Data and Match

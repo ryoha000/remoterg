@@ -31,6 +31,8 @@ data class SearchFilters(
     val since: Long? = null,
     val until: Long? = null,
     val gameTitle: String? = null,
+    val charaText: String? = null,
+    val dialogText: String? = null,
     val isFavorite: Boolean = false
 )
 
@@ -63,6 +65,9 @@ class GalleryViewModel @Inject constructor(
     private val _searchFilters = MutableStateFlow(SearchFilters())
     val searchFilters: StateFlow<SearchFilters> = _searchFilters.asStateFlow()
 
+    private val _charaMatchedIds = MutableStateFlow<Set<String>?>(null)
+    private val _textMatchedIds = MutableStateFlow<Set<String>?>(null)
+
     // スクリーンショットの読み込み完了フラグ（初期値 false → 最初のデータ emit 後 true）
     private val _isScreenshotsLoaded = MutableStateFlow(false)
     val isScreenshotsLoaded: StateFlow<Boolean> = _isScreenshotsLoaded.asStateFlow()
@@ -77,8 +82,10 @@ class GalleryViewModel @Inject constructor(
     val screenshots = combine(
         repository.getAllScreenshotsWithDimensions(),
         favorites,
-        _searchFilters
-    ) { allScreenshots, favs, filters ->
+        _searchFilters,
+        _charaMatchedIds,
+        _textMatchedIds
+    ) { allScreenshots, favs, filters, charaMatchedIds, textMatchedIds ->
         // 最初のデータが到着したら読み込み完了とする
         if (!_isScreenshotsLoaded.value) {
             _isScreenshotsLoaded.value = true
@@ -95,6 +102,12 @@ class GalleryViewModel @Inject constructor(
             // Game title filter
             // 検索時の gameTitle は cleanTitle の可能性があるため、前方一致で判定
             if (filters.gameTitle != null && !item.windowTitle.startsWith(filters.gameTitle)) return@filter false
+
+            // Character text filter
+            if (filters.charaText != null && charaMatchedIds?.contains(item.localId) != true) return@filter false
+
+            // Dialogue text filter
+            if (filters.dialogText != null && textMatchedIds?.contains(item.localId) != true) return@filter false
 
             // Text search (matches title or process name)
             if (filters.text.isNotBlank()) {
@@ -280,6 +293,19 @@ class GalleryViewModel @Inject constructor(
 
     fun updateFilters(newFilters: SearchFilters) {
         _searchFilters.value = newFilters
+        
+        viewModelScope.launch {
+            if (newFilters.charaText != null) {
+                _charaMatchedIds.value = analysisDao.searchLocalIdsByCharacter(newFilters.charaText).toSet()
+            } else {
+                _charaMatchedIds.value = null
+            }
+            if (newFilters.dialogText != null) {
+                _textMatchedIds.value = analysisDao.searchLocalIdsByText(newFilters.dialogText).toSet()
+            } else {
+                _textMatchedIds.value = null
+            }
+        }
     }
 
     fun toggleFavorite(localId: String, isFavorite: Boolean) {

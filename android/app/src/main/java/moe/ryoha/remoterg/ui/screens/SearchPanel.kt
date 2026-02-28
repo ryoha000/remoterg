@@ -242,6 +242,50 @@ fun SearchPanel(
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
+                        // Suggestions for typed text
+                        if (inputText.isNotBlank() && !inputText.contains(Regex("^\\s*(game|chara|text|since|until|is):"))) {
+                            val rawText = inputText.trim()
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "検索サジェスト",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                                
+                                SuggestionRow(
+                                    icon = Icons.Default.VideogameAsset,
+                                    text = "\"$rawText\" をタイトルから探す",
+                                    onClick = {
+                                        onFiltersChanged(filters.copy(text = "", gameTitle = rawText))
+                                        isExpanded = false
+                                        inputText = ""
+                                    }
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SuggestionRow(
+                                    icon = Icons.Default.Person,
+                                    text = "\"$rawText\" をキャラ名(AI)から探す",
+                                    onClick = {
+                                        onFiltersChanged(filters.copy(text = "", charaText = rawText))
+                                        isExpanded = false
+                                        inputText = ""
+                                    }
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SuggestionRow(
+                                    icon = Icons.Default.ChatBubbleOutline,
+                                    text = "\"$rawText\" をテキスト(AI)から探す",
+                                    onClick = {
+                                        onFiltersChanged(filters.copy(text = "", dialogText = rawText))
+                                        isExpanded = false
+                                        inputText = ""
+                                    }
+                                )
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
+
                         // Quick Title Filters
                         var visibleTitleCount by remember { mutableIntStateOf(10) }
                         
@@ -369,7 +413,10 @@ fun SearchPanel(
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
                                 HelpRow(token = "is:favorite", desc = "お気に入りのみ表示", color = Color(0xFFF472B6))
-                                HelpRow(token = "キーワード", desc = "ゲームタイトルなどで検索", color = MaterialTheme.colorScheme.onSurface)
+                                HelpRow(token = "game:\"title\"", desc = "ゲームタイトルで絞り込み", color = Color(0xFFC084FC))
+                                HelpRow(token = "chara:\"name\"", desc = "AI分析のキャラ名で絞り込み", color = Color(0xFFFBBF24))
+                                HelpRow(token = "text:\"dialogue\"", desc = "AI分析のテキストで絞り込み", color = Color(0xFF34D399))
+                                HelpRow(token = "キーワード", desc = "タイトルやプロセス名で曖昧検索", color = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                             }
@@ -388,7 +435,35 @@ fun HelpRow(token: String, desc: String, color: Color) {
     }
 }
 
-enum class TokenType { Text, Since, Until, Favorite, Game }
+@Composable
+fun SuggestionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(8.dp),
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = text,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp
+            )
+        }
+    }
+}
+
+enum class TokenType { Text, Since, Until, Favorite, Game, Chara, TextFilter }
 
 data class SearchToken(
     val type: TokenType,
@@ -402,6 +477,8 @@ fun TokenChip(token: SearchToken, onRemove: () -> Unit) {
         TokenType.Since, TokenType.Until -> Triple(Color(0x333B82F6), Color(0x4D3B82F6), Color(0xFF60A5FA))
         TokenType.Favorite -> Triple(Color(0x33EC4899), Color(0x4DEC4899), Color(0xFFF472B6))
         TokenType.Game -> Triple(Color(0x33A855F7), Color(0x4DA855F7), Color(0xFFC084FC))
+        TokenType.Chara -> Triple(Color(0x33F59E0B), Color(0x4DF59E0B), Color(0xFFFBBF24))
+        TokenType.TextFilter -> Triple(Color(0x3310B981), Color(0x4D10B981), Color(0xFF34D399))
         TokenType.Text -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.outline, MaterialTheme.colorScheme.onSurface)
     }
 
@@ -443,6 +520,12 @@ private fun parseTokens(filters: SearchFilters): List<SearchToken> {
     if (filters.gameTitle != null) {
         tokens.add(SearchToken(TokenType.Game, "game:\"${filters.gameTitle}\"", filters.gameTitle))
     }
+    if (filters.charaText != null) {
+        tokens.add(SearchToken(TokenType.Chara, "chara:\"${filters.charaText}\"", "👤 ${filters.charaText}"))
+    }
+    if (filters.dialogText != null) {
+        tokens.add(SearchToken(TokenType.TextFilter, "text:\"${filters.dialogText}\"", "💬 ${filters.dialogText}"))
+    }
     return tokens
 }
 
@@ -453,6 +536,8 @@ private fun buildQueryString(filters: SearchFilters): String {
     if (filters.until != null) parts.add("until:${dateFormat.format(Date(filters.until))}")
     if (filters.isFavorite) parts.add("is:favorite")
     if (filters.gameTitle != null) parts.add("game:\"${filters.gameTitle}\"")
+    if (filters.charaText != null) parts.add("chara:\"${filters.charaText}\"")
+    if (filters.dialogText != null) parts.add("text:\"${filters.dialogText}\"")
     return parts.joinToString(" ")
 }
 
@@ -508,7 +593,27 @@ private fun parseQueryString(query: String, currentFilters: SearchFilters): Sear
         text = text.replace(gameMatch.value, "")
         gameMatch.groupValues[1]
     } else {
-        gameTitle
+        currentFilters.gameTitle
+    }
+
+    // chara:"name"
+    val charaRegex = Regex("chara:\"([^\"]+)\"")
+    val charaMatch = charaRegex.find(text)
+    val parsedCharaText = if (charaMatch != null) {
+        text = text.replace(charaMatch.value, "")
+        charaMatch.groupValues[1]
+    } else {
+        currentFilters.charaText
+    }
+
+    // text:"dialogue"
+    val textRegex = Regex("text:\"([^\"]+)\"")
+    val textMatch = textRegex.find(text)
+    val parsedDialogText = if (textMatch != null) {
+        text = text.replace(textMatch.value, "")
+        textMatch.groupValues[1]
+    } else {
+        currentFilters.dialogText
     }
 
     return SearchFilters(
@@ -516,6 +621,8 @@ private fun parseQueryString(query: String, currentFilters: SearchFilters): Sear
         since = since,
         until = until,
         gameTitle = parsedGameTitle,
+        charaText = parsedCharaText,
+        dialogText = parsedDialogText,
         isFavorite = isFavorite
     )
 }
@@ -526,6 +633,8 @@ private fun removeTokenFromFilters(filters: SearchFilters, token: SearchToken): 
         TokenType.Until -> filters.copy(until = null)
         TokenType.Favorite -> filters.copy(isFavorite = false)
         TokenType.Game -> filters.copy(gameTitle = null)
+        TokenType.Chara -> filters.copy(charaText = null)
+        TokenType.TextFilter -> filters.copy(dialogText = null)
         TokenType.Text -> filters.copy(text = "")
     }
 }

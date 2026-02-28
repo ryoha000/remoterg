@@ -61,4 +61,10 @@ interface AnalysisDao {
 
     @Query("DELETE FROM analysis_results WHERE local_id = :localId")
     suspend fun deleteAnalysisResult(localId: String)
+
+    @Query("SELECT local_id FROM analysis_results WHERE data LIKE '%' || '\"name\":\"' || '%' || :query || '%' || '\"' || '%'")
+    suspend fun searchLocalIdsByCharacter(query: String): List<String>
+
+    @Query("SELECT local_id FROM analysis_results WHERE data LIKE '%' || '\"text\":\"' || '%' || :query || '%' || '\"' || '%'")
+    suspend fun searchLocalIdsByText(query: String): List<String>
 }

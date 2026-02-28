@@ -121,7 +121,11 @@ fun GalleryDetailScreen(
     val analysisResult = currentScreenshot?.let { ss -> analysisResults[ss.localId] }
     val isAnalyzing = currentScreenshot?.let { ss -> isAnalyzingMap[ss.hostId] } ?: false
 
-    val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.US) }
+    val dateFormat = remember { 
+        SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Tokyo")
+        }
+    }
     val dateString = currentScreenshot?.let { dateFormat.format(Date(it.dateAdded * 1000L)) } ?: ""
 
     // InfoPanel の幅（画面幅の 35%）

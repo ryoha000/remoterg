@@ -27,7 +27,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,7 +65,10 @@ fun SearchPanel(
     val tokens = parseTokens(filters)
     val hasActiveFilters = tokens.isNotEmpty() || filters.text.isNotBlank()
 
-    Box(modifier = modifier) {
+    var parentWidth by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+
+    Box(modifier = modifier.onGloballyPositioned { parentWidth = it.size.width }) {
         // Collapsed Search Bar / Top interaction area
         Row(
             modifier = Modifier
@@ -155,28 +160,32 @@ fun SearchPanel(
         }
         
         // Expanded Panel Overlay
-        AnimatedVisibility(
-            visible = isExpanded,
-            enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
-            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top)
-        ) {
-            // Need a full screen backdrop to catch clicks outside
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(onTap = { isExpanded = false })
-                    }
+        val transitionState = remember { androidx.compose.animation.core.MutableTransitionState(false) }
+        transitionState.targetState = isExpanded
+
+        if (transitionState.currentState || transitionState.targetState) {
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.TopStart,
+                onDismissRequest = { isExpanded = false },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
             ) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 44.dp)
-                        .clickable(enabled = false) {}, // absorb clicks inside
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                Box(
+                    modifier = Modifier.width(with(density) { parentWidth.toDp() })
                 ) {
+                    AnimatedVisibility(
+                        visibleState = transitionState,
+                        enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+                        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top)
+                    ) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 44.dp)
+                                .clickable(enabled = false) {}, // absorb clicks inside
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                        ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         // Editable text field row
                         Row(
@@ -222,7 +231,7 @@ fun SearchPanel(
                                 )
                             }
                         }
-                        
+
                         LaunchedEffect(isExpanded) {
                             if (isExpanded) {
                                 focusRequester.requestFocus()
@@ -372,12 +381,15 @@ fun SearchPanel(
                                 HelpRow(token = "キーワード", desc = "ゲームタイトルなどで検索", color = MaterialTheme.colorScheme.onSurface)
                             }
                         }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
+
 
 @Composable
 fun DateSuggestionButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {

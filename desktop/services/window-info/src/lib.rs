@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 use windows::Win32::Foundation::{HANDLE, HWND, MAX_PATH};
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
@@ -29,6 +30,8 @@ impl WindowInfoProvider {
         let (process_path, process_name) = self
             .get_process_info(hwnd)
             .unwrap_or_else(|_| ("Unknown".to_string(), "Unknown".to_string()));
+
+        info!("Window info: title={}, process_path={}, process_name={}", title, process_path, process_name);
 
         Ok(WindowMetadata {
             title,

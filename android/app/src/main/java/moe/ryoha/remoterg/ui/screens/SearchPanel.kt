@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
@@ -32,6 +33,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,6 +59,7 @@ fun SearchPanel(
     var showHelp by remember { mutableStateOf(false) }
     
     val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
 
     // Sync input with filters object when closed
     LaunchedEffect(filters, isExpanded) {
@@ -65,15 +68,11 @@ fun SearchPanel(
         }
     }
 
-    // Determine active tokens
-    val tokens = parseTokens(filters)
-    val hasActiveFilters = tokens.isNotEmpty() || filters.text.isNotBlank()
-
     var parentWidth by remember { mutableStateOf(0) }
     val density = LocalDensity.current
 
     Box(modifier = modifier.onGloballyPositioned { parentWidth = it.size.width }) {
-        // Collapsed Search Bar / Top interaction area
+        // Main Search Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -81,9 +80,6 @@ fun SearchPanel(
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                .clickable { 
-                    isExpanded = true
-                }
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -96,48 +92,43 @@ fun SearchPanel(
             
             Spacer(modifier = Modifier.width(8.dp))
             
-            if (tokens.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    items(tokens) { token ->
-                        TokenChip(
-                            token = token,
-                            onRemove = {
-                                val newFilters = removeTokenFromFilters(filters, token)
-                                onFiltersChanged(newFilters)
-                                inputText = buildQueryString(newFilters)
-                            }
-                        )
-                    }
-                    if (filters.text.isNotBlank()) {
-                        item {
-                            Text(
-                                text = filters.text,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 14.sp,
-                                maxLines = 1,
-                                modifier = Modifier.padding(start = 4.dp)
-                            )
+            BasicTextField(
+                value = inputText,
+                onValueChange = { 
+                    inputText = it
+                    onFiltersChanged(parseQueryString(it, filters))
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { focusState ->
+                        isExpanded = focusState.isFocused
+                        if (!isExpanded) {
+                            showHelp = false
                         }
+                    },
+                textStyle = TextStyle(
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 14.sp
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                singleLine = true,
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (inputText.isEmpty()) {
+                            Text("検索...", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                        }
+                        innerTextField()
                     }
                 }
-            } else {
-                Text(
-                    text = if (filters.text.isNotBlank()) filters.text else "検索...",
-                    color = if (filters.text.isNotBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            )
             
-            if (hasActiveFilters) {
+            if (inputText.isNotEmpty()) {
                 IconButton(
                     onClick = {
+                        inputText = ""
                         onFiltersChanged(SearchFilters())
+                        focusManager.clearFocus()
                     },
                     modifier = Modifier.size(24.dp)
                 ) {
@@ -151,7 +142,14 @@ fun SearchPanel(
             }
             
             IconButton(
-                onClick = { showHelp = !showHelp },
+                onClick = { 
+                    if (showHelp && isExpanded) {
+                        showHelp = false
+                    } else {
+                        showHelp = true
+                        focusRequester.requestFocus()
+                    }
+                },
                 modifier = Modifier.size(24.dp)
             ) {
                 Icon(
@@ -170,11 +168,15 @@ fun SearchPanel(
         if (transitionState.currentState || transitionState.targetState) {
             androidx.compose.ui.window.Popup(
                 alignment = Alignment.TopStart,
-                onDismissRequest = { isExpanded = false },
-                properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+                onDismissRequest = { 
+                    focusManager.clearFocus()
+                },
+                properties = androidx.compose.ui.window.PopupProperties(focusable = false)
             ) {
                 Box(
-                    modifier = Modifier.width(with(density) { parentWidth.toDp() })
+                    modifier = Modifier
+                        .width(with(density) { parentWidth.toDp() })
+                        .padding(top = 44.dp)
                 ) {
                     AnimatedVisibility(
                         visibleState = transitionState,
@@ -184,234 +186,188 @@ fun SearchPanel(
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 44.dp)
                                 .clickable(enabled = false) {}, // absorb clicks inside
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                         ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        // Editable text field row
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            BasicTextField(
-                                value = inputText,
-                                onValueChange = { 
-                                    inputText = it
-                                    onFiltersChanged(parseQueryString(it, filters))
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .focusRequester(focusRequester),
-                                textStyle = TextStyle(
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 14.sp
-                                ),
-                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                singleLine = true
-                            )
-                            IconButton(
-                                onClick = { isExpanded = false },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.KeyboardArrowUp,
-                                    contentDescription = "Close",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        LaunchedEffect(isExpanded) {
-                            if (isExpanded) {
-                                focusRequester.requestFocus()
-                            }
-                        }
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                        // Suggestions for typed text
-                        if (inputText.isNotBlank() && !inputText.contains(Regex("^\\s*(game|chara|text|since|until|is):"))) {
-                            val rawText = inputText.trim()
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "検索サジェスト",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(bottom = 8.dp)
-                                )
-                                
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    SuggestionRow(
-                                        icon = Icons.Default.VideogameAsset,
-                                        text = "\"$rawText\" をタイトルから探す",
-                                        onClick = {
-                                            onFiltersChanged(filters.copy(text = "", gameTitle = rawText))
-                                            isExpanded = false
-                                            inputText = ""
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                // Suggestions for typed text
+                                if (inputText.isNotBlank() && !inputText.contains(Regex("^\\s*(game|chara|text|since|until|is|speaker):"))) {
+                                    val rawText = inputText.trim()
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "検索サジェスト",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(bottom = 8.dp)
+                                        )
+                                        
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            SuggestionRow(
+                                                icon = Icons.Default.VideogameAsset,
+                                                text = "\"$rawText\" をタイトルから探す",
+                                                onClick = {
+                                                    val newFilters = filters.copy(text = "", gameTitle = rawText)
+                                                    onFiltersChanged(newFilters)
+                                                    inputText = buildQueryString(newFilters)
+                                                    focusManager.clearFocus()
+                                                }
+                                            )
+                                            SuggestionRow(
+                                                icon = Icons.Default.RecordVoiceOver,
+                                                text = "\"$rawText\" を話し手から探す",
+                                                onClick = {
+                                                    val newFilters = filters.copy(text = "", speakerText = rawText)
+                                                    onFiltersChanged(newFilters)
+                                                    inputText = buildQueryString(newFilters)
+                                                    focusManager.clearFocus()
+                                                }
+                                            )
+                                            SuggestionRow(
+                                                icon = Icons.Default.ChatBubbleOutline,
+                                                text = "\"$rawText\" をテキストから探す",
+                                                onClick = {
+                                                    val newFilters = filters.copy(text = "", dialogText = rawText)
+                                                    onFiltersChanged(newFilters)
+                                                    inputText = buildQueryString(newFilters)
+                                                    focusManager.clearFocus()
+                                                }
+                                            )
+                                            SuggestionRow(
+                                                icon = Icons.Default.Person,
+                                                text = "\"$rawText\" を登場人物から探す",
+                                                onClick = {
+                                                    val newFilters = filters.copy(text = "", charaText = rawText)
+                                                    onFiltersChanged(newFilters)
+                                                    inputText = buildQueryString(newFilters)
+                                                    focusManager.clearFocus()
+                                                }
+                                            )
                                         }
-                                    )
-                                    SuggestionRow(
-                                        icon = Icons.Default.RecordVoiceOver,
-                                        text = "\"$rawText\" を話し手から探す",
-                                        onClick = {
-                                            onFiltersChanged(filters.copy(text = "", speakerText = rawText))
-                                            isExpanded = false
-                                            inputText = ""
-                                        }
-                                    )
-                                    SuggestionRow(
-                                        icon = Icons.Default.ChatBubbleOutline,
-                                        text = "\"$rawText\" をテキストから探す",
-                                        onClick = {
-                                            onFiltersChanged(filters.copy(text = "", dialogText = rawText))
-                                            isExpanded = false
-                                            inputText = ""
-                                        }
-                                    )
-                                    SuggestionRow(
-                                        icon = Icons.Default.Person,
-                                        text = "\"$rawText\" を登場人物から探す",
-                                        onClick = {
-                                            onFiltersChanged(filters.copy(text = "", charaText = rawText))
-                                            isExpanded = false
-                                            inputText = ""
-                                        }
-                                    )
-                                }
-                            }
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        }
-
-                        // Quick Title Filters
-                        if (recentTitles.isNotEmpty()) {
-                            FilterSuggestionGroup(
-                                title = "タイトルで絞り込み",
-                                items = recentTitles,
-                                icon = Icons.Default.VideogameAsset,
-                                itemText = { it.first },
-                                onItemSelected = {
-                                    onFiltersChanged(filters.copy(gameTitle = it.first))
-                                    isExpanded = false
-                                }
-                            )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        }
-
-                        // Quick Speaker Filters
-                        if (recentSpeakers.isNotEmpty()) {
-                            FilterSuggestionGroup(
-                                title = "話し手で絞り込み",
-                                items = recentSpeakers,
-                                icon = Icons.Default.RecordVoiceOver,
-                                itemText = { it },
-                                onItemSelected = {
-                                    onFiltersChanged(filters.copy(speakerText = it))
-                                    isExpanded = false
-                                }
-                            )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        }
-
-                        // Quick Character Filters
-                        if (recentCharacters.isNotEmpty()) {
-                            FilterSuggestionGroup(
-                                title = "登場人物で絞り込み",
-                                items = recentCharacters,
-                                icon = Icons.Default.Person,
-                                itemText = { it },
-                                onItemSelected = {
-                                    onFiltersChanged(filters.copy(charaText = it))
-                                    isExpanded = false
-                                }
-                            )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        }
-
-                        // Quick Filters
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = "クイックフィルター",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            
-                            Surface(
-                                color = if (filters.isFavorite) Color(0x33F91980) else MaterialTheme.colorScheme.surfaceVariant,
-                                border = if (filters.isFavorite) BorderStroke(1.dp, Color(0x4DF91980)) else null,
-                                shape = RoundedCornerShape(8.dp),
-                                onClick = {
-                                    val newVal = !filters.isFavorite
-                                    val newText = if (newVal) {
-                                        if (!inputText.contains("is:favorite")) "$inputText is:favorite".trim() else inputText
-                                    } else {
-                                        inputText.replace("is:favorite", "").trim()
                                     }
-                                    inputText = newText
-                                    onFiltersChanged(filters.copy(isFavorite = newVal))
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                 }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = if (filters.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                        contentDescription = null,
-                                        tint = if (filters.isFavorite) Color(0xFFF91980) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "お気に入りのみ",
-                                        color = if (filters.isFavorite) Color(0xFFF472B6) else MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 14.sp
-                                    )
-                                }
-                            }
-                        }
 
-                        // Help section
-                        AnimatedVisibility(visible = showHelp) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Text(
-                                    text = "検索の使い方",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(bottom = 8.dp)
-                                )
-                                HelpRow(token = "is:favorite", desc = "お気に入りのみ表示", color = Color(0xFFF472B6))
-                                HelpRow(token = "game:\"title\"", desc = "ゲームタイトルで絞り込み", color = Color(0xFFC084FC))
-                                HelpRow(token = "speaker:\"name\"", desc = "話し手で絞り込み", color = Color(0xFFF97316))
-                                HelpRow(token = "text:\"dialogue\"", desc = "テキストで絞り込み", color = Color(0xFF34D399))
-                                HelpRow(token = "chara:\"name\"", desc = "登場人物で絞り込み", color = Color(0xFFFBBF24))
-                                HelpRow(token = "キーワード", desc = "タイトルやプロセス名で曖昧検索", color = MaterialTheme.colorScheme.onSurface)
-                            }
-                        }
+                                // Quick Title Filters
+                                if (recentTitles.isNotEmpty()) {
+                                    FilterSuggestionGroup(
+                                        title = "タイトルで絞り込み",
+                                        items = recentTitles,
+                                        icon = Icons.Default.VideogameAsset,
+                                        itemText = { it.first },
+                                        onItemSelected = {
+                                            val newFilters = filters.copy(gameTitle = it.first)
+                                            onFiltersChanged(newFilters)
+                                            inputText = buildQueryString(newFilters)
+                                            focusManager.clearFocus()
+                                        }
+                                    )
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                }
+
+                                // Quick Speaker Filters
+                                if (recentSpeakers.isNotEmpty()) {
+                                    FilterSuggestionGroup(
+                                        title = "話し手で絞り込み",
+                                        items = recentSpeakers,
+                                        icon = Icons.Default.RecordVoiceOver,
+                                        itemText = { it },
+                                        onItemSelected = {
+                                            val newFilters = filters.copy(speakerText = it)
+                                            onFiltersChanged(newFilters)
+                                            inputText = buildQueryString(newFilters)
+                                            focusManager.clearFocus()
+                                        }
+                                    )
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                }
+
+                                // Quick Character Filters
+                                if (recentCharacters.isNotEmpty()) {
+                                    FilterSuggestionGroup(
+                                        title = "登場人物で絞り込み",
+                                        items = recentCharacters,
+                                        icon = Icons.Default.Person,
+                                        itemText = { it },
+                                        onItemSelected = {
+                                            val newFilters = filters.copy(charaText = it)
+                                            onFiltersChanged(newFilters)
+                                            inputText = buildQueryString(newFilters)
+                                            focusManager.clearFocus()
+                                        }
+                                    )
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                }
+
+                                // Quick Filters
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "クイックフィルター",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                    
+                                    Surface(
+                                        color = if (filters.isFavorite) Color(0x33F91980) else MaterialTheme.colorScheme.surfaceVariant,
+                                        border = if (filters.isFavorite) BorderStroke(1.dp, Color(0x4DF91980)) else null,
+                                        shape = RoundedCornerShape(8.dp),
+                                        onClick = {
+                                            val newVal = !filters.isFavorite
+                                            val newFilters = filters.copy(isFavorite = newVal)
+                                            onFiltersChanged(newFilters)
+                                            inputText = buildQueryString(newFilters)
+                                        }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = if (filters.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                                contentDescription = null,
+                                                tint = if (filters.isFavorite) Color(0xFFF91980) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "お気に入りのみ",
+                                                color = if (filters.isFavorite) Color(0xFFF472B6) else MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 14.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Help section
+                                AnimatedVisibility(visible = showHelp) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Text(
+                                            text = "検索の使い方",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(bottom = 8.dp)
+                                        )
+                                        HelpRow(token = "is:favorite", desc = "お気に入りのみ表示", color = Color(0xFFF472B6))
+                                        HelpRow(token = "game:\"title\"", desc = "ゲームタイトルで絞り込み", color = Color(0xFFC084FC))
+                                        HelpRow(token = "speaker:\"name\"", desc = "話し手で絞り込み", color = Color(0xFFF97316))
+                                        HelpRow(token = "text:\"dialogue\"", desc = "テキストで絞り込み", color = Color(0xFF34D399))
+                                        HelpRow(token = "chara:\"name\"", desc = "登場人物で絞り込み", color = Color(0xFFFBBF24))
+                                        HelpRow(token = "キーワード", desc = "タイトルやプロセス名で曖昧検索", color = MaterialTheme.colorScheme.onSurface)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(text = "※値にスペースを含まない場合はダブルクォーテーションを省略できます (例: text:こんにちは)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                             }
                         }
                     }
@@ -431,7 +387,7 @@ fun <T> FilterSuggestionGroup(
 ) {
     var visibleItemCount by remember { mutableIntStateOf(10) }
     
-    // Reset visible count when item list changes significantly (or you could tie this to expansion state from parent)
+    // Reset visible count when item list changes significantly
     LaunchedEffect(items) {
         visibleItemCount = 10
     }
@@ -524,106 +480,60 @@ fun SuggestionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: S
     }
 }
 
-enum class TokenType { Text, Since, Until, Favorite, Game, Chara, Speaker, TextFilter }
-
-data class SearchToken(
-    val type: TokenType,
-    val value: String,
-    val displayValue: String
-)
-
-@Composable
-fun TokenChip(token: SearchToken, onRemove: () -> Unit) {
-    val (bgColor, borderColor, textColor) = when (token.type) {
-        TokenType.Since, TokenType.Until -> Triple(Color(0x333B82F6), Color(0x4D3B82F6), Color(0xFF60A5FA))
-        TokenType.Favorite -> Triple(Color(0x33EC4899), Color(0x4DEC4899), Color(0xFFF472B6))
-        TokenType.Game -> Triple(Color(0x33A855F7), Color(0x4DA855F7), Color(0xFFC084FC))
-        TokenType.Chara -> Triple(Color(0x33F59E0B), Color(0x4DF59E0B), Color(0xFFFBBF24))
-        TokenType.Speaker -> Triple(Color(0x33EA580C), Color(0x4DEA580C), Color(0xFFF97316))
-        TokenType.TextFilter -> Triple(Color(0x3310B981), Color(0x4D10B981), Color(0xFF34D399))
-        TokenType.Text -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.outline, MaterialTheme.colorScheme.onSurface)
-    }
-
-    Row(
-        modifier = Modifier
-            .background(bgColor, RoundedCornerShape(4.dp))
-            .border(1.dp, borderColor, RoundedCornerShape(4.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(text = token.displayValue, color = textColor, fontSize = 12.sp)
-        Spacer(modifier = Modifier.width(4.dp))
-        Icon(
-            imageVector = Icons.Default.Cancel,
-            contentDescription = "Remove",
-            tint = textColor.copy(alpha = 0.7f),
-            modifier = Modifier
-                .size(14.dp)
-                .clickable { onRemove() }
-        )
-    }
-}
-
 private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
-private fun parseTokens(filters: SearchFilters): List<SearchToken> {
-    val tokens = mutableListOf<SearchToken>()
-    if (filters.since != null) {
-        val dateStr = dateFormat.format(Date(filters.since))
-        tokens.add(SearchToken(TokenType.Since, "since:$dateStr", "以降: $dateStr"))
-    }
-    if (filters.until != null) {
-        val dateStr = dateFormat.format(Date(filters.until))
-        tokens.add(SearchToken(TokenType.Until, "until:$dateStr", "以前: $dateStr"))
-    }
-    if (filters.isFavorite) {
-        tokens.add(SearchToken(TokenType.Favorite, "is:favorite", "お気に入り"))
-    }
-    if (filters.gameTitle != null) {
-        tokens.add(SearchToken(TokenType.Game, "game:\"${filters.gameTitle}\"", filters.gameTitle))
-    }
-    if (filters.charaText != null) {
-        tokens.add(SearchToken(TokenType.Chara, "chara:\"${filters.charaText}\"", "👤 ${filters.charaText}"))
-    }
-    if (filters.speakerText != null) {
-        tokens.add(SearchToken(TokenType.Speaker, "speaker:\"${filters.speakerText}\"", "🗣️ ${filters.speakerText}"))
-    }
-    if (filters.dialogText != null) {
-        tokens.add(SearchToken(TokenType.TextFilter, "text:\"${filters.dialogText}\"", "💬 ${filters.dialogText}"))
-    }
-    return tokens
+private fun escapeValue(value: String): String {
+    return if (value.contains(" ")) "\"$value\"" else value
 }
 
 private fun buildQueryString(filters: SearchFilters): String {
     val parts = mutableListOf<String>()
-    if (filters.text.isNotBlank()) parts.add(filters.text)
+    if (filters.gameTitle != null) parts.add("game:${escapeValue(filters.gameTitle)}")
+    if (filters.charaText != null) parts.add("chara:${escapeValue(filters.charaText)}")
+    if (filters.speakerText != null) parts.add("speaker:${escapeValue(filters.speakerText)}")
+    if (filters.dialogText != null) parts.add("text:${escapeValue(filters.dialogText)}")
     if (filters.since != null) parts.add("since:${dateFormat.format(Date(filters.since))}")
     if (filters.until != null) parts.add("until:${dateFormat.format(Date(filters.until))}")
     if (filters.isFavorite) parts.add("is:favorite")
-    if (filters.gameTitle != null) parts.add("game:\"${filters.gameTitle}\"")
-    if (filters.charaText != null) parts.add("chara:\"${filters.charaText}\"")
-    if (filters.speakerText != null) parts.add("speaker:\"${filters.speakerText}\"")
-    if (filters.dialogText != null) parts.add("text:\"${filters.dialogText}\"")
+    if (filters.text.isNotBlank()) parts.add(filters.text)
     return parts.joinToString(" ")
+}
+
+private fun extractFilter(text: String, prefix: String): Pair<String, String?> {
+    var newText = text
+    // Match quoted value first (e.g. text:"my value")
+    val quotedRegex = Regex("$prefix:\"([^\"]+)\"")
+    val quotedMatch = quotedRegex.find(newText)
+    if (quotedMatch != null) {
+        newText = newText.replace(quotedMatch.value, "")
+        return Pair(newText, quotedMatch.groupValues[1])
+    }
+    
+    // Match unquoted value next (e.g. text:myvalue) that doesn't contain spaces
+    val unquotedRegex = Regex("$prefix:([^\\s]+)")
+    val unquotedMatch = unquotedRegex.find(newText)
+    if (unquotedMatch != null) {
+        newText = newText.replace(unquotedMatch.value, "")
+        return Pair(newText, unquotedMatch.groupValues[1])
+    }
+    
+    return Pair(newText, null)
 }
 
 private fun parseQueryString(query: String, currentFilters: SearchFilters): SearchFilters {
     var text = query
-    var since: Long? = currentFilters.since
-    var until: Long? = currentFilters.until
-    var isFavorite = currentFilters.isFavorite
-    val gameTitle = currentFilters.gameTitle
 
     // is:favorite
-    if (text.contains("is:favorite")) {
-        isFavorite = true
+    val isFavorite = if (text.contains("is:favorite")) {
         text = text.replace("is:favorite", "")
+        true
     } else {
-        isFavorite = false
+        false
     }
 
     // since:YYYY-MM-DD
-    val sinceRegex = Regex("since:(\\d{4}[-/]\\d{2}[-/]\\d{2})")
+    var since: Long? = currentFilters.since
+    val sinceRegex = Regex("since:([^\\s]+)")
     val sinceMatch = sinceRegex.find(text)
     if (sinceMatch != null) {
         val dateStr = sinceMatch.groupValues[1].replace("/", "-")
@@ -631,12 +541,11 @@ private fun parseQueryString(query: String, currentFilters: SearchFilters): Sear
             since = dateFormat.parse(dateStr)?.time
         } catch (e: Exception) {}
         text = text.replace(sinceMatch.value, "")
-    } else {
-        since = null
     }
 
     // until:YYYY-MM-DD
-    val untilRegex = Regex("until:(\\d{4}[-/]\\d{2}[-/]\\d{2})")
+    var until: Long? = currentFilters.until
+    val untilRegex = Regex("until:([^\\s]+)")
     val untilMatch = untilRegex.find(text)
     if (untilMatch != null) {
         val dateStr = untilMatch.groupValues[1].replace("/", "-")
@@ -648,52 +557,22 @@ private fun parseQueryString(query: String, currentFilters: SearchFilters): Sear
             }
         } catch (e: Exception) {}
         text = text.replace(untilMatch.value, "")
-    } else {
-        until = null
     }
     
-    // game:"title"
-    val gameRegex = Regex("game:\"([^\"]+)\"")
-    val gameMatch = gameRegex.find(text)
-    val parsedGameTitle = if (gameMatch != null) {
-        text = text.replace(gameMatch.value, "")
-        gameMatch.groupValues[1]
-    } else {
-        currentFilters.gameTitle
-    }
-
-    // chara:"name"
-    val charaRegex = Regex("chara:\"([^\"]+)\"")
-    val charaMatch = charaRegex.find(text)
-    val parsedCharaText = if (charaMatch != null) {
-        text = text.replace(charaMatch.value, "")
-        charaMatch.groupValues[1]
-    } else {
-        currentFilters.charaText
-    }
-
-    // speaker:"name"
-    val speakerRegex = Regex("speaker:\"([^\"]+)\"")
-    val speakerMatch = speakerRegex.find(text)
-    val parsedSpeakerText = if (speakerMatch != null) {
-        text = text.replace(speakerMatch.value, "")
-        speakerMatch.groupValues[1]
-    } else {
-        currentFilters.speakerText
-    }
-
-    // text:"dialogue"
-    val textRegex = Regex("text:\"([^\"]+)\"")
-    val textMatch = textRegex.find(text)
-    val parsedDialogText = if (textMatch != null) {
-        text = text.replace(textMatch.value, "")
-        textMatch.groupValues[1]
-    } else {
-        currentFilters.dialogText
-    }
+    val (textAfterGame, parsedGameTitle) = extractFilter(text, "game")
+    text = textAfterGame
+    
+    val (textAfterChara, parsedCharaText) = extractFilter(text, "chara")
+    text = textAfterChara
+    
+    val (textAfterSpeaker, parsedSpeakerText) = extractFilter(text, "speaker")
+    text = textAfterSpeaker
+    
+    val (textAfterDialog, parsedDialogText) = extractFilter(text, "text")
+    text = textAfterDialog
 
     return SearchFilters(
-        text = text.trim(),
+        text = text.trim().replace(Regex("\\s+"), " "), // Normalize spaces
         since = since,
         until = until,
         gameTitle = parsedGameTitle,
@@ -702,17 +581,4 @@ private fun parseQueryString(query: String, currentFilters: SearchFilters): Sear
         dialogText = parsedDialogText,
         isFavorite = isFavorite
     )
-}
-
-private fun removeTokenFromFilters(filters: SearchFilters, token: SearchToken): SearchFilters {
-    return when (token.type) {
-        TokenType.Since -> filters.copy(since = null)
-        TokenType.Until -> filters.copy(until = null)
-        TokenType.Favorite -> filters.copy(isFavorite = false)
-        TokenType.Game -> filters.copy(gameTitle = null)
-        TokenType.Chara -> filters.copy(charaText = null)
-        TokenType.Speaker -> filters.copy(speakerText = null)
-        TokenType.TextFilter -> filters.copy(dialogText = null)
-        TokenType.Text -> filters.copy(text = "")
-    }
 }

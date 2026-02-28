@@ -90,7 +90,14 @@ fun GalleryScreen(
                 .padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onNavigateBack) {
+            val hasFilters = searchFilters.text.isNotBlank() || searchFilters.gameTitle != null || searchFilters.charaText != null || searchFilters.speakerText != null || searchFilters.dialogText != null || searchFilters.since != null || searchFilters.until != null || searchFilters.isFavorite
+            IconButton(onClick = { 
+                if (hasFilters) {
+                    viewModel.updateFilters(moe.ryoha.remoterg.ui.viewmodel.SearchFilters())
+                } else {
+                    onNavigateBack() 
+                }
+            }) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",

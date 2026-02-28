@@ -26,6 +26,7 @@ use video_capture;
 use video_capture_mock;
 use video_stream::VideoStreamService;
 use webrtc::WebRtcService;
+use title_resolver::{DictDownloader, TitleResolver};
 
 #[derive(Parser, Debug)]
 #[command(name = "hostd")]
@@ -238,6 +239,27 @@ async fn main() -> Result<()> {
     // CaptureServiceへのコマンド送信チャネルを複製
     let capture_cmd_tx_for_input = capture_cmd_tx.clone();
 
+    // 辞書のパスを決定
+    let dict_path = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("remoterg")
+        .join("vndb_titles.db");
+
+    if let Some(parent) = dict_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    // 辞書が存在しない場合はダウンロード（起動をブロック）
+    if !dict_path.exists() {
+        info!("VNDB 辞書が見つかりません。ダウンロードを開始します...");
+        match DictDownloader::ensure_latest(&dict_path).await {
+            Ok(()) => info!("辞書のダウンロード完了"),
+            Err(e) => tracing::error!("辞書のダウンロードに失敗: {}", e),
+        }
+    }
+
+    let title_resolver = TitleResolver::new(&dict_path).ok().map(Arc::new);
+
     let input_service = InputService::new(
         data_channel_rx,
         capture_cmd_tx_for_input,
@@ -246,6 +268,7 @@ async fn main() -> Result<()> {
         tagger_cmd_tx,
         std::path::PathBuf::from(args.screenshots_dir),
         args.hwnd,
+        title_resolver,
     );
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,

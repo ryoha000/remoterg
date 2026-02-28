@@ -1,0 +1,45 @@
+name: Build VNDB Title Database
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Download VNDB Dump
+        run: |
+          curl -L https://dl.vndb.org/dump/vndb-db-latest.tar.zst -o vndb-db.tar.zst
+      
+      - name: Extract VNDB Dump
+        run: |
+          tar --zstd -xf vndb-db.tar.zst
+          
+      - name: Build SQLite DB
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          uv run --with pandas python scripts/build_title_db.py --data-dir db --output vndb_titles.db
+
+      - name: Compress with zstd
+        run: |
+          zstd -19 vndb_titles.db -o vndb_titles.db.zst
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vndb-dict-${{ github.run_number }}
+          name: "VNDB Title Database (Build ${{ github.run_number }})"
+          files: vndb_titles.db.zst
+          draft: false
+          prerelease: false

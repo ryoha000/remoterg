@@ -13,6 +13,8 @@ use core_types::{
 };
 
 use window_info::WindowInfoProvider;
+use std::sync::Arc;
+use title_resolver::{TitleResolver, TitleResolveResult};
 
 use std::path::PathBuf;
 use windows::Win32::Foundation::HWND;
@@ -37,6 +39,8 @@ pub struct InputService {
     screenshot_dir: PathBuf,
     target_hwnd: u64,
     window_info_provider: WindowInfoProvider,
+    title_resolver: Option<Arc<TitleResolver>>,
+    cached_title: tokio::sync::Mutex<Option<(String, TitleResolveResult)>>,
 }
 
 const PROMPT: &str = r#"以下のJSONスキーマに従って、スクリーンショットの解析結果を出力してください。
@@ -76,6 +80,7 @@ impl InputService {
         tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
         screenshot_dir: PathBuf,
         target_hwnd: u64,
+        title_resolver: Option<Arc<TitleResolver>>,
     ) -> Self {
         Self {
             message_rx,
@@ -86,6 +91,8 @@ impl InputService {
             screenshot_dir,
             target_hwnd,
             window_info_provider: WindowInfoProvider::new(),
+            title_resolver,
+            cached_title: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -224,6 +231,27 @@ impl InputService {
             }
         };
 
+        let process_path = window_info.as_ref().map(|i| i.process_path.clone());
+        let mut title_info = None;
+
+        if let Some(ref path) = process_path {
+            if let Some(resolver) = &self.title_resolver {
+                let mut cache = self.cached_title.lock().await;
+                if let Some((ref cached_path, ref cached_result)) = *cache {
+                    if cached_path == path {
+                        title_info = Some(cached_result.clone());
+                    }
+                }
+                
+                if title_info.is_none() {
+                    if let Some(result) = resolver.resolve(path) {
+                        *cache = Some((path.clone(), result.clone()));
+                        title_info = Some(result);
+                    }
+                }
+            }
+        }
+
         let metadata = DataChannelMessage::ScreenshotMetadata {
             payload: ScreenshotMetadataPayload {
                 id: id.clone(),
@@ -235,6 +263,8 @@ impl InputService {
                 window_title: window_info.as_ref().map(|i| i.title.clone()),
                 process_path: window_info.as_ref().map(|i| i.process_path.clone()),
                 process_name: window_info.as_ref().map(|i| i.process_name.clone()),
+                game_id: title_info.as_ref().map(|t| t.game_id.clone()),
+                official_title: title_info.as_ref().map(|t| t.official_title.clone()),
             },
         };
 

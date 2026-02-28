@@ -19,7 +19,7 @@ members = [
   "tagger-setup",
   "tagger",
   "window-info",
-  "gpu-texture",
+  "gpu-texture", "title-resolver",
 ]
 
 resolver = "2"

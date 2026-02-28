@@ -102,6 +102,13 @@ remoterg/
 - DI は Hilt を使用
 - ローカルデータは Room を使用
 
+### Python
+
+- コードは scripts ディレクトリに配置する
+- uv を用いて実行する(python を直で呼び出したり pip install などは禁止)
+  - 実行時はカレントディレクトリが scripts ディレクトリとなるようにする
+  - 実行時は `$env:PYTHONIOENCODING="utf-8"; uv run python search_titles.py "流星ワールドアクター"` のように `$env:PYTHONIOENCODING="utf-8";` をつける
+
 ## 技術スタック
 
 ### バックエンド

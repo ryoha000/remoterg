@@ -121,7 +121,6 @@ class GalleryViewModel @Inject constructor(
                     // items are sorted descending by dateAdded from repository
                     Pair(title, items.first())
                 }
-                .take(10) // Limit to top 10 recent titles
         }
         .stateIn(
             scope = viewModelScope,

@@ -140,7 +140,7 @@ fun GalleryScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(recentTitles) { (title, screenshot) ->
+                items(recentTitles.take(10)) { (title, screenshot) ->
                     Box(
                         modifier = Modifier
                             .width((screenWidthDp / 2.2).dp)

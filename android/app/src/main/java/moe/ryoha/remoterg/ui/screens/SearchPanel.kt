@@ -1,8 +1,10 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package moe.ryoha.remoterg.ui.screens
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -240,78 +242,69 @@ fun SearchPanel(
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                        // Quick Date Filters
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = "日付で絞り込み",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            
-                            val cal = Calendar.getInstance()
-                            cal.set(Calendar.HOUR_OF_DAY, 0)
-                            cal.set(Calendar.MINUTE, 0)
-                            cal.set(Calendar.SECOND, 0)
-                            cal.set(Calendar.MILLISECOND, 0)
-                            val todayStart = cal.timeInMillis
-                            
-                            cal.add(Calendar.DAY_OF_YEAR, -1)
-                            val yesterdayStart = cal.timeInMillis
-                            
-                            val endOfDay = todayStart + 86400000L - 1L
-                            val yesterdayEnd = todayStart - 1L
-                            
-                            cal.timeInMillis = todayStart
-                            cal.add(Calendar.DAY_OF_YEAR, -7)
-                            val past7Days = cal.timeInMillis
-                            
-                            cal.timeInMillis = todayStart
-                            cal.add(Calendar.DAY_OF_YEAR, -30)
-                            val past30Days = cal.timeInMillis
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                DateSuggestionButton(
-                                    label = "今日",
-                                    icon = Icons.Default.Today,
-                                    onClick = { 
-                                        onFiltersChanged(filters.copy(since = todayStart, until = endOfDay))
-                                        isExpanded = false
-                                    }
-                                )
-                                DateSuggestionButton(
-                                    label = "昨日",
-                                    icon = Icons.Default.CalendarToday,
-                                    onClick = { 
-                                        onFiltersChanged(filters.copy(since = yesterdayStart, until = yesterdayEnd))
-                                        isExpanded = false
-                                    }
-                                )
+                        // Quick Title Filters
+                        var visibleTitleCount by remember { mutableIntStateOf(10) }
+                        
+                        LaunchedEffect(isExpanded) {
+                            if (!isExpanded) {
+                                visibleTitleCount = 10
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                DateSuggestionButton(
-                                    label = "過去7日間",
-                                    icon = Icons.Default.Schedule,
-                                    onClick = { 
-                                        onFiltersChanged(filters.copy(since = past7Days, until = endOfDay))
-                                        isExpanded = false
-                                    }
+                        }
+
+                        if (recentTitles.isNotEmpty()) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "タイトルで絞り込み",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 8.dp)
                                 )
-                                DateSuggestionButton(
-                                    label = "過去30日間",
-                                    icon = Icons.Default.DateRange,
-                                    onClick = { 
-                                        onFiltersChanged(filters.copy(since = past30Days, until = endOfDay))
-                                        isExpanded = false
+                                
+                                val visibleTitles = recentTitles.take(visibleTitleCount)
+                                
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    visibleTitles.forEach { (title, _) ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            shape = RoundedCornerShape(8.dp),
+                                            onClick = { 
+                                                onFiltersChanged(filters.copy(gameTitle = title))
+                                                isExpanded = false
+                                            }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.VideogameAsset,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = title,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    fontSize = 14.sp
+                                                )
+                                            }
+                                        }
                                     }
-                                )
+                                }
+                                
+                                if (recentTitles.size > visibleTitleCount) {
+                                    TextButton(
+                                        onClick = { visibleTitleCount += 20 },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)
+                                    ) {
+                                        Text("さらに読み込む", color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
                             }
                         }
 
@@ -375,8 +368,6 @@ fun SearchPanel(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
-                                HelpRow(token = "since:2024-01-01", desc = "指定日以降の画像", color = Color(0xFF60A5FA))
-                                HelpRow(token = "until:2024-01-31", desc = "指定日以前の画像", color = Color(0xFF60A5FA))
                                 HelpRow(token = "is:favorite", desc = "お気に入りのみ表示", color = Color(0xFFF472B6))
                                 HelpRow(token = "キーワード", desc = "ゲームタイトルなどで検索", color = MaterialTheme.colorScheme.onSurface)
                             }
@@ -389,36 +380,6 @@ fun SearchPanel(
         }
     }
 }
-
-
-@Composable
-fun DateSuggestionButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(8.dp),
-        onClick = onClick,
-        modifier = Modifier.wrapContentWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = label,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 14.sp
-            )
-        }
-    }
-}
-
 @Composable
 fun HelpRow(token: String, desc: String, color: Color) {
     Row(modifier = Modifier.padding(vertical = 2.dp)) {

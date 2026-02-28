@@ -47,13 +47,16 @@ def main():
         print("\n--- [Step 2] トークン生成 ---")
         tokens = generate_tokens(segments)
         print(f"生成トークン一覧 ({len(tokens)}件):")
-        for t in tokens:
-            print(f"  - '{t}'")
+        for tok, rule in tokens:
+            t_label = f"'{tok}' ({rule})"
+            print(f"  - {t_label}")
             
         print("\n--- [Step 3] 辞書マッチング ---")
         all_matches = []
-        for token in tokens:
-            matches = dic.match(token)
+        for token_str, rule in tokens:
+            matches = dic.match(token_str)
+            for m in matches:
+                m.derived_rule = rule
             all_matches.extend(matches)
             
         if not all_matches:
@@ -82,7 +85,7 @@ def main():
                 if idx >= display_limit:
                     print(f"  ...他 {len(detailed_matches) - display_limit}件 (省略)")
                     break
-                print(f"  [{det['score']:.3f}] Type: {det['type']:<15} | Match: {det['method']:<25} | Token: '{det['token']}' -> Dict: '{det['matched']}'")
+                print(f"  [{det['score']:.3f}] Type: {det['type']:<15} | Match: {det['method']:<25} | Token: '{det['token']}' ({det['rule']}) -> Dict: '{det['matched']}'")
         else:
             print(f"\n最終判定結果: ========> 【 同定失敗（閾値 0.4 未満）】 <========")
             if "top_candidate" in result and result["top_candidate"]:
@@ -110,6 +113,7 @@ def main():
                 "score": best.weighted_score + cross_bonus,
                 "best_method": best.match_method,
                 "best_token": best.token,
+                "best_token_rule": best.derived_rule,
                 "best_matched": best.matched_name,
                 "match_count": len(gmatches)
             })
@@ -120,7 +124,7 @@ def main():
         for i, comp in enumerate(competitors[start_idx:start_idx+5], 1):
             title = official_title_map.get(comp['id'], 'Unknown')
             print(f" {i}位: [{comp['score']:.3f}] {title} (ID: {comp['id']}) - Hits: {comp['match_count']}")
-            print(f"      Best match: Token '{comp['best_token']}' -> Dict '{comp['best_matched']}' ({comp['best_method']})")
+            print(f"      Best match: Token '{comp['best_token']}' ({comp['best_token_rule']}) -> Dict '{comp['best_matched']}' ({comp['best_method']})")
 
 if __name__ == "__main__":
     main()

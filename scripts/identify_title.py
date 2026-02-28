@@ -33,10 +33,13 @@ GENERIC_SUBWORDS = {"game", "app", "launcher"}
 class MatchResult:
     game_id: str
     match_type: str       # "title" | "title_latin" | "alias" | "brand" | "brand_latin" | "brand_alias"
+                          # 略称バリエーション由来の場合は ":generated" サフィックス付き
+                          # 例: "title:generated", "title_latin:generated"
     match_method: str     # "exact" | "token_in_name" | "name_in_token"
     score: float          # Coverage score
     token: str            # Token that matched
     matched_name: str     # Name in dictionary that matched
+    derived_rule: str     # "Rule A", "Rule B", etc.
     weighted_score: float = 0.0
 
 # --- Step 1: Path Segment Extraction ---
@@ -70,42 +73,40 @@ def extract_segments(process_path: str) -> List[str]:
 
 # --- Step 2: Preprocessing and Normalization (Token Generation) ---
 
-def generate_tokens(segments: List[str]) -> List[str]:
-    all_tokens = set()
+def generate_tokens(segments: List[str]) -> List[Tuple[str, str]]:
+    all_tokens = set() # Store tuples: (token_str, derived_rule)
     
     for segment in segments:
-        tokens_for_segment = {segment}
+        tokens_for_segment = {(segment, "Original")}
         
         # Rule A: Remove extensions
         current_segment = segment
         name, ext = os.path.splitext(segment)
         if ext.lower() in {".exe", ".bin", ".log", ".bat", ".lnk"}:
             current_segment = name
-            tokens_for_segment.add(current_segment)
-            if segment in tokens_for_segment and segment != current_segment:
-                tokens_for_segment.remove(segment)
+            tokens_for_segment.add((current_segment, "Rule A"))
+            if (segment, "Original") in tokens_for_segment and segment != current_segment:
+                tokens_for_segment.remove((segment, "Original"))
         
         new_tokens = set()
-        for t in tokens_for_segment:
-            # Rule B: Split by separators (_ , -)
-            # Add space-separated version and also "before-separator" as subtitle separation
-            if "_" in t or "-" in t:
-                # Replace with space
-                spaced = t.replace("_", " ").replace("-", " ")
-                new_tokens.add(spaced)
+        for t, rule in tokens_for_segment:
+            # Rule B: Split by separators (_ , -, etc)
+            if re.search(r'[_\-－―～~]', t):
+                spaced = re.sub(r'[_\-－―～~]+', ' ', t).strip()
+                if spaced:
+                    new_tokens.add((spaced, "Rule B"))
                 
-                # Subtitle split: take before the first dash/underscore
-                match = re.search(r'([_-]+)', t)
+                match = re.search(r'([_\-－―～~]+)', t)
                 if match:
                     prefix = t[:match.start()].strip()
                     if prefix:
-                        new_tokens.add(prefix)
+                        new_tokens.add((prefix, "Rule B"))
             
             # Rule C: CamelCase split
             camel_split = re.sub(r'([a-z])([A-Z])', r'\1 \2', t)
             camel_split = re.sub(r'([A-Z])([A-Z][a-z])', r'\1 \2', camel_split)
             if camel_split != t:
-                new_tokens.add(camel_split)
+                new_tokens.add((camel_split, "Rule C"))
                 
             # Rule D: Character type boundary split (JP <-> ASCII, Alpha <-> Digit)
             type_split = re.sub(r'([^\x00-\x7F])([a-zA-Z0-9])', r'\1 \2', t)
@@ -113,40 +114,18 @@ def generate_tokens(segments: List[str]) -> List[str]:
             type_split = re.sub(r'([a-zA-Z])([0-9])', r'\1 \2', type_split)
             type_split = re.sub(r'([0-9])([a-zA-Z])', r'\1 \2', type_split)
             if type_split != t:
-                new_tokens.add(type_split)
+                new_tokens.add((type_split, "Rule D"))
                 
         tokens_for_segment.update(new_tokens)
         
-        # Rule E: Acronym / Initialisms & Space Removal
-        # Operates on the generated token sets (e.g. spaced out tokens)
-        acronym_tokens = set()
-        for t in tokens_for_segment:
-            # All spaces removed (Space-Agnostic base)
-            no_space = t.replace(" ", "")
-            if no_space != t:
-                acronym_tokens.add(no_space)
-                
-            words = t.split()
-            if len(words) > 1:
-                # All initials: WHITE ALBUM 2 -> wa2
-                all_initials = "".join([w[0] if not re.match(r'[0-9]', w) else w for w in words])
-                acronym_tokens.add(all_initials)
-                
-                # First word + initials of rest: 流星ワールドアクター Gaslight Bullet -> 流星ワールドアクターgb
-                first_plus_initials = words[0] + "".join([w[0] if not re.match(r'[0-9]', w) else w for w in words[1:]])
-                acronym_tokens.add(first_plus_initials)
-
-        tokens_for_segment.update(acronym_tokens)
-        
-        # Rule F: Generic subword removal (from Rule B results etc.)
+        # ルール E（旧 G）: ジェネリックサブワード除去
         final_new_tokens = set()
-        for t in tokens_for_segment:
-            # We don't remove if it results in empty token
+        for t, rule in tokens_for_segment:
             words = t.split()
             if len(words) > 1:
                 filtered_words = [w for w in words if w.lower() not in GENERIC_SUBWORDS]
                 if filtered_words and len(filtered_words) < len(words):
-                    final_new_tokens.add(" ".join(filtered_words))
+                    final_new_tokens.add((" ".join(filtered_words), "Rule E"))
         
         tokens_for_segment.update(final_new_tokens)
         all_tokens.update(tokens_for_segment)
@@ -162,8 +141,9 @@ def normalize_for_match(text: str) -> str:
     text = text.lower()
     # 2. Fullwidth to Halfwidth
     text = unicodedata.normalize('NFKC', text)
-    # 3. Remove symbols: : ： ・ ~ ～ ! ！ ? ？
-    text = re.sub(r'[:：・~～!！?？]', ' ', text)
+    # 3. Remove symbols (keep only word characters and whitespaces)
+    text = re.sub(r'[^\w\s]', ' ', text)
+    text = text.replace('_', ' ')
     # 4. Space normalization
     text = " ".join(text.split())
     return text
@@ -175,6 +155,7 @@ class TitleDictionary:
         self.entries: Dict[str, List[Tuple[str, str, str]]] = {} # normalized -> [(id, type, original)]
 
     def add(self, name: str, game_id: str, match_type: str):
+        """辞書にエントリを追加する。"""
         if not name or name == '\\N':
             return
         norm = normalize_for_match(name)
@@ -184,76 +165,99 @@ class TitleDictionary:
             self.entries[norm] = []
         self.entries[norm].append((game_id, match_type, name))
 
+    def add_generated_variants(self, name: str, game_id: str, match_type: str):
+        """名前から略称バリエーションを自動生成して :generated 付きで辞書に追加する。"""
+        if not name or name == '\\N':
+            return
+        norm = normalize_for_match(name)
+        if not norm:
+            return
+        
+        generated_type = f"{match_type}:generated"
+        words = norm.split()
+        
+        if len(words) > 1:
+            # 頭文字結合: 各単語の頭文字を小文字で結合
+            # 数字のみの単語はそのまま保持（例: "2" → "2"）
+            all_initials = "".join(
+                w if re.match(r'^[0-9]+$', w) else w[0]
+                for w in words
+            )
+            if len(all_initials) >= 2:
+                self.add(all_initials, game_id, generated_type)
+            
+            # 先頭語＋以降の頭文字: 最初の単語を残し、2番目以降の頭文字を結合
+            rest_initials = "".join(
+                w if re.match(r'^[0-9]+$', w) else w[0]
+                for w in words[1:]
+            )
+            first_plus_initials = words[0] + rest_initials
+            if first_plus_initials != norm:
+                self.add(first_plus_initials, game_id, generated_type)
+            
+            # スペース除去（密着）: 全スペースを除去して連結
+            no_space = norm.replace(" ", "")
+            if no_space != norm:
+                self.add(no_space, game_id, generated_type)
+        
+        # サブタイトル除去: 元の名前で「－」「―」「-」の前までを抽出
+        # （正規化前の元テキストから処理し、結果を正規化して登録）
+        subtitle_match = re.search(r'[－―\-]', name)
+        if subtitle_match:
+            prefix = name[:subtitle_match.start()].strip()
+            if prefix and prefix != name:
+                self.add(prefix, game_id, generated_type)
+
     def match(self, token: str) -> List[MatchResult]:
+        """トークンを辞書とマッチングする。ハッシュマップ完全一致 + 包含一致のみ。"""
         norm_token = normalize_for_match(token)
         if not norm_token:
             return []
             
         results = []
         
-        # We need to iterate over the dictionary for inclusion matching
-        # Note: In production (Rust), this should be optimized.
+        # 辞書全体をイテレートして包含マッチも試行する
+        # 注: 本番（Rust）ではより最適化すること
         for norm_name, list_info in self.entries.items():
             method = None
             score = 0.0
             
-            # 1. Exact Match
+            # 1. 完全一致
             if norm_token == norm_name:
                 method = "exact"
                 score = 1.0
             else:
-                # Prepare Space-Agnostic strings
+                # スペース無視の文字列を準備
                 token_no_space = norm_token.replace(" ", "")
                 name_no_space = norm_name.replace(" ", "")
                 
-                # 2. Space-Agnostic Exact Match
+                # 2. スペース無視完全一致
                 if token_no_space == name_no_space and token_no_space:
                     method = "exact_space_agnostic"
                     score = 0.95
                 
-                # 3. Prefix Match
+                # 3. 前方一致
                 elif norm_name.startswith(norm_token) and len(norm_token) >= 3:
                     method = "prefix"
-                    # High base score (0.85) to avoid length coverage penalty of regular inclusion
-                    score = 0.85 * (len(norm_token) / len(norm_name)) ** 0.1 # Slight length sway
+                    score = 0.85 * (len(norm_token) / len(norm_name)) ** 0.1
                 
-                # 4. Inclusion Match (Token in Name)
+                # 4. 包含一致（トークンが名前に含まれる）
                 elif norm_token in norm_name:
                     method = "token_in_name"
                     score = len(norm_token) / len(norm_name)
                     
-                # 5. Inclusion Match (Name in Token)
+                # 5. 包含一致（名前がトークンに含まれる）
                 elif norm_name in norm_token:
                     method = "name_in_token"
                     score = len(norm_name) / len(norm_token)
                     
-                # 6. Space-Agnostic Inclusion
+                # 6. スペース無視包含一致
                 elif token_no_space in name_no_space and len(token_no_space) >= 5:
                     method = "token_in_name_space_agnostic"
                     score = 0.95 * (len(token_no_space) / len(name_no_space))
                 elif name_no_space in token_no_space and len(name_no_space) >= 5:
                     method = "name_in_token_space_agnostic"
                     score = 0.95 * (len(name_no_space) / len(token_no_space))
-                    
-                # 7. Initialism Match (LCP + Initials of remaining words)
-                if not method and len(norm_token) > 3 and len(norm_name) > 3:
-                    # Find Longest Common Prefix (at least 3 chars)
-                    lcp_len = 0
-                    for c1, c2 in zip(norm_token, norm_name):
-                        if c1 == c2: lcp_len += 1
-                        else: break
-                        
-                    if lcp_len >= 3:
-                        token_remainder = norm_token[lcp_len:].strip()
-                        name_remainder = norm_name[lcp_len:].strip()
-                        if token_remainder and name_remainder:
-                            # Check if token remainder is acronym of name remainder
-                            name_words = name_remainder.split()
-                            if len(name_words) > 1:
-                                initials = "".join([w[0] for w in name_words if w])
-                                if token_remainder == initials:
-                                    method = "initialism"
-                                    score = 0.90
             
             if method:
                 for game_id, match_type, original_name in list_info:
@@ -263,7 +267,8 @@ class TitleDictionary:
                         match_method=method,
                         score=score,
                         token=token,
-                        matched_name=original_name
+                        matched_name=original_name,
+                        derived_rule="Unknown" # 呼び出し元で設定
                     ))
                     
         return results
@@ -319,6 +324,9 @@ def load_vndb_dictionary(data_dir: str) -> Tuple[TitleDictionary, Dict[str, str]
     for _, row in vn_titles.iterrows():
         dic.add(row['title'], row['id'], 'title')
         dic.add(row['latin'], row['id'], 'title_latin')
+        # 略称バリエーションを自動生成して辞書に追加
+        dic.add_generated_variants(row['title'], row['id'], 'title')
+        dic.add_generated_variants(row['latin'], row['id'], 'title_latin')
         
     print("エイリアスを辞書に登録しています...")
     for _, row in vn.iterrows():
@@ -326,9 +334,10 @@ def load_vndb_dictionary(data_dir: str) -> Tuple[TitleDictionary, Dict[str, str]
         for a in aliases:
             if a.strip():
                 dic.add(a.strip(), row['id'], 'alias')
+                dic.add_generated_variants(a.strip(), row['id'], 'alias')
                 
     print("ブランド名を辞書に登録しています...")
-    # Map pid to VN ids
+    # pid を VN id にマッピング
     dev_map = developers.groupby('pid')['vid'].apply(list).to_dict()
     
     for _, row in producers.iterrows():
@@ -349,7 +358,11 @@ def load_vndb_dictionary(data_dir: str) -> Tuple[TitleDictionary, Dict[str, str]
         for vid in vids:
             for name, mtype in brand_names:
                 dic.add(name, vid, mtype)
+                # ブランド名の略称バリエーションも自動生成
+                dic.add_generated_variants(name, vid, mtype)
                 
+    entry_count = sum(len(v) for v in dic.entries.values())
+    print(f"辞書構築完了: {len(dic.entries)} 正規化キー, {entry_count} エントリ")
     return dic, official_title_map
 
 # --- Step 4: Scoring and Selection ---
@@ -370,7 +383,6 @@ def score_and_select(matches: List[MatchResult], official_title_map: Dict[str, s
     method_base = {
         "exact": 1.0,
         "exact_space_agnostic": 0.95,
-        "initialism": 0.9,
         "prefix": 0.85,
         "token_in_name": 0.7,
         "name_in_token": 0.7,
@@ -378,7 +390,7 @@ def score_and_select(matches: List[MatchResult], official_title_map: Dict[str, s
         "name_in_token_space_agnostic": 0.65,
     }
     
-    # Group by game_id
+    # game_id でグルーピング
     grouped: Dict[str, List[MatchResult]] = {}
     for m in matches:
         if m.game_id not in grouped:
@@ -388,11 +400,12 @@ def score_and_select(matches: List[MatchResult], official_title_map: Dict[str, s
     candidates = []
     for game_id, game_matches in grouped.items():
         for m in game_matches:
-            # Basic weighted score
-            w_score = m.score * type_weight[m.match_type] * method_base[m.match_method]
+            # ":generated" サフィックスを除去して type_weight を参照（重みは原典と同一）
+            base_type = m.match_type.split(":")[0]
+            w_score = m.score * type_weight[base_type] * method_base[m.match_method]
             
-            # Rule 4-2: Proximity penalty for inclusion matches (base penalty)
-            if "exact" not in m.match_method and m.match_method not in ("initialism", "prefix"):
+            # 4-2: 包含マッチの近接ペナルティ
+            if "exact" not in m.match_method and m.match_method != "prefix":
                 norm_token = normalize_for_match(m.token)
                 norm_name = normalize_for_match(m.matched_name)
                 len_diff = abs(len(norm_token) - len(norm_name))
@@ -419,8 +432,9 @@ def score_and_select(matches: List[MatchResult], official_title_map: Dict[str, s
         best_match = max(game_matches, key=lambda x: x.weighted_score)
         
         # Rule 4-1: Brand + Title bonus
-        has_title_match = any(m.match_type.startswith("title") or m.match_type == "alias" for m in game_matches)
-        has_brand_match = any(m.match_type.startswith("brand") for m in game_matches)
+        # ":generated" を除去したベース型で判定
+        has_title_match = any(m.match_type.split(":")[0].startswith("title") or m.match_type.split(":")[0] == "alias" for m in game_matches)
+        has_brand_match = any(m.match_type.split(":")[0].startswith("brand") for m in game_matches)
         cross_bonus = 0.1 if (has_title_match and has_brand_match) else 0.0
         
         final_score = best_match.weighted_score + cross_bonus
@@ -452,7 +466,8 @@ def score_and_select(matches: List[MatchResult], official_title_map: Dict[str, s
                 "matched": m.matched_name,
                 "type": m.match_type,
                 "method": m.match_method,
-                "score": round(m.weighted_score, 3)
+                "score": round(m.weighted_score, 3),
+                "rule": m.derived_rule
             }
             for m in top["all_matches"]
         ]
@@ -487,8 +502,11 @@ def main():
     
     all_matches = []
     print("辞書マッチングを実行中...")
-    for token in tokens:
-        matches = dic.match(token)
+    for token_str, derived_rule in tokens:
+        matches = dic.match(token_str)
+        # Inherit the generated rule flag from token generation
+        for m in matches:
+            m.derived_rule = derived_rule
         all_matches.extend(matches)
         
     # Step 4: Scoring
@@ -501,7 +519,7 @@ def main():
         print(f"Confidence: {result['confidence']:.3f}")
         print("Details:")
         for det in result["match_details"]:
-            print(f"  - [{det['type']}] '{det['token']}' -> '{det['matched']}' ({det['method']}, score: {det['score']})")
+            print(f"  - [{det['type']}] '{det['token']}' ({det['rule']}) -> '{det['matched']}' ({det['method']}, score: {det['score']})")
     else:
         print("\nタイトルを特定できませんでした。")
         if "top_candidate" in result and result["top_candidate"]:

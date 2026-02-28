@@ -133,20 +133,18 @@ Step 1 で得た各セグメントに対して、以下のルールを**順番�
 - 日本語⇔ASCII、英字⇔数字 の切り替わりでスペースを挿入したバリエーションを追加
 - 元のセグメントも保持する
 
-#### ルール E: 略称・頭文字結合展開
-- 複数の単語（スペース区切りやCamelCase区切り）で構成されるセグメントに対して、頭文字を結合したパターンを追加（例: `WHITE ALBUM 2` → `wa2`, `World Actor GB` → `wagb`）
-- 1つ目の単語＋以降の頭文字を結合したパターンを追加（例: `流星ワールドアクター Gaslight Bullet` → `流星ワールドアクターgb`）
-- さらに、すべてのスペースを除去した密着パターンを追加（例: `Sakura no Toki` → `sakuranotoki`）
-
-#### ルール F: ジェネリックサブワード除去
+#### ルール E: ジェネリックサブワード除去
 - 上記展開結果に `Game`, `App`, `Launcher` などのジェネリック語が含まれている場合、それを除去した短縮版を追加
 
-#### ルール G: 重複排除
+#### ルール F: 重複排除
 - 全ルール適用後、同一の文字列は 1 つにまとめる
 
 > [!NOTE]
 > **末尾数字の除去は行わない。** `WHITE ALBUM 2` のように数字がタイトルの一部であるケースを誤って壊すため。
 > `FuriKuru01` のようなケースはルール D（数字/英字境界）で `FuriKuru 01` が生成され、包含マッチで十分カバーできる。
+>
+> **略称・頭文字結合はトークン側では行わない。** 略称（`wa2`, `wagb` 等）は辞書構築時に事前生成して辞書側に登録する（Step 3 参照）。
+> これにより検索時はハッシュマップ完全一致 + 包含一致のみで済み、ロジックが単純化される。
 
 ### 全ケースの完全な変換結果
 
@@ -162,14 +160,12 @@ Step 1 のセグメント: `Heliodor`, `流星ワールドアクターGB`, `Worl
 |---|---|---|
 | `Heliodor` | (変換なし) | `Heliodor` |
 | `流星ワールドアクターGB` | D: 境界 | `流星ワールドアクターGB`, `流星ワールドアクター GB` |
-| `流星ワールドアクター GB` | E: 頭文字结合 | `流星ワールドアクターgb` |
 | `WorldActorGB.exe` | A: 拡張子除去 | `WorldActorGB` |
 | `WorldActorGB` | C: CamelCase | `World Actor GB` |
-| `World Actor GB` | E: 頭文字结合 | `wagb`, `Worldgb` |
 
 **最終トークンリスト:**
 ```
-["Heliodor", "流星ワールドアクターGB", "流星ワールドアクター GB", "流星ワールドアクターgb", "WorldActorGB", "World Actor GB", "wagb", "Worldgb"]
+["Heliodor", "流星ワールドアクターGB", "流星ワールドアクター GB", "WorldActorGB", "World Actor GB"]
 ```
 
 ---
@@ -273,7 +269,7 @@ VNDB のデータから、各ゲーム (`vn.id`) に紐づく**全ての名前�
   normalized_name → [(game_id, match_type, original_name)]
 ```
 
-#### 辞書に登録する名前の一覧
+#### 辞書に登録する名前の一覧（原典）
 
 各 VN について、以下の名前を全て登録する:
 
@@ -299,6 +295,52 @@ VNDB のデータから、各ゲーム (`vn.id`) に紐づく**全ての名前�
 >   → 辞書エントリ 1: "みのり"    → (v19644, brand_alias)
 >   → 辞書エントリ 2: "中二社"    → (v19644, brand_alias)
 > ```
+
+#### 辞書に登録する略称バリエーション（自動生成）
+
+上記原典の各名前に対して、辞書構築時に以下の略称バリエーションを**自動生成**して辞書に追加登録する。
+これにより、トークン側で略称展開を行わなくても、ハッシュマップ完全一致または包含一致で略称表記にマッチできる。
+
+| 略称ルール | 説明 | 元の名前 | 生成される辞書エントリ |
+|---|---|---|---|
+| **頭文字結合** | 各単語（スペース区切り）の頭文字を小文字で結合 | `WHITE ALBUM 2` | `wa2` |
+| | | `Gaslight Bullet` | `gb` |
+| | | `World Actor GB` | `wagb` |
+| **先頭語＋以降の頭文字** | 最初の単語をそのまま残し、2番目以降の頭文字を結合 | `流星ワールドアクター Gaslight Bullet` | `流星ワールドアクターgb` |
+| **スペース除去（密着）** | 全スペースを除去して連結 | `Sakura no Toki` | `sakuranotoki` |
+| | | `Ryuusei World Actor` | `ryuuseiworldactor` |
+| **サブタイトル除去** | `－`, `―`, `-` の前までを抽出 | `サクラノ刻－櫻の森の下を歩む－` | `サクラノ刻` |
+| | | `サクラノ詩 -櫻の森の上を舞う-` | `サクラノ詩` |
+
+> [!IMPORTANT]
+> 略称バリエーションの `match_type` は、元の型に `:generated` サフィックスを付与して登録する。
+> 例: `流星ワールドアクター Gaslight Bullet` (`match_type: title`) から生成された `流星ワールドアクターgb` は `match_type: title:generated` で登録する。
+> これにより原典エントリと自動生成エントリを区別でき、デバッグやログ出力時のトレーサビリティが向上する。
+> スコアリング時は `:generated` サフィックスを除去して `type_weight` を参照するため、重み付けは原典と同一になる。
+>
+> 生成された略称が既存の辞書エントリと衝突（同一 normalized_name に複数 game_id が紐づく）した場合は、両方のエントリを保持する（マッチ時のスコアリングで解決する）。
+
+##### 略称バリエーション生成例
+
+**`流星ワールドアクター Gaslight Bullet` (v60196, title) の場合:**
+```
+原典:               "流星ワールドアクター gaslight bullet"
+頭文字結合:          "流星ワールドアクターgb"   → (v60196, title:generated)
+スペース除去:        "流星ワールドアクターgaslightbullet" → (v60196, title:generated)
+```
+
+**`Sakura no Toki` (v19322, title_latin) の場合:**
+```
+原典:               "sakura no toki"
+スペース除去:        "sakuranotoki"  → (v19322, title_latin:generated)
+頭文字結合:          "snt"           → (v19322, title_latin:generated)
+```
+
+**`サクラノ刻－櫻の森の下を歩む－` (v19322, title) の場合:**
+```
+原典:               "サクラノ刻櫻の森の下を歩む"  (記号除去後)
+サブタイトル除去:    "サクラノ刻"  → (v19322, title:generated)
+```
 
 #### 正規化ルール
 
@@ -366,6 +408,8 @@ normalized(辞書の名前) in normalized(token)
 class MatchResult:
     game_id: str          # "v60196"
     match_type: str       # "title" | "title_latin" | "alias" | "brand" | "brand_latin" | "brand_alias"
+                          # 略称バリエーション由来の場合は ":generated" サフィックス付き
+                          # 例: "title:generated", "title_latin:generated"
     match_method: str     # "exact" | "token_in_name" | "name_in_token"
     score: float          # 0.0 〜 1.0
     token: str            # マッチしたトークン
@@ -400,7 +444,9 @@ for game_id, matches in grouped_results:
     }
 
     for m in matches:
-        m.weighted_score = m.score * type_weight[m.match_type] * method_base[m.match_method]
+        # ":generated" サフィックスを除去して type_weight を参照（重みは原典と同一）
+        base_type = m.match_type.split(":")[0]
+        m.weighted_score = m.score * type_weight[base_type] * method_base[m.match_method]
 
     best_score = max(m.weighted_score for m in matches)
     
@@ -471,16 +517,19 @@ for m_short in all_matches:
 
 ### Case 1: `G:\game\Heliodor\流星ワールドアクターGB\WorldActorGB.exe`
 
-Step 2 で生成されたトークンの中から以下がヒットする:
+Step 2 で生成されたトークン: `Heliodor`, `流星ワールドアクターGB`, `流星ワールドアクター GB`, `WorldActorGB`, `World Actor GB`
+
+辞書には略称バリエーションとして `流星ワールドアクターgb` (= `流星ワールドアクター Gaslight Bullet` の先頭語＋頭文字結合) が登録済み。
 
 | トークン | マッチ方法 | マッチ先 | match_type | スコア |
 |---|---|---|---|---|
 | `Heliodor` | 完全一致 | Brand `Heliodor` | brand | 0.60 |
-| `流星ワールドアクターgb` | 包含(token_in_name) | Title `流星ワールドアクター Gaslight Bullet` (略称展開後と仮定) | title | 0.90 |
-| `流星ワールドアクターgb` | 包含(name_in_token) | Title (無印版) `流星ワールドアクター` | title | 0.17 |
+| `流星ワールドアクター GB` | 完全一致 | 辞書略称 `流星ワールドアクターgb` (正規化後一致) | title:generated | **1.0** |
+| `流星ワールドアクター GB` | 包含(name_in_token) | Title (無印版) `流星ワールドアクター` | title | 0.17 |
 
-→ 無印版への包含マッチは、「過剰包含のペナルティ」により `流星ワールドアクター Gaslight Bullet` 側の存在が検知され大幅減衰(0.17付近まで低下)されるため誤爆しない。
-→ title + brand 両方ヒット → cross_bonus +0.1 → **final_score ≈ 1.0 → 正解 (`流星ワールドアクター Gaslight Bullet` に同定)**
+→ トークン `流星ワールドアクター gb` と辞書略称 `流星ワールドアクターgb` は正規化（スペース正規化・小文字化）後に完全一致。
+→ 無印版への包含マッチは、「過剰包含のペナルティ」により大幅減衰されるため誤爆しない。
+→ title + brand 両方ヒット → cross_bonus +0.1 → **final_score ≈ 1.1 → 正解 (`流星ワールドアクター Gaslight Bullet` に同定)**
 
 ### Case 2: `G:\game\いつか、届く、あの空に。\main.bin`
 
@@ -527,12 +576,16 @@ Step 2 で生成されたトークンの中から以下がヒットする:
 
 ### Case 6: `F:\game\サクラノ刻\sakuranotoki.exe`
 
-Step 2 の生成トークンの中に `サクラノ刻`, `sakuranotoki` が含まれる。（辞書側にも略称・サフィックス除去ルールが適用される）
+Step 2 の生成トークン: `サクラノ刻`, `sakuranotoki`
+
+辞書には以下の略称バリエーションが登録済み:
+- `サクラノ刻` ← `サクラノ刻－櫻の森の下を歩む－` のサブタイトル除去
+- `sakuranotoki` ← `Sakura no Toki` のスペース除去
 
 | トークン | マッチ方法 | マッチ先 | match_type | スコア |
 |---|---|---|---|---|
-| `サクラノ刻` | 完全一致 | Title `サクラノ刻－櫻の森の下を歩む－` (サブタイトル結合前の派生名) | title | 1.00 |
-| `sakuranotoki` | 完全一致 | Title_Latin `Sakura no Toki` (スペース除去パターンの派生名) | title_latin | 0.95 |
+| `サクラノ刻` | 完全一致 | 辞書略称 `サクラノ刻` (サブタイトル除去由来) | title:generated | 1.00 |
+| `sakuranotoki` | 完全一致 | 辞書略称 `sakuranotoki` (スペース除去由来) | title_latin:generated | 0.95 |
 
 → **final_score = 1.0 → 正解 (`サクラノ刻－櫻の森の下を歩む－` に同定)**
 

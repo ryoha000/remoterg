@@ -13,14 +13,14 @@ use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct TitleResolveResult {
-    pub game_id: String,
+    pub vndb_id: String,
     pub official_title: String,
     pub confidence: f64,
 }
 pub struct DictEntry {
     pub normalized_name: String,
     pub no_space_name: String,
-    pub game_id: String,
+    pub vndb_id: String,
     pub match_type: String,
     pub original_name: String,
 }
@@ -41,13 +41,14 @@ impl TitleResolver {
             entries.push(DictEntry {
                 normalized_name: row.get(0)?,
                 no_space_name: row.get(1)?,
-                game_id: row.get(2)?,
+                vndb_id: row.get(2)?,
                 match_type: row.get(3)?,
                 original_name: row.get(4)?,
             });
         }
         
         let mut games = std::collections::HashMap::new();
+        // SQLite カラム名 game_id はそのまま維持（互換性のため）
         let mut stmt = db.prepare("SELECT game_id, official_title FROM games")?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
@@ -77,11 +78,11 @@ impl TitleResolver {
         if top_candidates.is_empty() { return None; }
         let candidate = &top_candidates[0];
         
-        let official_title = self.get_official_title(&candidate.game_id)
+        let official_title = self.get_official_title(&candidate.vndb_id)
             .unwrap_or_else(|| "Unknown".to_string());
             
         Some(TitleResolveResult {
-            game_id: candidate.game_id.clone(),
+            vndb_id: candidate.vndb_id.clone(),
             official_title,
             confidence: candidate.final_score,
         })
@@ -100,10 +101,10 @@ impl TitleResolver {
         
         if let Some(candidates) = scorer::score_and_select_all(all_matches) {
             let res = candidates.iter().map(|c| {
-                let official_title = self.get_official_title(&c.game_id)
+                let official_title = self.get_official_title(&c.vndb_id)
                     .unwrap_or_else(|| String::new());
                 let result = TitleResolveResult {
-                    game_id: c.game_id.clone(),
+                    vndb_id: c.vndb_id.clone(),
                     official_title,
                     confidence: c.final_score,
                 };
@@ -114,8 +115,8 @@ impl TitleResolver {
         Vec::new()
     }
     
-    fn get_official_title(&self, game_id: &str) -> Option<String> {
-        self.games.get(game_id).cloned()
+    fn get_official_title(&self, vndb_id: &str) -> Option<String> {
+        self.games.get(vndb_id).cloned()
     }
 }
 
@@ -169,7 +170,7 @@ mod tests {
             let result = resolver.resolve(path);
             assert!(result.is_some(), "Failed to resolve path: {}", path);
             let result = result.unwrap();
-            assert_eq!(result.game_id, expected_id, "Path failed: {}", path);
+            assert_eq!(result.vndb_id, expected_id, "Path failed: {}", path);
             assert_eq!(result.official_title, expected_title, "Path failed: {}", path);
             println!("Resolved {} -> {} (score: {})", path, result.official_title, result.confidence);
         }

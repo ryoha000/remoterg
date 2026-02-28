@@ -216,4 +216,123 @@ impl TaggerService {
 
         Ok(rx)
     }
+
+    /// キャラクター参考画像付きでスクリーンショットを分析（ストリーミング）
+    ///
+    /// `reference_images`: (キャラ名, 画像データ) のスライス。
+    /// プロンプト → 参考画像群 → スクリーンショットの順で content に配置する。
+    pub async fn analyze_with_references(
+        &self,
+        screenshot: &[u8],
+        reference_images: &[(String, Vec<u8>)],
+        prompt: &str,
+    ) -> Result<tokio::sync::mpsc::Receiver<Result<String>>> {
+        let mut content_parts: Vec<ContentPart> = Vec::new();
+
+        // 1. テキストプロンプト
+        content_parts.push(ContentPart::Text {
+            text: prompt.to_string(),
+        });
+
+        // 2. 参考キャラ画像
+        for (name, image_data) in reference_images {
+            content_parts.push(ContentPart::Text {
+                text: format!("参考: キャラクター「{}」の立ち絵", name),
+            });
+            let base64 = BASE64_STANDARD.encode(image_data);
+            content_parts.push(ContentPart::ImageUrl {
+                image_url: ImageUrl {
+                    url: format!("data:image/jpeg;base64,{}", base64),
+                },
+            });
+        }
+
+        // 3. 分析対象のスクリーンショット
+        content_parts.push(ContentPart::Text {
+            text: "以下が分析対象のスクリーンショットです:".to_string(),
+        });
+        let screenshot_base64 = BASE64_STANDARD.encode(screenshot);
+        content_parts.push(ContentPart::ImageUrl {
+            image_url: ImageUrl {
+                url: format!("data:image/png;base64,{}", screenshot_base64),
+            },
+        });
+
+        let request = ChatCompletionRequest {
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: content_parts,
+            }],
+            max_tokens: Some(512),
+            temperature: Some(0.7),
+            stream: Some(true),
+        };
+
+        let client = self.client.clone();
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+
+        tokio::spawn(async move {
+            let res = match client
+                .post(url)
+                .json(&request)
+                .send()
+                .await
+                .context("Failed to send request")
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    let _ = tx.send(Err(e)).await;
+                    return;
+                }
+            };
+
+            if let Err(e) = res.error_for_status_ref() {
+                let _ = tx.send(Err(anyhow::anyhow!("Server error: {}", e))).await;
+                return;
+            }
+
+            use futures::StreamExt;
+            let mut stream = res.bytes_stream();
+            let mut buffer = String::new();
+
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(bytes) => {
+                        let chunk_str = String::from_utf8_lossy(&bytes);
+                        buffer.push_str(&chunk_str);
+
+                        while let Some(idx) = buffer.find('\n') {
+                            let line = buffer[..idx].trim().to_string();
+                            buffer = buffer[idx + 1..].to_string();
+
+                            if line.starts_with("data: ") {
+                                let data = &line[6..];
+                                if data == "[DONE]" {
+                                    return;
+                                }
+
+                                if let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data)
+                                {
+                                    if let Some(choice) = chunk.choices.first() {
+                                        if let Some(content) = &choice.delta.content {
+                                            if tx.send(Ok(content.clone())).await.is_err() {
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(anyhow::anyhow!("Stream error: {}", e))).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
+    }
 }

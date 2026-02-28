@@ -15,7 +15,7 @@ pub enum MatchMethod {
 
 #[derive(Debug, Clone)]
 pub struct MatchResult {
-    pub game_id: String,
+    pub vndb_id: String,
     pub match_type: String,
     pub match_method: MatchMethod,
     pub score: f64,
@@ -78,7 +78,7 @@ pub fn match_token(entries: &[DictEntry], token: &str, derived_rule: &TokenRule)
         
         if let Some(m) = method {
             results.push(MatchResult {
-                game_id: entry.game_id.clone(),
+                vndb_id: entry.vndb_id.clone(),
                 match_type: entry.match_type.clone(),
                 match_method: m,
                 score,
@@ -102,14 +102,14 @@ mod tests {
             DictEntry {
                 normalized_name: "heliodor".to_string(),
                 no_space_name: "heliodor".to_string(),
-                game_id: "v1".to_string(),
+                vndb_id: "v1".to_string(),
                 match_type: "brand".to_string(),
                 original_name: "Heliodor".to_string(),
             },
             DictEntry {
                 normalized_name: "流星ワールドアクター gaslight bullet".to_string(),
                 no_space_name: "流星ワールドアクターgaslightbullet".to_string(),
-                game_id: "v60196".to_string(),
+                vndb_id: "v60196".to_string(),
                 match_type: "title".to_string(),
                 original_name: "流星ワールドアクター Gaslight Bullet".to_string(),
             }
@@ -132,6 +132,6 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].match_method, MatchMethod::Prefix);
         assert!(results[0].score < 1.0);
-        assert_eq!(results[0].game_id, "v60196");
+        assert_eq!(results[0].vndb_id, "v60196");
     }
 }

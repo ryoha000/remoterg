@@ -345,7 +345,7 @@ pub struct ScreenshotMetadataPayload {
     pub window_title: Option<String>,
     pub process_path: Option<String>,
     pub process_name: Option<String>,
-    pub game_id: Option<String>,
+    pub vndb_id: Option<String>,
     pub official_title: Option<String>,
 }
 

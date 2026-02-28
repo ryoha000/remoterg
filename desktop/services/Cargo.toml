@@ -20,6 +20,7 @@ members = [
   "tagger",
   "window-info",
   "gpu-texture", "title-resolver",
+  "vndb-client",
 ]
 
 resolver = "2"

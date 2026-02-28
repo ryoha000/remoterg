@@ -1846,6 +1846,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "vndb-client",
  "window-info",
  "windows",
 ]
@@ -4159,6 +4160,18 @@ dependencies = [
  "tokio",
  "tracing",
  "webrtc 0.14.0",
+]
+
+[[package]]
+name = "vndb-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

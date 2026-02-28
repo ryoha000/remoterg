@@ -21,7 +21,7 @@ graph TD
         Release -->|"起動時に<br/>自動ダウンロード"| LocalDB["ローカル SQLite"]
         LocalDB --> Resolver[TitleResolver]
         WI[WindowInfoProvider] -->|process_path| Resolver
-        Resolver -->|"game_id, title"| Meta[ScreenshotMetadataPayload]
+        Resolver -->|"vndb_id, title"| Meta[ScreenshotMetadataPayload]
     end
 ```
 
@@ -174,7 +174,7 @@ desktop/services/title-resolver/
 ```rust
 /// タイトル推定結果
 pub struct TitleResolveResult {
-    pub game_id: String,          // "v60196"
+    pub vndb_id: String,          // "v60196"
     pub official_title: String,   // "流星ワールドアクター Gaslight Bullet"
     pub confidence: f64,          // 0.0〜1.0+
 }
@@ -239,7 +239,7 @@ let title_info = if let Some(ref path) = process_path {
 
 let metadata = ScreenshotMetadataPayload {
     // ... 既存フィールド
-    game_id: title_info.as_ref().map(|t| t.game_id.clone()),
+    vndb_id: title_info.as_ref().map(|t| t.vndb_id.clone()),
     official_title: title_info.as_ref().map(|t| t.official_title.clone()),
 };
 ```
@@ -249,7 +249,7 @@ let metadata = ScreenshotMetadataPayload {
 ```rust
 pub struct ScreenshotMetadataPayload {
     // ... 既存フィールド
-    pub game_id: Option<String>,         // 追加
+    pub vndb_id: Option<String>,         // 追加
     pub official_title: Option<String>,  // 追加
 }
 ```
@@ -364,7 +364,7 @@ fn test_resolve_case1() {
     let result = resolver.resolve(r"G:\game\Heliodor\流星ワールドアクターGB\WorldActorGB.exe");
     assert!(result.is_some());
     let r = result.unwrap();
-    assert_eq!(r.game_id, "v60196");
+    assert_eq!(r.vndb_id, "v60196");
     assert!(r.confidence > 0.9);
 }
 
@@ -373,7 +373,7 @@ fn test_resolve_case2() {
     let resolver = TitleResolver::new(test_fixture_db_path()).unwrap();
     let result = resolver.resolve(r"G:\game\いつか、届く、あの空に。\main.bin");
     assert!(result.is_some());
-    assert_eq!(result.unwrap().game_id, "v97"); // 対応するVNDB ID
+    assert_eq!(result.unwrap().vndb_id, "v97"); // 対応するVNDB ID
 }
 ```
 
@@ -403,7 +403,7 @@ fn test_resolve_case2() {
 
 ### Phase 2-C: hostd への組み込み
 
-1. `core-types` に `game_id` / `official_title` フィールド追加
+1. `core-types` に `vndb_id` / `official_title` フィールド追加
 2. `input` サービスに `TitleResolver` を統合
 3. 起動時の辞書ダウンロード + `DictDownloader` の実装
 4. E2E テスト: 実際のゲームパスでの動作確認

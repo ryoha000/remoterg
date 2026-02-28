@@ -4,7 +4,7 @@ use crate::normalize::normalize_for_match;
 
 #[derive(Debug, Clone)]
 pub struct ScoredCandidate {
-    pub game_id: String,
+    pub vndb_id: String,
     pub final_score: f64,
     pub best_match: MatchResult,
     pub all_matches: Vec<MatchResult>,
@@ -15,7 +15,7 @@ pub fn score_and_select_all(matches: Vec<MatchResult>) -> Option<Vec<ScoredCandi
         return None;
     }
     
-    // Group by game_id
+    // vndb_id でグルーピング
     let mut grouped: HashMap<String, Vec<MatchResult>> = HashMap::new();
     
     for mut m in matches {
@@ -51,7 +51,7 @@ pub fn score_and_select_all(matches: Vec<MatchResult>) -> Option<Vec<ScoredCandi
         }
         
         m.weighted_score = w_score;
-        grouped.entry(m.game_id.clone()).or_default().push(m);
+        grouped.entry(m.vndb_id.clone()).or_default().push(m);
     }
     
     // Overlapping Title Penalty (Cross-Group)
@@ -63,7 +63,7 @@ pub fn score_and_select_all(matches: Vec<MatchResult>) -> Option<Vec<ScoredCandi
             let norm_short_name = normalize_for_match(&all_structured_matches[i].matched_name);
             
             for j in 0..all_structured_matches.len() {
-                if all_structured_matches[i].game_id != all_structured_matches[j].game_id {
+                if all_structured_matches[i].vndb_id != all_structured_matches[j].vndb_id {
                     let norm_long_name = normalize_for_match(&all_structured_matches[j].matched_name);
                     if norm_long_name.contains(&norm_short_name) && norm_long_name.chars().count() > norm_short_name.chars().count() {
                         all_structured_matches[i].weighted_score *= 0.3;
@@ -76,12 +76,12 @@ pub fn score_and_select_all(matches: Vec<MatchResult>) -> Option<Vec<ScoredCandi
     // Update grouped matches with penalized scores
     grouped.clear();
     for m in all_structured_matches {
-        grouped.entry(m.game_id.clone()).or_default().push(m);
+        grouped.entry(m.vndb_id.clone()).or_default().push(m);
     }
     
     let mut candidates = Vec::new();
     
-    for (game_id, game_matches) in grouped {
+    for (vndb_id, game_matches) in grouped {
         let best_match = game_matches.iter().max_by(|a, b| a.weighted_score.partial_cmp(&b.weighted_score).unwrap_or(std::cmp::Ordering::Equal)).unwrap().clone();
         
         let has_title_match = game_matches.iter().any(|m| {
@@ -98,7 +98,7 @@ pub fn score_and_select_all(matches: Vec<MatchResult>) -> Option<Vec<ScoredCandi
         let final_score = best_match.weighted_score + cross_bonus;
         
         candidates.push(ScoredCandidate {
-            game_id,
+            vndb_id,
             final_score,
             best_match,
             all_matches: game_matches,

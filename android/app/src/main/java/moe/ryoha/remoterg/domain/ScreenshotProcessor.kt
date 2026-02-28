@@ -147,6 +147,14 @@ class ScreenshotProcessor @Inject constructor(
 
     private suspend fun saveAnalysisToDb(hostId: String, jsonString: String) {
         try {
+            val jsonParser = Json { ignoreUnknownKeys = true }
+            val result = try {
+                jsonParser.decodeFromString<moe.ryoha.remoterg.data.model.AnalysisResult>(jsonString)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse analysis result JSON: $e")
+                null
+            }
+
             val localScreenshots = screenshotDao.getScreenshotsByHostId(hostId)
             localScreenshots.forEach { ss ->
                 analysisDao.insertAnalysisResult(
@@ -156,6 +164,42 @@ class ScreenshotProcessor @Inject constructor(
                         createdAt = System.currentTimeMillis()
                     )
                 )
+
+                if (result != null) {
+                    result.sceneInfo?.let { scene ->
+                        analysisDao.insertAnalysisScene(
+                            moe.ryoha.remoterg.data.local.entity.AnalysisSceneEntity(
+                                localId = ss.localId,
+                                location = scene.location,
+                                timeOfDay = scene.timeOfDay,
+                                atmosphere = scene.atmosphere
+                            )
+                        )
+                    }
+
+                    result.dialogue?.let { dialogue ->
+                        analysisDao.insertAnalysisDialogue(
+                            moe.ryoha.remoterg.data.local.entity.AnalysisDialogueEntity(
+                                localId = ss.localId,
+                                speaker = dialogue.speaker,
+                                text = dialogue.text
+                            )
+                        )
+                    }
+
+                    if (result.characters.isNotEmpty()) {
+                        val entities = result.characters.map { char ->
+                            moe.ryoha.remoterg.data.local.entity.AnalysisCharacterEntity(
+                                localId = ss.localId,
+                                name = char.name,
+                                expressionTags = char.expressionTags.joinToString(","),
+                                visualDescription = char.visualDescription,
+                                position = char.position
+                            )
+                        }
+                        analysisDao.insertAnalysisCharacters(entities)
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save analysis result to DB: $e")

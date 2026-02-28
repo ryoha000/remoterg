@@ -5,7 +5,10 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
+import moe.ryoha.remoterg.data.local.entity.AnalysisCharacterEntity
+import moe.ryoha.remoterg.data.local.entity.AnalysisDialogueEntity
 import moe.ryoha.remoterg.data.local.entity.AnalysisResultEntity
+import moe.ryoha.remoterg.data.local.entity.AnalysisSceneEntity
 import moe.ryoha.remoterg.data.local.entity.ScreenshotFavoriteEntity
 import moe.ryoha.remoterg.data.local.entity.ScreenshotMapEntity
 
@@ -62,9 +65,18 @@ interface AnalysisDao {
     @Query("DELETE FROM analysis_results WHERE local_id = :localId")
     suspend fun deleteAnalysisResult(localId: String)
 
-    @Query("SELECT local_id FROM analysis_results WHERE data LIKE '%' || '\"name\":\"' || '%' || :query || '%' || '\"' || '%'")
+    @Query("SELECT DISTINCT local_id FROM analysis_character WHERE name LIKE '%' || :query || '%'")
     suspend fun searchLocalIdsByCharacter(query: String): List<String>
 
-    @Query("SELECT local_id FROM analysis_results WHERE data LIKE '%' || '\"text\":\"' || '%' || :query || '%' || '\"' || '%'")
+    @Query("SELECT local_id FROM analysis_dialogue WHERE text LIKE '%' || :query || '%'")
     suspend fun searchLocalIdsByText(query: String): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnalysisScene(scene: AnalysisSceneEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnalysisDialogue(dialogue: AnalysisDialogueEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAnalysisCharacters(characters: List<AnalysisCharacterEntity>)
 }

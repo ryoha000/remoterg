@@ -16,7 +16,7 @@ import moe.ryoha.remoterg.data.local.entity.ScreenshotMapEntity
         ScreenshotFavoriteEntity::class,
         ScreenshotMapEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +28,13 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE screenshot_map ADD COLUMN thumbnail_path TEXT DEFAULT NULL")
+            }
+        }
+
+        /** v2→v3: プロセスパスカラムを追加 */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE screenshot_map ADD COLUMN process_path TEXT DEFAULT NULL")
             }
         }
     }

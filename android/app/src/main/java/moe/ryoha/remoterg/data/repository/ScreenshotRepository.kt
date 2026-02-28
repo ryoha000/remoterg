@@ -31,6 +31,7 @@ data class MediaStoreScreenshot(
     val dateAdded: Long,
     val windowTitle: String,
     val processName: String,
+    val processPath: String? = null,
     val thumbnailPath: String? = null
 )
 
@@ -103,6 +104,7 @@ class ScreenshotRepository @Inject constructor(
                                 dateAdded = dateAdded,
                                 windowTitle = dbEntity.windowTitle,
                                 processName = dbEntity.processName,
+                                processPath = dbEntity.processPath,
                                 thumbnailPath = dbEntity.thumbnailPath
                             )
                         )
@@ -164,6 +166,7 @@ class ScreenshotRepository @Inject constructor(
                         hostId = hostId,
                         windowTitle = windowTitle ?: "",
                         processName = processName ?: "",
+                        processPath = processPath,
                         thumbnailPath = thumbnailPath
                     )
                 )

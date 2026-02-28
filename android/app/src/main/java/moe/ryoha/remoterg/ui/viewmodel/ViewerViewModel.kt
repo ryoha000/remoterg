@@ -34,6 +34,7 @@ class ViewerViewModel @Inject constructor(
     private val signalingClient: ISignalingClient,
     private val screenshotProcessor: ScreenshotProcessor,
     private val settingsRepository: SettingsRepository,
+    private val googleDriveRepository: moe.ryoha.remoterg.data.repository.GoogleDriveRepository,
     private val application: Application
 ) : ViewModel() {
 

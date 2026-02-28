@@ -93,7 +93,8 @@ class GalleryViewModel @Inject constructor(
             if (filters.isFavorite && !favIds.contains(item.localId)) return@filter false
 
             // Game title filter
-            if (filters.gameTitle != null && item.windowTitle != filters.gameTitle) return@filter false
+            // 検索時の gameTitle は cleanTitle の可能性があるため、前方一致で判定
+            if (filters.gameTitle != null && !item.windowTitle.startsWith(filters.gameTitle)) return@filter false
 
             // Text search (matches title or process name)
             if (filters.text.isNotBlank()) {
@@ -114,13 +115,25 @@ class GalleryViewModel @Inject constructor(
     // Extract unique titles for the title cards UI
     val recentTitles = repository.getAllScreenshotsWithDimensions()
         .map { list ->
-            // Group by windowTitle and get the most recent one for the thumbnail
-            list.filter { it.windowTitle.isNotBlank() }
-                .groupBy { it.windowTitle }
-                .map { (title, items) -> 
-                    // items are sorted descending by dateAdded from repository
-                    Pair(title, items.first())
-                }
+            // processPath があるものは processPath でグループ化し、
+            // 空のものは windowTitle でフォールバックしてグループ化する
+            val grouped = list.filter { it.windowTitle.isNotBlank() }
+                .groupBy { it.processPath?.takeIf { p -> p.isNotBlank() } ?: it.windowTitle }
+
+            grouped.map { (_, items) ->
+                // items are sorted descending by dateAdded from repository
+                val latestScreenshot = items.first()
+
+                // グループ内の全ウィンドウタイトルの LCP を計算し、不要な記号を除去
+                val titles = items.map { it.windowTitle }.distinct()
+                val lcp = moe.ryoha.remoterg.ui.util.StringUtil.longestCommonPrefix(titles)
+                val cleanTitle = moe.ryoha.remoterg.ui.util.StringUtil.cleanPrefix(lcp)
+
+                // もし共通部分がうまく抽出できなかった（空になった）場合は最新のタイトルをそのまま使う
+                val displayTitle = if (cleanTitle.isNotBlank()) cleanTitle else latestScreenshot.windowTitle
+
+                Pair(displayTitle, latestScreenshot)
+            }
         }
         .stateIn(
             scope = viewModelScope,

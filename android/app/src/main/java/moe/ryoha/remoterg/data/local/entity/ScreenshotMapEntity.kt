@@ -19,6 +19,9 @@ data class ScreenshotMapEntity(
     @ColumnInfo(name = "process_name", defaultValue = "")
     val processName: String = "",
 
+    @ColumnInfo(name = "process_path", defaultValue = "NULL")
+    val processPath: String? = null,
+
     @ColumnInfo(name = "thumbnail_path", defaultValue = "NULL")
     val thumbnailPath: String? = null
 )

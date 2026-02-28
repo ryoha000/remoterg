@@ -5,6 +5,8 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,6 +18,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +46,15 @@ fun ConnectScreen(
     val context = LocalContext.current
     var sessionId by remember { mutableStateOf("fixed") }
     var selectedCodec by remember { mutableStateOf("av1") }
+    
+    val isGoogleDriveConnected by viewModel.isGoogleDriveConnected.collectAsState()
+    
+    LaunchedEffect(Unit) {
+        viewModel.googleDriveAuthUrlFlow.collect { url ->
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            context.startActivity(intent)
+        }
+    }
     
     var serverMode by remember { mutableStateOf("local") }
     var customServerUrl by remember { mutableStateOf("ws://192.168.0.10:8787") }
@@ -226,6 +240,100 @@ fun ConnectScreen(
                     Text(
                         text = "View Gallery",
                         style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Google Drive Connection Card
+                val baseUrl = when (serverMode) {
+                    "local" -> "ws://10.0.2.2:8787"
+                    "remote" -> "wss://remoterg.the7uya.workers.dev"
+                    else -> customServerUrl.trimEnd('/')
+                }
+                val signalingUrl = "$baseUrl/api/signal?session_id=$sessionId&role=viewer"
+                
+                var showDisconnectDialog by remember { mutableStateOf(false) }
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            if (isGoogleDriveConnected) {
+                                showDisconnectDialog = true
+                            } else {
+                                viewModel.startGoogleDriveAuth(signalingUrl)
+                            }
+                        },
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.Transparent,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (isGoogleDriveConnected) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                                contentDescription = "Google Drive",
+                                modifier = Modifier.size(20.dp),
+                                tint = if (isGoogleDriveConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Google Drive",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isGoogleDriveConnected) Color(0xFF22C55E) // green-500
+                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isGoogleDriveConnected) "Linked" else "Not Linked",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isGoogleDriveConnected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                if (showDisconnectDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showDisconnectDialog = false },
+                        title = { Text("Disconnect Google Drive") },
+                        text = { Text("Are you sure you want to disconnect Google Drive?") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                viewModel.disconnectGoogleDrive()
+                                showDisconnectDialog = false
+                            }) {
+                                Text("Disconnect", color = MaterialTheme.colorScheme.error)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showDisconnectDialog = false }) {
+                                Text("Cancel")
+                            }
+                        }
                     )
                 }
                 

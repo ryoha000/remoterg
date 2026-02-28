@@ -48,6 +48,7 @@ fun SearchPanel(
     filters: SearchFilters,
     onFiltersChanged: (SearchFilters) -> Unit,
     recentTitles: List<Pair<String, MediaStoreScreenshot>>,
+    recentCharacters: List<String>,
     modifier: Modifier = Modifier
 ) {
     var isExpanded by remember { mutableStateOf(false) }
@@ -287,72 +288,34 @@ fun SearchPanel(
                         }
 
                         // Quick Title Filters
-                        var visibleTitleCount by remember { mutableIntStateOf(10) }
-                        
-                        LaunchedEffect(isExpanded) {
-                            if (!isExpanded) {
-                                visibleTitleCount = 10
-                            }
-                        }
-
                         if (recentTitles.isNotEmpty()) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "タイトルで絞り込み",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(bottom = 8.dp)
-                                )
-                                
-                                val visibleTitles = recentTitles.take(visibleTitleCount)
-                                
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    visibleTitles.forEach { (title, _) ->
-                                        Surface(
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
-                                            shape = RoundedCornerShape(8.dp),
-                                            onClick = { 
-                                                onFiltersChanged(filters.copy(gameTitle = title))
-                                                isExpanded = false
-                                            }
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.VideogameAsset,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = title,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    fontSize = 14.sp
-                                                )
-                                            }
-                                        }
-                                    }
+                            FilterSuggestionGroup(
+                                title = "タイトルで絞り込み",
+                                items = recentTitles,
+                                icon = Icons.Default.VideogameAsset,
+                                itemText = { it.first },
+                                onItemSelected = {
+                                    onFiltersChanged(filters.copy(gameTitle = it.first))
+                                    isExpanded = false
                                 }
-                                
-                                if (recentTitles.size > visibleTitleCount) {
-                                    TextButton(
-                                        onClick = { visibleTitleCount += 20 },
-                                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)
-                                    ) {
-                                        Text("さらに読み込む", color = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
-                            }
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         }
 
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        // Quick Character Filters
+                        if (recentCharacters.isNotEmpty()) {
+                            FilterSuggestionGroup(
+                                title = "キャラクターで絞り込み",
+                                items = recentCharacters,
+                                icon = Icons.Default.Person,
+                                itemText = { it },
+                                onItemSelected = {
+                                    onFiltersChanged(filters.copy(charaText = it))
+                                    isExpanded = false
+                                }
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
 
                         // Quick Filters
                         Column(modifier = Modifier.padding(12.dp)) {
@@ -427,6 +390,75 @@ fun SearchPanel(
         }
     }
 }
+
+@Composable
+fun <T> FilterSuggestionGroup(
+    title: String,
+    items: List<T>,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    itemText: (T) -> String,
+    onItemSelected: (T) -> Unit
+) {
+    var visibleItemCount by remember { mutableIntStateOf(10) }
+    
+    // Reset visible count when item list changes significantly (or you could tie this to expansion state from parent)
+    LaunchedEffect(items) {
+        visibleItemCount = 10
+    }
+
+    Column(modifier = Modifier.padding(12.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        
+        val visibleItems = items.take(visibleItemCount)
+        
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            visibleItems.forEach { item ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(8.dp),
+                    onClick = { onItemSelected(item) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = itemText(item),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+        }
+        
+        if (items.size > visibleItemCount) {
+            TextButton(
+                onClick = { visibleItemCount += 20 },
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)
+            ) {
+                Text("さらに読み込む", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
 @Composable
 fun HelpRow(token: String, desc: String, color: Color) {
     Row(modifier = Modifier.padding(vertical = 2.dp)) {

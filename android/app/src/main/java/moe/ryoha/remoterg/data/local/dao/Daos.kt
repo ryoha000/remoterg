@@ -79,4 +79,23 @@ interface AnalysisDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAnalysisCharacters(characters: List<AnalysisCharacterEntity>)
+
+    @Query("""
+        SELECT name FROM (
+            SELECT c.name as name, r.created_at
+            FROM analysis_character c
+            INNER JOIN analysis_results r ON c.local_id = r.local_id
+            WHERE c.name != '' AND c.name IS NOT NULL
+            
+            UNION ALL
+            
+            SELECT d.speaker as name, r.created_at
+            FROM analysis_dialogue d
+            INNER JOIN analysis_results r ON d.local_id = r.local_id
+            WHERE d.speaker != '' AND d.speaker IS NOT NULL
+        )
+        GROUP BY name
+        ORDER BY MAX(created_at) DESC
+    """)
+    fun getRecentCharacters(): Flow<List<String>>
 }

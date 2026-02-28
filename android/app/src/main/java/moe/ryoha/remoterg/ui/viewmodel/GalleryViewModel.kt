@@ -154,6 +154,13 @@ class GalleryViewModel @Inject constructor(
             initialValue = emptyList()
         )
 
+    val recentCharacters = analysisDao.getRecentCharacters()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
     private val _screenWidthDp = MutableStateFlow(0f)
     fun updateScreenWidth(widthDp: Float) {
         if (_screenWidthDp.value != widthDp) {

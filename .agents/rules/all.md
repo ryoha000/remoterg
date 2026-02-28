@@ -24,7 +24,7 @@ RemoteRG は、Windows上のビジュアルノベルのゲーム画面を WebRTC
 - Rust コード修正後、完了前に `cargo check` でコンパイル確認すること
 - サービス間の共有型は `core-types` クレートに追加すること
 - サービスは他のサービスに直接依存してはならない — `core-types` のみに依存
-- エンコーダのファクトリ注入は hostd で行う (feature flags: h264)
+- windows でのみ動作することを前提とする
 
 ### Web
 

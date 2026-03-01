@@ -38,6 +38,7 @@ pub struct InputService {
     tagger_service: TaggerService,
     tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
     screenshot_dir: PathBuf,
+    characters_dir: PathBuf,
     target_hwnd: u64,
     window_info_provider: WindowInfoProvider,
     title_resolver: Option<Arc<TitleResolver>>,
@@ -83,29 +84,10 @@ const PROMPT_BASE: &str = r#"以下のJSONスキーマに従って、スクリ�
 - JSON形式のみを出力し、それ以外の説明テキストは一切含めないでください。
 "#;
 
-/// キャラクター情報を含むプロンプトを構築する
-fn build_prompt(characters: Option<&[VndbCharacter]>) -> String {
-    let mut prompt = PROMPT_BASE.to_string();
-    if let Some(chars) = characters {
-        let names: Vec<&str> = chars
-            .iter()
-            .filter_map(|c| c.original.as_deref().or(Some(&c.name)))
-            .collect();
-        if !names.is_empty() {
-            prompt.push_str(&format!(
-                "\n### このゲームの登場キャラクター一覧:\n{}\n\n\
-                上記のキャラクター名を参考に、speakerやcharactersのnameを正確に特定してください。\
-                名前欄の名前が上記リストに含まれる場合はそのまま使用し、含まれない場合は画面表示通りに記載してください。\
-                また、画像で提供されたキャラクターの立ち絵を参考にして、スクリーンショット内の人物を特定してください。",
-                names.join("、")
-            ));
-        }
-    }
-    prompt
-}
+
 
 /// キャラ画像付き分析に使用するキャラクターの最大数
-const MAX_CHARACTER_IMAGES: usize = 8;
+const MAX_CHARACTER_IMAGES: usize = 32;
 /// キャラ取得の最大件数
 const MAX_CHARACTERS: usize = 50;
 
@@ -117,6 +99,7 @@ impl InputService {
         tagger_service: TaggerService,
         tagger_cmd_tx: mpsc::Sender<core_types::TaggerCommand>,
         screenshot_dir: PathBuf,
+        characters_dir: PathBuf,
         target_hwnd: u64,
         title_resolver: Option<Arc<TitleResolver>>,
     ) -> Self {
@@ -127,6 +110,7 @@ impl InputService {
             tagger_service,
             tagger_cmd_tx,
             screenshot_dir,
+            characters_dir,
             target_hwnd,
             window_info_provider: WindowInfoProvider::new(),
             title_resolver,
@@ -350,7 +334,7 @@ impl InputService {
                         info!("VNDB キャラクター取得成功: {}件", characters.len());
                         // 画像ダウンロード（完了まで待機）
                         let images = self.vndb_client
-                            .download_character_images(&characters, MAX_CHARACTER_IMAGES)
+                            .download_character_images(&characters, MAX_CHARACTER_IMAGES, &self.characters_dir, &title.vndb_id)
                             .await;
                         info!("キャラ画像ダウンロード完了: {}枚", images.len());
                         *char_cache = Some(CharacterCache {
@@ -366,14 +350,19 @@ impl InputService {
             }
 
             match &*char_cache {
-                Some(cache) => (
-                    build_prompt(Some(&cache.characters)),
-                    cache.images.clone(),
-                ),
-                None => (build_prompt(None), Vec::new()),
+                Some(cache) => {
+                    let refs: Vec<(String, String, Vec<u8>)> = cache.images.iter().map(|(name, img)| {
+                        let desc = cache.characters.iter().find(|c| {
+                            c.original.as_deref().unwrap_or(&c.name) == name
+                        }).map(|c| c.description.clone()).unwrap_or_default();
+                        (name.clone(), desc, img.clone())
+                    }).collect();
+                    (PROMPT_BASE.to_string(), refs)
+                },
+                None => (PROMPT_BASE.to_string(), Vec::new()),
             }
         } else {
-            (build_prompt(None), Vec::new())
+            (PROMPT_BASE.to_string(), Vec::new())
         };
 
         // --- Auto AI Analysis Trigger ---

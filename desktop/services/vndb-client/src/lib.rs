@@ -16,6 +16,9 @@ pub struct VndbCharacter {
     /// キャラクター画像URL
     #[serde(default)]
     pub image_url: Option<String>,
+    /// キャラクター説明
+    #[serde(default)]
+    pub description: String,
 }
 
 /// VNDB API のキャラクターレスポンス用内部型
@@ -33,6 +36,8 @@ struct CharacterApiEntry {
     original: Option<String>,
     #[serde(default)]
     image: Option<CharacterImage>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,7 +73,7 @@ impl VndbClient {
         loop {
             let request_body = serde_json::json!({
                 "filters": ["vn", "=", ["id", "=", vndb_id]],
-                "fields": "name, original, image.url",
+                "fields": "name, original, image.url, description",
                 "sort": "name",
                 "results": MAX_RESULTS_PER_PAGE,
                 "page": page
@@ -109,6 +114,7 @@ impl VndbClient {
                     name: entry.name.clone(),
                     original: entry.original.clone(),
                     image_url: entry.image.as_ref().and_then(|img| img.url.clone()),
+                    description: entry.description.clone().unwrap_or_default(),
                 });
 
                 if all_characters.len() >= max_count {
@@ -148,8 +154,38 @@ impl VndbClient {
         &self,
         characters: &[VndbCharacter],
         max_images: usize,
+        characters_dir: &std::path::Path,
+        vndb_id: &str,
     ) -> Vec<(String, Vec<u8>)> {
         let mut images = Vec::new();
+
+        let save_dir = characters_dir.join(vndb_id);
+        if save_dir.exists() {
+            if let Ok(mut entries) = tokio::fs::read_dir(&save_dir).await {
+                let mut load_success = false;
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(name_os) = path.file_stem() {
+                            if let Some(name) = name_os.to_str() {
+                                if let Ok(bytes) = tokio::fs::read(&path).await {
+                                    images.push((name.to_string(), bytes));
+                                    load_success = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if load_success && !images.is_empty() {
+                    info!("キャラ画像をキャッシュから{}枚読み込みました (vndb_id={})", images.len(), vndb_id);
+                    // もし max_images より多ければ切り詰める（任意）
+                    images.truncate(max_images);
+                    return images;
+                }
+            }
+        } else {
+            let _ = tokio::fs::create_dir_all(&save_dir).await;
+        }
 
         for character in characters.iter().take(max_images) {
             let image_url = match &character.image_url {
@@ -174,7 +210,17 @@ impl VndbClient {
                                     display_name,
                                     bytes.len()
                                 );
-                                images.push((display_name, bytes.to_vec()));
+                                let data = bytes.to_vec();
+                                images.push((display_name.clone(), data.clone()));
+                                
+                                // ファイル名に使用できない文字を置換
+                                let safe_name = display_name.replace(|c: char| {
+                                    matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+                                }, "_");
+                                let file_path = save_dir.join(format!("{}.jpg", safe_name));
+                                if let Err(e) = tokio::fs::write(&file_path, &data).await {
+                                    warn!("画像の保存に失敗しました {}: {}", safe_name, e);
+                                }
                             }
                             Err(e) => {
                                 warn!(
@@ -237,10 +283,12 @@ mod tests {
     async fn test_download_character_images() {
         let client = VndbClient::new();
         let characters = client.get_characters("v60196", 8).await.unwrap();
-        let images = client.download_character_images(&characters, 4).await;
+        let temp_dir = std::env::temp_dir().join("remoterg_test_chars");
+        let images = client.download_character_images(&characters, 4, &temp_dir, "v60196").await;
         println!("ダウンロードした画像数: {}", images.len());
         for (name, data) in &images {
             println!("  {} ({} bytes)", name, data.len());
         }
+        let _ = tokio::fs::remove_dir_all(temp_dir).await;
     }
 }

@@ -60,6 +60,10 @@ struct Args {
     #[arg(long, env = "REMOTERG_SCREENSHOTS", default_value = "screenshots")]
     screenshots_dir: String,
 
+    /// Directory for saving character images
+    #[arg(long, env = "REMOTERG_CHARACTERS", default_value = "characters")]
+    characters_dir: String,
+
     /// Path to the llama-server executable or directory
     #[arg(long, env = "REMOTERG_LLAMA_SERVER_PATH")]
     llama_server_path: Option<String>,
@@ -123,6 +127,7 @@ async fn main() -> Result<()> {
     info!("Capture HWND: {}", args.hwnd);
     info!("LLM Port: {}", args.llm_port);
     info!("Screenshots Directory: {}", args.screenshots_dir);
+    info!("Characters Directory: {}", args.characters_dir);
     if let Some(path) = &args.llama_server_path {
         info!("LLM Server Path: {}", path);
     }
@@ -267,6 +272,7 @@ async fn main() -> Result<()> {
         tagger_service,
         tagger_cmd_tx,
         std::path::PathBuf::from(args.screenshots_dir),
+        std::path::PathBuf::from(args.characters_dir),
         args.hwnd,
         title_resolver,
     );

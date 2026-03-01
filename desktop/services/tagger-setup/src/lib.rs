@@ -103,7 +103,7 @@ impl TaggerSetup {
             "-tb".to_string(),
             "8".to_string(),
             "-c".to_string(),
-            "8192".to_string(),
+            "32768".to_string(),
             "-b".to_string(),
             "2048".to_string(),
             "-ub".to_string(),

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use base64::prelude::*;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 #[derive(Clone)]
 pub struct TaggerService {
@@ -65,6 +66,20 @@ struct ChunkChoice {
 #[derive(Deserialize)]
 struct ChunkDelta {
     content: Option<String>,
+}
+
+/// 画像データのマジックバイトから MIME タイプを判定
+fn detect_image_mime(data: &[u8]) -> &'static str {
+    if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xD8 {
+        "image/jpeg"
+    } else if data.len() >= 4 && &data[..4] == b"\x89PNG" {
+        "image/png"
+    } else if data.len() >= 4 && &data[..4] == b"RIFF" {
+        "image/webp"
+    } else {
+        // フォールバック: JPEG として扱う
+        "image/jpeg"
+    }
 }
 
 impl TaggerService {
@@ -224,7 +239,7 @@ impl TaggerService {
     pub async fn analyze_with_references(
         &self,
         screenshot: &[u8],
-        reference_images: &[(String, Vec<u8>)],
+        reference_images: &[(String, String, Vec<u8>)],
         prompt: &str,
     ) -> Result<tokio::sync::mpsc::Receiver<Result<String>>> {
         let mut content_parts: Vec<ContentPart> = Vec::new();
@@ -234,33 +249,46 @@ impl TaggerService {
             text: prompt.to_string(),
         });
 
+        let mut idx = 0;
         // 2. 参考キャラ画像
-        for (name, image_data) in reference_images {
+        for (name, description, image_data) in reference_images {
+            if idx > 16 {
+                break;
+            }
+            
+            let mut text = format!("参考: キャラクター「{}」の立ち絵", name);
+            if !description.is_empty() {
+                text.push_str(&format!("\nキャラクター説明:\n{}", description));
+            }
+            
             content_parts.push(ContentPart::Text {
-                text: format!("参考: キャラクター「{}」の立ち絵", name),
+                text,
             });
+            let mime_type = detect_image_mime(image_data);
             let base64 = BASE64_STANDARD.encode(image_data);
             content_parts.push(ContentPart::ImageUrl {
                 image_url: ImageUrl {
-                    url: format!("data:image/jpeg;base64,{}", base64),
+                    url: format!("data:{};base64,{}", mime_type, base64),
                 },
             });
+            idx += 1;
         }
 
         // 3. 分析対象のスクリーンショット
         content_parts.push(ContentPart::Text {
             text: "以下が分析対象のスクリーンショットです:".to_string(),
         });
+        let screenshot_mime = detect_image_mime(screenshot);
         let screenshot_base64 = BASE64_STANDARD.encode(screenshot);
         content_parts.push(ContentPart::ImageUrl {
             image_url: ImageUrl {
-                url: format!("data:image/png;base64,{}", screenshot_base64),
+                url: format!("data:{};base64,{}", screenshot_mime, screenshot_base64),
             },
         });
 
         let request = ChatCompletionRequest {
             messages: vec![Message {
-                role: "user".to_string(),
+                role: "user".to_string(),   
                 content: content_parts,
             }],
             max_tokens: Some(512),

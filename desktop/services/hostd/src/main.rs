@@ -67,6 +67,10 @@ struct Args {
     /// Path to the llama-server executable or directory
     #[arg(long, env = "REMOTERG_LLAMA_SERVER_PATH")]
     llama_server_path: Option<String>,
+
+    /// Path to the character identifier models directory
+    #[arg(long, env = "REMOTERG_CHARACTER_IDENTIFIER_MODELS_DIR", default_value = "models")]
+    character_identifier_models_dir: String,
 }
 
 enum CaptureServiceEnum {
@@ -265,6 +269,18 @@ async fn main() -> Result<()> {
 
     let title_resolver = TitleResolver::new(&dict_path).ok().map(Arc::new);
 
+    let models_dir = std::path::PathBuf::from(args.character_identifier_models_dir);
+    let character_identifier = match character_identifier::CharacterIdentifier::new(&models_dir) {
+        Ok(ci) => {
+            info!("CharacterIdentifier initialized with models in {:?}", models_dir);
+            Some(Arc::new(tokio::sync::Mutex::new(ci)))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to initialize CharacterIdentifier (maybe missing ONNX models): {}", e);
+            None
+        }
+    };
+
     let input_service = InputService::new(
         data_channel_rx,
         capture_cmd_tx_for_input,
@@ -275,6 +291,7 @@ async fn main() -> Result<()> {
         std::path::PathBuf::from(args.characters_dir),
         args.hwnd,
         title_resolver,
+        character_identifier,
     );
     let signaling_client = SignalingClient::new(
         args.cloudflare_url,

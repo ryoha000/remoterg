@@ -25,6 +25,7 @@ tagger = { path = "../tagger" }
 tagger-setup = { path = "../tagger-setup" }
 core-types = { path = "../core" }
 title-resolver = { path = "../title-resolver" }
+character-identifier = { path = "../character-identifier" }
 dirs = "5.0"
 audio-capture = { path = "../audio-capture" }
 audio-capture-mock = { path = "../audio-capture-mock" }

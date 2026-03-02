@@ -16,6 +16,7 @@ use window_info::WindowInfoProvider;
 use std::sync::Arc;
 use title_resolver::{TitleResolver, TitleResolveResult};
 use vndb_client::{VndbClient, VndbCharacter};
+use character_identifier::CharacterIdentifier;
 
 use std::path::PathBuf;
 use windows::Win32::Foundation::HWND;
@@ -46,14 +47,13 @@ pub struct InputService {
     vndb_client: VndbClient,
     /// (vndb_id, キャラ一覧, ダウンロード済み画像)
     cached_characters: tokio::sync::Mutex<Option<CharacterCache>>,
+    character_identifier: Option<Arc<tokio::sync::Mutex<CharacterIdentifier>>>,
 }
 
 /// キャラクター情報のキャッシュ
 struct CharacterCache {
     vndb_id: String,
     characters: Vec<VndbCharacter>,
-    /// (キャラ表示名, 画像データ)
-    images: Vec<(String, Vec<u8>)>,
 }
 
 const PROMPT_BASE: &str = r#"以下のJSONスキーマに従って、スクリーンショットの解析結果を出力してください。
@@ -102,6 +102,7 @@ impl InputService {
         characters_dir: PathBuf,
         target_hwnd: u64,
         title_resolver: Option<Arc<TitleResolver>>,
+        character_identifier: Option<Arc<tokio::sync::Mutex<CharacterIdentifier>>>,
     ) -> Self {
         Self {
             message_rx,
@@ -117,6 +118,7 @@ impl InputService {
             cached_title: tokio::sync::Mutex::new(None),
             vndb_client: VndbClient::new(),
             cached_characters: tokio::sync::Mutex::new(None),
+            character_identifier,
         }
     }
 
@@ -320,7 +322,7 @@ impl InputService {
         }
 
         // --- キャラクター情報の取得（VNDB API） ---
-        let (prompt, char_images) = if let Some(ref title) = title_info {
+        let prompt = if let Some(ref title) = title_info {
             let mut char_cache = self.cached_characters.lock().await;
             let need_fetch = match &*char_cache {
                 Some(cache) => cache.vndb_id != title.vndb_id,
@@ -337,10 +339,19 @@ impl InputService {
                             .download_character_images(&characters, MAX_CHARACTER_IMAGES, &self.characters_dir, &title.vndb_id)
                             .await;
                         info!("キャラ画像ダウンロード完了: {}枚", images.len());
+                        
+                        if let Some(ci_arc) = &self.character_identifier {
+                            let mut ci = ci_arc.lock().await;
+                            if let Err(e) = ci.register_references(&images, &self.characters_dir.join(&title.vndb_id), &title.vndb_id).await {
+                                error!("Failed to register character references: {}", e);
+                            } else {
+                                info!("Character references registered successfully.");
+                            }
+                        }
+
                         *char_cache = Some(CharacterCache {
                             vndb_id: title.vndb_id.clone(),
                             characters,
-                            images,
                         });
                     }
                     Err(e) => {
@@ -351,18 +362,36 @@ impl InputService {
 
             match &*char_cache {
                 Some(cache) => {
-                    let refs: Vec<(String, String, Vec<u8>)> = cache.images.iter().map(|(name, img)| {
-                        let desc = cache.characters.iter().find(|c| {
-                            c.original.as_deref().unwrap_or(&c.name) == name
-                        }).map(|c| c.description.clone()).unwrap_or_default();
-                        (name.clone(), desc, img.clone())
-                    }).collect();
-                    (PROMPT_BASE.to_string(), refs)
+                    let chars_in_screenshot = if let Some(ci_arc) = &self.character_identifier {
+                        let mut ci = ci_arc.lock().await;
+                        match ci.identify(&jpeg_data) {
+                            Ok(results) => results,
+                            Err(e) => {
+                                error!("Character identification failed: {}", e);
+                                Vec::new()
+                            }
+                        }
+                    } else {
+                        Vec::new()
+                    };
+
+                    let mut text_prompt = PROMPT_BASE.to_string();
+                    let identified_known: Vec<_> = chars_in_screenshot.iter().filter(|c| c.name != "Unknown").collect();
+                    if !identified_known.is_empty() {
+                        text_prompt.push_str("\n### 画面に映っていると判定されたキャラクター:\n");
+                        for char_info in identified_known {
+                            let desc = cache.characters.iter().find(|c| {
+                                c.original.as_deref().unwrap_or(&c.name) == char_info.name
+                            }).map(|c| c.description.clone()).unwrap_or_default();
+                            text_prompt.push_str(&format!("- {}: (信頼度: {:.2}, 位置: 左から{}) {}\n", char_info.name, char_info.confidence, char_info.position_index + 1, desc));
+                        }
+                    }
+                    text_prompt
                 },
-                None => (PROMPT_BASE.to_string(), Vec::new()),
+                None => PROMPT_BASE.to_string(),
             }
         } else {
-            (PROMPT_BASE.to_string(), Vec::new())
+            PROMPT_BASE.to_string()
         };
 
         // --- Auto AI Analysis Trigger ---
@@ -396,26 +425,11 @@ impl InputService {
                 Err(_) => image_data
             };
 
-            // キャラ画像がある場合は analyze_with_references を使用
-            let mut rx = if !char_images.is_empty() {
-                match tagger_service.analyze_with_references(
-                    &image_data_for_analysis,
-                    &char_images,
-                    &prompt,
-                ).await {
-                    Ok(rx) => rx,
-                    Err(e) => {
-                        error!("Auto AI analysis (with references) failed for {}: {}", id_for_task, e);
-                        return;
-                    }
-                }
-            } else {
-                match tagger_service.analyze_screenshot_stream(&image_data_for_analysis, &prompt).await {
-                    Ok(rx) => rx,
-                    Err(e) => {
-                        error!("Auto AI analysis failed for {}: {}", id_for_task, e);
-                        return;
-                    }
+            let mut rx = match tagger_service.analyze_screenshot_stream(&image_data_for_analysis, &prompt).await {
+                Ok(rx) => rx,
+                Err(e) => {
+                    error!("Auto AI analysis failed for {}: {}", id_for_task, e);
+                    return;
                 }
             };
 

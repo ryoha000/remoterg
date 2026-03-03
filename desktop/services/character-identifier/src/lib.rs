@@ -1,9 +1,11 @@
 pub mod face_detector;
 pub mod embedder;
+pub mod tagger;
 pub mod matcher;
 
 pub use face_detector::{FaceDetector, BBox};
 pub use embedder::Embedder;
+pub use tagger::{Tagger, TagResult};
 pub use matcher::{Matcher, IdentifiedCharacter};
 
 use anyhow::Result;
@@ -20,7 +22,8 @@ pub enum DeviceType {
 pub struct CharacterIdentifier {
     face_detector: FaceDetector,
     embedder: Embedder,
-    reference_embeddings: Vec<(String, Vec<f32>)>,
+    tagger: Tagger,
+    reference_embeddings: Vec<(String, Vec<f32>, Vec<String>)>,
     models_dir: PathBuf,
 }
 
@@ -29,10 +32,16 @@ impl CharacterIdentifier {
         let models_dir = models_dir.as_ref().to_path_buf();
         let face_detector = FaceDetector::new(models_dir.join("yolov8_animeface.onnx"), false)?;
         let embedder = Embedder::new(models_dir.join("dinov2_vits14.onnx"), false)?;
+        let tagger = Tagger::new(
+            models_dir.join("wd-eva02-large-tagger-v3.onnx"),
+            models_dir.join("selected_tags.csv"),
+            false,
+        )?;
         
         Ok(Self {
             face_detector,
             embedder,
+            tagger,
             reference_embeddings: Vec::new(),
             models_dir,
         })
@@ -42,6 +51,11 @@ impl CharacterIdentifier {
         let use_gpu = matches!(device, DeviceType::Gpu);
         self.face_detector = FaceDetector::new(self.models_dir.join("yolov8_animeface.onnx"), use_gpu)?;
         self.embedder = Embedder::new(self.models_dir.join("dinov2_vits14.onnx"), use_gpu)?;
+        self.tagger = Tagger::new(
+            self.models_dir.join("wd-eva02-large-tagger-v3.onnx"),
+            self.models_dir.join("selected_tags.csv"),
+            use_gpu,
+        )?;
         Ok(())
     }
 
@@ -55,7 +69,7 @@ impl CharacterIdentifier {
         
         if cache_file.exists() {
             if let Ok(data) = tokio::fs::read(&cache_file).await {
-                if let Ok(embeddings) = bincode::deserialize::<Vec<(String, Vec<f32>)>>(&data[..]) {
+                if let Ok(embeddings) = bincode::deserialize::<Vec<(String, Vec<f32>, Vec<String>)>>(&data[..]) {
                     self.reference_embeddings = embeddings;
                     return Ok(());
                 }
@@ -78,11 +92,13 @@ impl CharacterIdentifier {
                         
                         let crop = img.crop_imm(crop_x, crop_y, crop_w, crop_h);
                         if let Ok(emb) = self.embedder.embed(&crop) {
-                            new_embeddings.push((name.clone(), emb));
+                            let tags = self.tagger.predict(&crop, 0.3).map(|res| res.into_iter().map(|t| t.tag).collect()).unwrap_or_default();
+                            new_embeddings.push((name.clone(), emb, tags));
                         }
                     } else {
                         if let Ok(emb) = self.embedder.embed(&img) {
-                            new_embeddings.push((name.clone(), emb));
+                            let tags = self.tagger.predict(&img, 0.3).map(|res| res.into_iter().map(|t| t.tag).collect()).unwrap_or_default();
+                            new_embeddings.push((name.clone(), emb, tags));
                         }
                     }
                 }
@@ -115,7 +131,8 @@ impl CharacterIdentifier {
             let crop = img.crop_imm(crop_x, crop_y, crop_w, crop_h);
             match self.embedder.embed(&crop) {
                 Ok(emb) => {
-                    face_embeddings.push((bbox, emb));
+                    let tags = self.tagger.predict(&crop, 0.3).map(|res| res.into_iter().map(|t| t.tag).collect()).unwrap_or_default();
+                    face_embeddings.push((bbox, emb, tags));
                 }
                 Err(e) => {
                     println!("Embedder error for face at {:?}: {:?}", bbox, e);

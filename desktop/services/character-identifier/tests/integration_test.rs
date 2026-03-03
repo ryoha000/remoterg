@@ -3,9 +3,23 @@ use std::path::PathBuf;
 use std::fs;
 use std::time::Instant;
 use image::GenericImageView;
+use std::sync::Once;
+
+
+static INIT_TRACING: Once = Once::new();
+
+fn init_tracing() {
+    INIT_TRACING.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .init();
+    });
+}
 
 #[tokio::test]
 async fn test_character_identification_pipeline() {
+    init_tracing();
     let total_start = Instant::now();
     let init_start = Instant::now();
 

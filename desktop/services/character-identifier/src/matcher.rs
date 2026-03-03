@@ -21,17 +21,39 @@ impl Matcher {
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
     }
 
+    fn check_hard_filter(ref_name: &str, ref_tags: &[String], face_tags: &[String]) -> bool {
+        let groups = vec![
+            vec!["blonde_hair", "brown_hair", "black_hair", "blue_hair", "pink_hair", "purple_hair", "white_hair", "grey_hair", "red_hair", "silver_hair", "green_hair", "orange_hair", "aqua_hair"],
+            vec!["blue_eyes", "red_eyes", "brown_eyes", "green_eyes", "purple_eyes", "yellow_eyes", "pink_eyes", "aqua_eyes", "black_eyes", "orange_eyes", "grey_eyes"],
+            vec!["long_hair", "short_hair", "medium_hair", "very_long_hair"],
+        ];
+
+        for group in groups {
+            let ref_has_group = ref_tags.iter().any(|t| group.contains(&t.as_str()));
+            let face_has_group = face_tags.iter().any(|t| group.contains(&t.as_str()));
+
+            if ref_has_group && face_has_group {
+                // 両方がこのグループの属性を持っている場合、共通するものがあるかチェック
+                let has_intersection = ref_tags.iter().any(|t| group.contains(&t.as_str()) && face_tags.contains(t));
+                if !has_intersection {
+                    tracing::debug!("Hard Filter REJECTED '{}': group conflict in {:?}", ref_name, group);
+                    return false; // 致命的な矛盾
+                }
+            }
+        }
+        true
+    }
+
     /// 各顔に対してベストマッチを探す
     pub fn match_characters(
-        faces: &[(BBox, Vec<f32>)],
-        references: &[(String, Vec<f32>)],
+        faces: &[(BBox, Vec<f32>, Vec<String>)],
+        references: &[(String, Vec<f32>, Vec<String>)],
         threshold: f32,
-        img_w: f32, // 元画像の幅
-        img_h: f32, // 元画像の高さ
+        img_w: f32,
+        img_h: f32,
     ) -> Vec<IdentifiedCharacter> {
-        // 顔データをX座標(x1 + x2)/2 でソート
         let mut sorted_faces: Vec<_> = faces.iter().collect();
-        sorted_faces.sort_by(|(a_box, _), (b_box, _)| {
+        sorted_faces.sort_by(|(a_box, _, _), (b_box, _, _)| {
             let cx_a = (a_box.x1 + a_box.x2) / 2.0;
             let cx_b = (b_box.x1 + b_box.x2) / 2.0;
             cx_a.partial_cmp(&cx_b).unwrap_or(std::cmp::Ordering::Equal)
@@ -39,12 +61,39 @@ impl Matcher {
 
         let mut results = Vec::new();
 
-        for (position_index, (bbox, embedding)) in sorted_faces.into_iter().enumerate() {
+        for (position_index, (bbox, embedding, face_tags)) in sorted_faces.into_iter().enumerate() {
             let mut best_match = "Unknown".to_string();
             let mut best_score = -1.0;
 
-            for (ref_name, ref_emb) in references {
-                let score = Self::cosine_similarity(embedding, ref_emb);
+            tracing::debug!("--- Face {} Tags: {:?} ---", position_index, face_tags);
+
+            for (ref_name, ref_emb, ref_tags) in references {
+                if !Self::check_hard_filter(ref_name, ref_tags, face_tags) {
+                    continue; // 矛盾がある場合はスキップ
+                }
+
+                let base_score = Self::cosine_similarity(embedding, ref_emb);
+                
+                // Soft Weighting: 一致率 (Jaccard係数的なもの) を係数として掛け合わせる
+                // 参照特徴のタグ集合と推論されたタグ集合の積を計算
+                let intersection_count = ref_tags.iter().filter(|t| face_tags.contains(t)).count();
+                let union_count = ref_tags.len() + face_tags.len() - intersection_count;
+                
+                let match_rate = if union_count > 0 {
+                    intersection_count as f32 / union_count as f32
+                } else {
+                    1.0 // タグが一切ない場合はペナルティなし
+                };
+                
+                // 完全一致で 1.0, 不一致で下がるような係数 (ここでは 0.6 + 0.4 * match_rate とし、急激に0にならないように調整)
+                let weight = 0.6 + 0.4 * match_rate;
+                let score = base_score * weight;
+                
+                tracing::debug!(
+                    "Match candidate '{}': base_score={:.4}, match_rate={:.4} (intersect={}, union={}), weight={:.4} => final_score={:.4}",
+                    ref_name, base_score, match_rate, intersection_count, union_count, weight, score
+                );
+
                 if score > best_score {
                     best_score = score;
                     best_match = ref_name.clone();
@@ -55,7 +104,6 @@ impl Matcher {
                 best_match = "Unknown".to_string();
             }
 
-            // bbox を正規化座標 (x, y, w, h) に変換
             let nx = bbox.x1 / img_w;
             let ny = bbox.y1 / img_h;
             let nw = (bbox.x2 - bbox.x1) / img_w;
@@ -63,7 +111,7 @@ impl Matcher {
 
             results.push(IdentifiedCharacter {
                 name: best_match,
-                confidence: best_score.max(0.0), // 負にならないように
+                confidence: best_score.max(0.0),
                 position_index,
                 bbox: (nx, ny, nw, nh),
             });
@@ -93,10 +141,10 @@ mod tests {
     fn test_match_threshold() {
         let bbox = BBox { x1: 0.0, y1: 0.0, x2: 100.0, y2: 100.0, conf: 0.9 };
         let embedding = vec![1.0, 0.0];
-        let faces = vec![(bbox, embedding)];
+        let faces: Vec<(BBox, Vec<f32>, Vec<String>)> = vec![(bbox, embedding, Vec::new())];
         
         // 類似度0.0
-        let references = vec![("CharA".to_string(), vec![0.0, 1.0])];
+        let references: Vec<(String, Vec<f32>, Vec<String>)> = vec![("CharA".to_string(), vec![0.0, 1.0], Vec::new())];
         
         let results = Matcher::match_characters(&faces, &references, 0.6, 1000.0, 1000.0);
         assert_eq!(results.len(), 1);
@@ -108,12 +156,12 @@ mod tests {
         let bbox1 = BBox { x1: 50.0, y1: 0.0, x2: 100.0, y2: 100.0, conf: 0.9 }; // cx = 75
         let bbox2 = BBox { x1: 0.0, y1: 0.0, x2: 40.0, y2: 100.0, conf: 0.9 };  // cx = 20
         
-        let faces = vec![
-            (bbox1, vec![1.0, 0.0]),
-            (bbox2, vec![0.0, 1.0]),
+        let faces: Vec<(BBox, Vec<f32>, Vec<String>)> = vec![
+            (bbox1, vec![1.0, 0.0], Vec::new()),
+            (bbox2, vec![0.0, 1.0], Vec::new()),
         ];
         
-        let references = vec![];
+        let references: Vec<(String, Vec<f32>, Vec<String>)> = vec![];
         let results = Matcher::match_characters(&faces, &references, 0.6, 1000.0, 1000.0);
         
         assert_eq!(results.len(), 2);
@@ -131,17 +179,44 @@ mod tests {
     fn test_best_match_selection() {
         let bbox = BBox { x1: 0.0, y1: 0.0, x2: 100.0, y2: 100.0, conf: 0.9 };
         let embedding = vec![0.8, 0.6]; // norm=1.0
-        let faces = vec![(bbox, embedding)];
+        let faces: Vec<(BBox, Vec<f32>, Vec<String>)> = vec![(bbox, embedding, Vec::new())];
         
-        let references = vec![
-            ("CharA".to_string(), vec![0.0, 1.0]), // dot = 0.6
-            ("CharB".to_string(), vec![0.8, 0.6]), // dot = 1.0
-            ("CharC".to_string(), vec![1.0, 0.0]), // dot = 0.8
+        let references: Vec<(String, Vec<f32>, Vec<String>)> = vec![
+            ("CharA".to_string(), vec![0.0, 1.0], Vec::new()), // dot = 0.6
+            ("CharB".to_string(), vec![0.8, 0.6], Vec::new()), // dot = 1.0
+            ("CharC".to_string(), vec![1.0, 0.0], Vec::new()), // dot = 0.8
         ];
         
         let results = Matcher::match_characters(&faces, &references, 0.5, 1000.0, 1000.0);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "CharB");
         assert!((results[0].confidence - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_hard_filter_and_soft_weight() {
+        let bbox = BBox { x1: 0.0, y1: 0.0, x2: 100.0, y2: 100.0, conf: 0.9 };
+        let embedding = vec![1.0, 0.0];
+        // 顔のタグ: blue_hair
+        let faces = vec![(bbox.clone(), embedding.clone(), vec!["blue_hair".to_string(), "1girl".to_string()])];
+        
+        let references = vec![
+            // CharA: red_hair (contradicts blue_hair, should be hard filtered), high base score
+            ("CharA".to_string(), vec![1.0, 0.0], vec!["red_hair".to_string(), "1girl".to_string()]),
+            // CharB: blue_hair (matches completely), medium base score (0.8)
+            ("CharB".to_string(), vec![0.8, 0.6], vec!["blue_hair".to_string(), "1girl".to_string()]),
+            // CharC: no hair tag, match is okay, no boost, low base score (0.6)
+            ("CharC".to_string(), vec![0.6, 0.8], vec!["1girl".to_string()]),
+        ];
+        
+        let results = Matcher::match_characters(&faces, &references, 0.1, 1000.0, 1000.0);
+        assert_eq!(results.len(), 1);
+        
+        // CharA is filtered out. 
+        // CharB tag JACCARD = 2 / 2 = 1.0
+        // weight = 0.6 + 0.4 * 1.0 = 1.0
+        // score = 0.8 * 1.0 = 0.8
+        assert_eq!(results[0].name, "CharB");
+        assert!((results[0].confidence - 0.8).abs() < 1e-5);
     }
 }

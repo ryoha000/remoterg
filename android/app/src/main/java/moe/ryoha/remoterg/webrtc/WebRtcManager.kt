@@ -111,6 +111,9 @@ class WebRtcManager @Inject constructor(
     private data class SyncSample(val rtt: Double, val offset: Double)
     private var latencySyncJob: kotlinx.coroutines.Job? = null
     private val latencyVideoSink: VideoSink by lazy { createLatencyVideoSink() }
+    
+    // WebRTCのRTP timestampNsとtCapの紐付け用オフセット
+    private var timestampToTCapOffsetNs: Double? = null
 
     init {
         scope.launch {
@@ -147,6 +150,7 @@ class WebRtcManager @Inject constructor(
         syncSamples.clear()
         frameSampleQueue.clear()
         lastLatencyMs.set(0)
+        timestampToTCapOffsetNs = null
     }
 
     private fun handleSyncRes(seq: Int, c1: Double, s2: Double, s3: Double) {
@@ -174,16 +178,49 @@ class WebRtcManager @Inject constructor(
         while (frameSampleQueue.size > 60) frameSampleQueue.poll()
     }
 
-    private fun onFrameRendered() {
-        val sample = frameSampleQueue.poll() ?: return
-        val offset = latencyOffsetEst.get() ?: return
-        val tRender = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000.0
-        val tCapClient = sample.tCap - offset
-        val e2eMs = (tRender - tCapClient).roundToInt()
-        lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+    private fun onFrameRendered(frame: org.webrtc.VideoFrame) {
+        val clockOffset = latencyOffsetEst.get() ?: return
+        if (frameSampleQueue.isEmpty()) return
+
+        val frameTimestampMs = frame.timestampNs / 1_000_000.0
+
+        var bestSample: FrameSample? = null
+        var minDiff = Double.MAX_VALUE
+        var matchedIndex = -1
+
+        val samples = frameSampleQueue.toList()
+        for ((index, sample) in samples.withIndex()) {
+            val currentOffset = timestampToTCapOffsetNs
+            // 初回、またはズレが500ms以上ある場合はオフセットを再計算
+            if (currentOffset == null || kotlin.math.abs((frameTimestampMs - currentOffset) - sample.tCap) > 500.0) {
+                timestampToTCapOffsetNs = frameTimestampMs - sample.tCap
+            }
+            
+            val predictedTCap = frameTimestampMs - (timestampToTCapOffsetNs ?: 0.0)
+            val diff = kotlin.math.abs(predictedTCap - sample.tCap)
+            
+            // 50ms以内で最も近いものを探す
+            if (diff < 50.0 && diff < minDiff) {
+                minDiff = diff
+                bestSample = sample
+                matchedIndex = index
+            }
+        }
+
+        if (bestSample != null && matchedIndex >= 0) {
+            // マッチしたサンプルまでの古いデータをすべて破棄（コマ落ちした未描画フレーム分をクリア）
+            for (i in 0..matchedIndex) {
+                frameSampleQueue.poll()
+            }
+            
+            val tRender = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000.0
+            val tCapClient = bestSample.tCap - clockOffset
+            val e2eMs = (tRender - tCapClient).roundToInt()
+            lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+        }
     }
 
-    private fun createLatencyVideoSink(): VideoSink = VideoSink { onFrameRendered() }
+    private fun createLatencyVideoSink(): VideoSink = VideoSink { frame -> onFrameRendered(frame) }
 
     private fun handleLatencyMessage(text: String): Boolean {
         return try {

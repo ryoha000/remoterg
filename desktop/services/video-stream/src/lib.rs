@@ -2,7 +2,10 @@ mod frame_processor;
 mod track_writer;
 
 use anyhow::Result;
-use core_types::{Frame, VideoCodec, VideoEncoderFactory, VideoStreamMessage};
+use core_types::{
+    DataChannelMessage, Frame, OutgoingDataChannelMessage, VideoCodec, VideoEncoderFactory,
+    VideoStreamMessage,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -18,6 +21,7 @@ pub struct VideoStreamService {
     frame_rx: mpsc::Receiver<Frame>,
     encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
     video_stream_msg_rx: mpsc::Receiver<VideoStreamMessage>,
+    outgoing_dc_tx: Option<mpsc::Sender<OutgoingDataChannelMessage>>,
 }
 
 impl VideoStreamService {
@@ -26,12 +30,14 @@ impl VideoStreamService {
         frame_rx: mpsc::Receiver<Frame>,
         encoder_factories: HashMap<VideoCodec, Arc<dyn VideoEncoderFactory>>,
         video_stream_msg_rx: mpsc::Receiver<VideoStreamMessage>,
+        outgoing_dc_tx: Option<mpsc::Sender<OutgoingDataChannelMessage>>,
     ) -> Self {
         info!("VideoStreamService::new");
         Self {
             frame_rx,
             encoder_factories,
             video_stream_msg_rx,
+            outgoing_dc_tx,
         }
     }
 
@@ -180,10 +186,28 @@ impl VideoStreamService {
                             // 現在アクティブなトラックがあり、かつ接続準備完了していれば送信
                             if let (Some(track), Some(conn_ready)) = (&current_video_track, &current_connection_ready) {
                                 if conn_ready.load(Ordering::Relaxed) {
-                                     track_writer::write_encoded_sample(
-                                        track,
-                                        encode_result,
-                                    ).await?;
+                                    let frame_id = encode_result.frame_id;
+                                    let t_cap_ms = encode_result.t_cap_ms;
+                                    let t_enc_in_ms = encode_result.t_enc_in_ms;
+                                    let t_enc_out_ms = encode_result.t_enc_out_ms;
+
+                                    track_writer::write_encoded_sample(track, encode_result).await?;
+
+                                    if let (Some(ref tx), Some(t_cap), Some(t_enc_in), Some(t_enc_out)) =
+                                        (&self.outgoing_dc_tx, t_cap_ms, t_enc_in_ms, t_enc_out_ms)
+                                    {
+                                        let t_send = core_types::latency_monotonic_ms();
+                                        let frame_sample = DataChannelMessage::FrameSample {
+                                            frame_id,
+                                            t_cap,
+                                            t_enc_in,
+                                            t_enc_out,
+                                            t_send,
+                                        };
+                                        let _ = tx
+                                            .send(OutgoingDataChannelMessage::Text(frame_sample))
+                                            .await;
+                                    }
 
                                     last_encode_result_wait_start = Instant::now();
                                 } else {

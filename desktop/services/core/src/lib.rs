@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver};
@@ -53,6 +54,22 @@ pub type CaptureFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 pub type CaptureFrameSender = Sender<Frame>;
 pub type CaptureCommandReceiver = Receiver<CaptureMessage>;
 
+/// レイテンシ計測用の単調時刻基準 (hostd起動時に設定)
+static LATENCY_APP_START: OnceLock<Instant> = OnceLock::new();
+
+/// 単調増加時刻をミリ秒で返す (設定されていない場合は0)
+pub fn latency_monotonic_ms() -> f64 {
+    LATENCY_APP_START
+        .get()
+        .map(|s| s.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+
+/// レイテンシ計測用の基準時刻を設定 (hostd起動時に1回のみ)
+pub fn set_latency_app_start(start: Instant) {
+    let _ = LATENCY_APP_START.set(start);
+}
+
 /// キャプチャフレーム (GPU texture handle のみ)
 #[derive(Debug, Clone)]
 pub struct Frame {
@@ -61,6 +78,8 @@ pub struct Frame {
     pub windows_timespan: u64,
     pub id: u64,
     pub texture_handle: Option<u64>,
+    /// レイテンシ計測用 (hostd monotonic ms, キャプチャ直後)
+    pub t_cap_mono_ms: Option<f64>,
 }
 
 /// スクリーンショット用のフレームデータ (CPU buffer を含む)
@@ -101,6 +120,9 @@ pub struct EncodeJob {
     pub request_keyframe: bool,
     pub frame_id: u64,
     pub texture_handle: Option<u64>,
+    /// レイテンシ計測用 (hostd monotonic ms)
+    pub t_cap_mono_ms: Option<f64>,
+    pub t_enc_in_mono_ms: Option<f64>,
 }
 
 /// エンコード結果
@@ -112,6 +134,10 @@ pub struct EncodeResult {
     pub width: u32,
     pub height: u32,
     pub frame_id: u64,
+    /// レイテンシ計測用 (hostd monotonic ms)
+    pub t_cap_ms: Option<f64>,
+    pub t_enc_in_ms: Option<f64>,
+    pub t_enc_out_ms: Option<f64>,
 }
 
 /// エンコードジョブスロットのシャットダウンエラー
@@ -269,6 +295,29 @@ pub enum DataChannelMessage {
     },
     Pong {
         timestamp: u64,
+    },
+    /// 時刻同期要求 (client -> hostd)
+    #[serde(rename = "sync_req")]
+    SyncReq {
+        seq: u32,
+        c1: f64,
+    },
+    /// 時刻同期応答 (hostd -> client)
+    #[serde(rename = "sync_res")]
+    SyncRes {
+        seq: u32,
+        c1: f64,
+        s2: f64,
+        s3: f64,
+    },
+    /// フレーム計測サンプル (hostd -> client)
+    #[serde(rename = "frame_sample")]
+    FrameSample {
+        frame_id: u64,
+        t_cap: f64,
+        t_enc_in: f64,
+        t_enc_out: f64,
+        t_send: f64,
     },
     // Input
     MouseClick {

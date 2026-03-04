@@ -29,7 +29,13 @@ import org.webrtc.RtpReceiver
 import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
 import org.webrtc.AudioTrack
+import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.roundToInt
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -95,15 +101,119 @@ class WebRtcManager @Inject constructor(
 
     private var preferredCodec: String = "h264"
 
+    // E2E latency measurement (LATENCY_MEASUREMENT.md)
+    private val latencyOffsetEst = AtomicReference<Double?>(null)
+    private val lastLatencyMs = AtomicInteger(0)
+    private val frameSampleQueue = ConcurrentLinkedQueue<FrameSample>()
+    private data class FrameSample(val tCap: Double, val tEncIn: Double, val tEncOut: Double, val tSend: Double)
+    private var syncSeq = 0
+    private val syncSamples = mutableListOf<SyncSample>()
+    private data class SyncSample(val rtt: Double, val offset: Double)
+    private var latencySyncJob: kotlinx.coroutines.Job? = null
+    private val latencyVideoSink: VideoSink by lazy { createLatencyVideoSink() }
+
     init {
         scope.launch {
             _isConnected.collect { connected ->
                 if (connected) {
                     startStatsPolling()
+                    startLatencySync()
                 } else {
                     stopStatsPolling()
+                    stopLatencySync()
                 }
             }
+        }
+    }
+
+    private fun startLatencySync() {
+        latencySyncJob?.cancel()
+        syncSeq = 0
+        latencySyncJob = scope.launch {
+            while (_isConnected.value) {
+                syncSeq++
+                val c1 = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000.0
+                val req = """{"sync_req":{"seq":$syncSeq,"c1":$c1}}"""
+                sendDataChannelMessage(req)
+                kotlinx.coroutines.delay(5000)
+            }
+        }
+    }
+
+    private fun stopLatencySync() {
+        latencySyncJob?.cancel()
+        latencySyncJob = null
+        latencyOffsetEst.set(null)
+        syncSamples.clear()
+        frameSampleQueue.clear()
+        lastLatencyMs.set(0)
+    }
+
+    private fun handleSyncRes(seq: Int, c1: Double, s2: Double, s3: Double) {
+        val c4 = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000.0
+        val rtt = (c4 - c1) - (s3 - s2)
+        val offset = ((s2 - c1) + (s3 - c4)) / 2.0
+        synchronized(syncSamples) {
+            syncSamples.add(SyncSample(rtt, offset))
+            if (syncSamples.size > 100) syncSamples.removeAt(0)
+            val sorted = syncSamples.sortedBy { it.rtt }
+            val topCount = (sorted.size * 0.25).toInt().coerceAtLeast(1)
+            val adopted = sorted.take(topCount)
+            val medianOffset = adopted.map { it.offset }.sorted().let {
+                if (it.isEmpty()) 0.0 else it[it.size / 2]
+            }
+            val old = latencyOffsetEst.get()
+            val alpha = 0.1
+            val newEst = if (old == null) medianOffset else alpha * medianOffset + (1 - alpha) * old
+            latencyOffsetEst.set(newEst)
+        }
+    }
+
+    private fun handleFrameSample(frameId: Long, tCap: Double, tEncIn: Double, tEncOut: Double, tSend: Double) {
+        frameSampleQueue.offer(FrameSample(tCap, tEncIn, tEncOut, tSend))
+        while (frameSampleQueue.size > 60) frameSampleQueue.poll()
+    }
+
+    private fun onFrameRendered() {
+        val sample = frameSampleQueue.poll() ?: return
+        val offset = latencyOffsetEst.get() ?: return
+        val tRender = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000.0
+        val tCapClient = sample.tCap - offset
+        val e2eMs = (tRender - tCapClient).roundToInt()
+        lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+    }
+
+    private fun createLatencyVideoSink(): VideoSink = VideoSink { onFrameRendered() }
+
+    private fun handleLatencyMessage(text: String): Boolean {
+        return try {
+            val root = JSONObject(text)
+            when {
+                root.has("sync_res") -> {
+                    val o = root.getJSONObject("sync_res")
+                    handleSyncRes(
+                        o.getInt("seq"),
+                        o.getDouble("c1"),
+                        o.getDouble("s2"),
+                        o.getDouble("s3")
+                    )
+                    true
+                }
+                root.has("frame_sample") -> {
+                    val o = root.getJSONObject("frame_sample")
+                    handleFrameSample(
+                        o.getLong("frame_id"),
+                        o.getDouble("t_cap"),
+                        o.getDouble("t_enc_in"),
+                        o.getDouble("t_enc_out"),
+                        o.getDouble("t_send")
+                    )
+                    true
+                }
+                else -> false
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -158,7 +268,8 @@ class WebRtcManager @Inject constructor(
                             bitrate = bitrate,
                             loss = loss,
                             frameWidth = currentFrameWidth,
-                            frameHeight = currentFrameHeight
+                            frameHeight = currentFrameHeight,
+                            latencyMs = lastLatencyMs.get()
                         )
                     }
                 }
@@ -170,7 +281,7 @@ class WebRtcManager @Inject constructor(
     private fun stopStatsPolling() {
         statsJob?.cancel()
         statsJob = null
-        _rtcStats.value = WebRtcStats()
+        _rtcStats.value = WebRtcStats(latencyMs = lastLatencyMs.get())
     }
 
     /**
@@ -306,6 +417,7 @@ class WebRtcManager @Inject constructor(
                 if (track is VideoTrack) {
                     Log.d(TAG, "onTrack からリモート映像トラックを取得: ${track.id()}")
                     track.setEnabled(true)
+                    track.addSink(latencyVideoSink)
                     _remoteVideoTrack.value = track
                 } else if (track is AudioTrack) {
                     Log.d(TAG, "onTrack からリモート音声トラックを取得: ${track.id()}")
@@ -365,7 +477,12 @@ class WebRtcManager @Inject constructor(
                     val remaining = buffer.data.remaining()
                     val data = ByteArray(remaining)
                     buffer.data.get(data)
-                    
+
+                    if (!buffer.binary) {
+                        val text = String(data)
+                        if (handleLatencyMessage(text)) return
+                    }
+
                     val msg = if (buffer.binary) {
                         Log.d(TAG, "DataChannel バイナリメッセージ受信: $remaining bytes")
                         DataChannelMessage.Binary(data)
@@ -504,6 +621,10 @@ class WebRtcManager @Inject constructor(
     }
 
     override fun close() {
+        stopLatencySync()
+        try {
+            _remoteVideoTrack.value?.removeSink(latencyVideoSink)
+        } catch (_: Exception) {}
         dataChannel?.dispose()
         dataChannel = null
 
@@ -533,5 +654,6 @@ data class WebRtcStats(
     val bitrate: Int = 0,
     val loss: Int = 0,
     val frameWidth: Int = 0,
-    val frameHeight: Int = 0
+    val frameHeight: Int = 0,
+    val latencyMs: Int = 0
 )

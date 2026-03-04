@@ -130,6 +130,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             windows_timespan,
             id: frame_id,
             texture_handle,
+            t_cap_mono_ms: Some(core_types::latency_monotonic_ms()),
         };
 
         // フレーム送信を span で計測

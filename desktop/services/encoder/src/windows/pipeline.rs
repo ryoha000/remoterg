@@ -24,6 +24,8 @@ struct InputFrameMeta {
     width: u32,
     height: u32,
     frame_id: u64,
+    t_cap_ms: Option<f64>,
+    t_enc_in_ms: Option<f64>,
 }
 
 /// Media Foundationエンコードワーカーを起動
@@ -287,6 +289,8 @@ pub fn start_mf_encode_workers(
                             width: encode_width,
                             height: encode_height,
                             frame_id: job.frame_id,
+                            t_cap_ms: job.t_cap_mono_ms,
+                            t_enc_in_ms: job.t_enc_in_mono_ms,
                         });
 
                         // DXGI サーフェスバッファを作成
@@ -458,6 +462,9 @@ pub fn start_mf_encode_workers(
                                                     width: meta.width,
                                                     height: meta.height,
                                                     frame_id: meta.frame_id,
+                                                    t_cap_ms: meta.t_cap_ms,
+                                                    t_enc_in_ms: meta.t_enc_in_ms,
+                                                    t_enc_out_ms: Some(core_types::latency_monotonic_ms()),
                                                 })
                                                 .is_err()
                                             {

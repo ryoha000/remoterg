@@ -973,6 +973,10 @@ private fun DebugPanel(
             Text(text = "Loss", style = monoStyle, modifier = Modifier.width(72.dp))
             Text(text = "${rtcStats.loss}%", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
         }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Latency", style = monoStyle, modifier = Modifier.width(72.dp))
+            Text(text = "${rtcStats.latencyMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
     }
 }
 
@@ -1025,6 +1029,7 @@ private fun ConnectionDetailsDialog(
                 "Codec" to selectedCodec,
                 "Device" to deviceScreenSize,
                 "Stream" to "${rtcStats.frameWidth}x${rtcStats.frameHeight}",
+                "E2E Latency" to "${rtcStats.latencyMs} ms",
                 "Session" to sessionId
             )
 

@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::pin;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -71,6 +73,14 @@ struct Args {
     /// Path to the character identifier models directory
     #[arg(long, env = "REMOTERG_CHARACTER_IDENTIFIER_MODELS_DIR", default_value = "models")]
     character_identifier_models_dir: String,
+
+    /// Enable latency report generation (JSON + trace analysis)
+    #[arg(long)]
+    latency_report: bool,
+
+    /// Output directory for latency reports (default: current directory)
+    #[arg(long, env = "REMOTERG_LATENCY_REPORT_DIR")]
+    latency_report_dir: Option<PathBuf>,
 }
 
 enum CaptureServiceEnum {
@@ -109,7 +119,7 @@ async fn main() -> Result<()> {
     let filter = EnvFilter::new(&args.log_level);
 
     // tracing-chrome layer setup (output to trace-timestamp.json)
-    let (chrome_layer, _guard) = tracing_chrome::ChromeLayerBuilder::new()
+    let (chrome_layer, chrome_guard) = tracing_chrome::ChromeLayerBuilder::new()
         .include_args(true)
         .build();
 
@@ -122,6 +132,8 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let app_start = Instant::now();
+    core_types::set_latency_app_start(app_start);
     info!("Starting RemoteRG Host Daemon");
     info!(
         "Cloudflare URL: {}, Session ID: {}",
@@ -223,18 +235,22 @@ async fn main() -> Result<()> {
             audio_capture_cmd_rx,
         ))
     };
-    // VideoStreamService を作成
-    let video_stream_service =
-        VideoStreamService::new(frame_rx, encoder_factories, video_stream_msg_rx);
-
-    // WebRTCサービスの起動
-    // Outgoing DataChannelメッセージ用チャネル (InputService -> WebRtcService)
+    // WebRTC Outgoing DataChannelメッセージ用チャネル (InputService + VideoStreamService -> WebRtcService)
     let (outgoing_dc_tx, outgoing_dc_rx) = mpsc::channel(100);
+
+    // VideoStreamService を作成 (FrameSample送信用にoutgoing_dc_txのクローンを渡す)
+    let video_stream_service = VideoStreamService::new(
+        frame_rx,
+        encoder_factories,
+        video_stream_msg_rx,
+        Some(outgoing_dc_tx.clone()),
+    );
 
     let (webrtc_service, webrtc_msg_tx) = WebRtcService::new(
         signaling_response_tx,
         data_channel_tx,
         Some(outgoing_dc_rx), // Pass outgoing_dc_rx
+        app_start,
         Some(video_track_tx),
         Some(video_stream_msg_tx.clone()), // Use clone of video_stream_msg_tx
         Some(audio_track_tx),
@@ -284,7 +300,7 @@ async fn main() -> Result<()> {
     let input_service = InputService::new(
         data_channel_rx,
         capture_cmd_tx_for_input,
-        outgoing_dc_tx, // Pass outgoing_dc_tx
+        outgoing_dc_tx, // InputService用
         tagger_service,
         tagger_cmd_tx,
         std::path::PathBuf::from(args.screenshots_dir),
@@ -405,5 +421,91 @@ async fn main() -> Result<()> {
     }
 
     info!("Host daemon stopped");
+
+    // Latency report generation (trace analysis)
+    if args.latency_report {
+        let report_dir = args
+            .latency_report_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+        drop(chrome_guard);
+        if let Err(e) = run_latency_report(&report_dir).await {
+            tracing::error!("Latency report generation failed: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_latency_report(report_dir: &std::path::Path) -> Result<()> {
+    use std::process::Command;
+
+    let current_dir = std::env::current_dir().context("Failed to get current dir")?;
+    let mut trace_files: Vec<_> = std::fs::read_dir(&current_dir)
+        .context("Failed to read current dir")?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.starts_with("trace-") && s.ends_with(".json"))
+                == Some(true)
+        })
+        .collect();
+    trace_files.sort_by_key(|e| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+
+    let trace_path = trace_files
+        .last()
+        .map(|e| e.path())
+        .context("No trace-*.json file found")?;
+
+    info!("Running latency analysis on {}", trace_path.display());
+
+    let script_candidates = [
+        current_dir.join("scripts/analyze_trace.py"),
+        current_dir.join("../scripts/analyze_trace.py"),
+        current_dir.join("../../scripts/analyze_trace.py"),
+    ];
+    let script_path = script_candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .context("analyze_trace.py not found (tried scripts/, ../scripts/, ../../scripts/)")?;
+
+    let output = match Command::new("python3")
+        .arg(&script_path)
+        .arg(&trace_path)
+        .arg("--format")
+        .arg("json")
+        .output()
+    {
+        Ok(out) => out,
+        Err(_) => Command::new("python")
+            .arg(&script_path)
+            .arg(&trace_path)
+            .arg("--format")
+            .arg("json")
+            .output()
+            .context("Failed to run analyze_trace.py (requires python3 or python with pandas)")?,
+    };
+
+    if !output.status.success() {
+        tracing::warn!(
+            "analyze_trace.py stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let _ = tokio::fs::create_dir_all(report_dir).await;
+    let report_path = report_dir.join("latency-report.json");
+    if let Ok(mut f) = tokio::fs::File::create(&report_path).await {
+        let _ = tokio::io::AsyncWriteExt::write_all(&mut f, &output.stdout).await;
+        info!("Latency report written to {}", report_path.display());
+    }
+
     Ok(())
 }

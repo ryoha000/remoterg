@@ -17,6 +17,10 @@ tasks:
     dir: "desktop/services"
     cmds:
       - cargo run --bin hostd -- --mock
+  hostd:latency-report:
+    dir: "desktop/services"
+    cmds:
+      - cargo run --bin hostd -- --latency-report --latency-report-dir .
   web:
     dir: "client/apps/web"
     cmds:

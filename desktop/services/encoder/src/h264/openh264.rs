@@ -191,6 +191,9 @@ fn start_encode_worker() -> (
                             width: encode_width,
                             height: encode_height,
                             frame_id: 0,
+                            t_cap_ms: None,
+                            t_enc_in_ms: None,
+                            t_enc_out_ms: None,
                         })
                         .is_err()
                     {

@@ -45,6 +45,11 @@ pub struct SetOfferResult {
     pub codec: VideoCodec,
 }
 
+/// 単調増加時刻をミリ秒で返す (hostd起動基準)
+fn monotonic_ms_since(app_start: &std::time::Instant) -> f64 {
+    app_start.elapsed().as_secs_f64() * 1000.0
+}
+
 /// SetOfferメッセージを処理
 pub async fn handle_set_offer(
     sdp: String,
@@ -55,6 +60,7 @@ pub async fn handle_set_offer(
     video_stream_msg_tx: mpsc::Sender<VideoStreamMessage>,
     webrtc_msg_tx: mpsc::Sender<WebRtcMessage>,
     active_data_channel: Arc<std::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
+    app_start: std::time::Instant,
 ) -> Result<SetOfferResult> {
     debug!("SetOffer received, generating answer");
 
@@ -239,6 +245,20 @@ pub async fn handle_set_offer(
                                         DataChannelMessage::Pong { timestamp } => {
                                             debug!("Received keepalive pong from client (timestamp: {})", timestamp);
                                             // Pongメッセージは処理不要（受信だけで十分）
+                                        }
+                                        DataChannelMessage::SyncReq { seq, c1 } => {
+                                            let s2 = monotonic_ms_since(&app_start);
+                                            let sync_res = DataChannelMessage::SyncRes {
+                                                seq: *seq,
+                                                c1: *c1,
+                                                s2,
+                                                s3: monotonic_ms_since(&app_start),
+                                            };
+                                            if let Ok(json) = serde_json::to_string(&sync_res) {
+                                                if let Err(e) = dc_for_pong.send_text(json).await {
+                                                    warn!("Failed to send sync_res: {}", e);
+                                                }
+                                            }
                                         }
                                         _ => {
                                             // その他のメッセージは従来通りinputサービスに転送

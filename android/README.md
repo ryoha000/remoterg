@@ -10,7 +10,7 @@ Windows 上のビジュアルノベルのゲーム画面を WebRTC でストリ�
 | DI | Hilt |
 | ローカル DB | Room |
 | HTTP / WebSocket | Ktor Client (OkHttp) |
-| WebRTC | libwebrtc (`io.github.nichenqin:webrtc-android`) |
+| WebRTC | libwebrtc (`io.github.webrtc-sdk:android`) |
 | 画像読み込み | Coil |
 | シリアライズ | kotlinx.serialization |
 | テスト | JUnit 4 / MockK / Turbine / kotlinx-coroutines-test |

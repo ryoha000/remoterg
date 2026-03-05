@@ -52,9 +52,9 @@ DataChannel の `frame_sample` で送信していた `ntp_timestamp: u64`（NTP 
 | 方法 | 状態 | 備考 |
 |------|------|------|
 | 方法A (captureTimeNs) | 不動作 | WrappedNativeVideoDecoder はラップ不可。ネイティブデコーダでは captureTimeNs を傍受できない |
-| 方法B (capture_unix_ms via DataChannel) | フォールバック | フレーム-メッセージの 1:1 対応は不安定。負値レイテンシが観測されており、主計測には使わない |
+| 方法B (capture_unix_ms via DataChannel) | **無効化（2026-03-05）** | フレーム-メッセージの 1:1 対応が不安定なため、表示値更新には使用しない方針へ変更 |
 | 方法C (ntp_time_ms via LatencyNativeSink) | **不成立** | SDP交渉と送信側 ext 付与は成功するが、Android 受信側で `VideoFrame.ntp_time_ms` が常に未設定（`-1`）で目的未達 |
-| 方法D (`packet_infos.absolute_capture_time` via NativeSink) | **実装済み（2026-03-05）** | C++ `VideoFrame.packet_infos()` から `absolute_capture_time` を直接読み取り、`local_capture_clock_offset` でローカル時刻基準へ変換する実装に切替済み。`assembleDebug` ビルド成功、実機ログ確認は未実施 |
+| 方法D (`packet_infos.absolute_capture_time` via NativeSink) | **実装・調整中（2026-03-05）** | C++ `VideoFrame.packet_infos()` 直接読取は動作確認済み。`local_capture_clock_offset` 欠落時の補正・C経路のみの更新方針へ調整継続中 |
 
 ## 調査: RTP 拡張ヘッダーを Java から直接読めないか
 
@@ -301,3 +301,45 @@ Latency[B]: e2e=-72ms captureUnixMs=1772708904306 tRender=1772708904234
 - 未確認事項:
   - 実機 `logcat` で `ACT frame=...` / `Latency[C-native]` の継続更新確認
   - `Latency[C-missing]` が初期以外で増え続けないことの確認
+
+## 追加更新（2026-03-05 夜）
+
+### 依存ライブラリ切替
+
+- Android WebRTC 依存を `io.getstream:stream-webrtc-android` から `io.github.webrtc-sdk:android:125.6422.07` へ切替
+- 選定経緯は `WEBRTC_LIBRARY_SELECTION.md` に記録
+
+### Android 側（受信・表示）の変更
+
+- `WebRtcManager` で `timestampUs` を使って native callback と render frame を突合し、**描画時刻基準**で `Latency[C]` を算出
+- `Latency[B]`（DataChannel `frame_sample`）での表示値更新を停止
+  - 方針: 表示値は `C`（必要時のみ `A`）のみで更新
+- `C-native-future` 対策として、`captureUnixMs` の時計先行分を推定して補正
+  - `rawMsgLagMs` から `aheadEstimateMs` を推定し、`correctedCaptureUnixMs` を利用
+  - 補正は上方向に速く追従、下方向に緩やか減衰
+- `C-miss` 時は短時間のみ native callback 側の直近補正値を暫定採用
+  - `B` 経路へのフォールバックは行わない
+
+### C++ JNI 側（`latency_sink.cpp`）の変更
+
+- `local_capture_clock_offset` 欠落時の扱いを見直し
+  - 欠落フレームを全面スキップする実装は廃止
+  - `absolute_capture_timestamp` 単体でも計測継続
+- 取得できた `local_capture_clock_offset` はキャッシュし、後続フレームで再利用可能にした（欠落時の継続性向上）
+- デバッグログを拡張
+  - `offset_applied`, `offset_cached`, `reuse_count`, `no_local_offset` を可視化
+
+### hostd 側（送信）変更
+
+- `video-stream` の abs-capture-time 拡張を 8byte → 16byte 対応
+  - `absolute_capture_timestamp` に加え `estimated_capture_clock_offset` を付与
+  - 現実装では sender/capturer 同一前提で `estimated_capture_clock_offset = 0` を設定
+- ログを拡張
+  - `ACT[send] ... est_offset_q32x32=... ext_bytes=16`
+
+### 現時点の観測まとめ
+
+- `ACT frame success` は継続して増加し、`packet_infos.absolute_capture_time` 経路は稼働
+- 一部環境で `offset_applied=0` が継続（`local_capture_clock_offset` 未設定）
+- その結果、`C-native-future` が散発しうるため、Android 側で時計先行補正を実施中
+- 0ms 固定化は `C` マッチ失敗時の更新停止が主因で、突合条件と更新ロジックを調整中

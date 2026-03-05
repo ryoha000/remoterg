@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 
 /**
  * WebRTC 接続を管理するマネージャー
@@ -118,12 +119,83 @@ class WebRtcManager @Inject constructor(
         val receivedUnixMs: Long,
         val receivedElapsedMs: Long
     )
+    private data class NativeCaptureSample(
+        val timestampUs: Long,
+        val captureUnixMs: Long,
+        val receivedElapsedMs: Long
+    )
+    private class NativeCaptureTimeStore {
+        data class MatchedCapture(
+            val captureUnixMs: Long,
+            val timestampDeltaUs: Long,
+            val queueSizeAfterMatch: Int
+        )
+
+        private val samples = ArrayDeque<NativeCaptureSample>()
+
+        @Synchronized
+        fun offer(sample: NativeCaptureSample) {
+            samples.addLast(sample)
+            trimLocked(sample.receivedElapsedMs)
+        }
+
+        @Synchronized
+        fun pollByTimestamp(timestampUs: Long, toleranceUs: Long = 120_000L): MatchedCapture? {
+            val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+            trimLocked(nowElapsedMs)
+
+            var bestIndex = -1
+            var bestDeltaUs = Long.MAX_VALUE
+            var index = 0
+            for (sample in samples) {
+                val deltaUs = abs(sample.timestampUs - timestampUs)
+                if (deltaUs < bestDeltaUs) {
+                    bestDeltaUs = deltaUs
+                    bestIndex = index
+                }
+                index++
+            }
+
+            if (bestIndex >= 0 && bestDeltaUs <= toleranceUs) {
+                repeat(bestIndex) { samples.removeFirst() }
+                val matched = samples.removeFirst()
+                return MatchedCapture(
+                    captureUnixMs = matched.captureUnixMs,
+                    timestampDeltaUs = bestDeltaUs,
+                    queueSizeAfterMatch = samples.size
+                )
+            }
+
+            while (samples.isNotEmpty() && samples.first().timestampUs < timestampUs - 400_000L) {
+                samples.removeFirst()
+            }
+            return null
+        }
+
+        @Synchronized
+        fun count(): Int = samples.size
+
+        @Synchronized
+        fun clear() {
+            samples.clear()
+        }
+
+        private fun trimLocked(nowElapsedMs: Long) {
+            while (samples.size > 240) {
+                samples.removeFirst()
+            }
+            while (samples.isNotEmpty() && nowElapsedMs - samples.first().receivedElapsedMs > 4_000L) {
+                samples.removeFirst()
+            }
+        }
+    }
     private var syncSeq = 0
     private val syncSamples = mutableListOf<SyncSample>()
     private data class SyncSample(val rtt: Double, val offset: Double)
     private var latencySyncJob: kotlinx.coroutines.Job? = null
     private val latencyVideoSink: VideoSink by lazy { createLatencyVideoSink() }
     private val captureTimeStore = CaptureTimeStore()
+    private val nativeCaptureTimeStore = NativeCaptureTimeStore()
     private val latencyNativeSink = LatencyNativeSink()
 
     // WebRTC の VideoFrame.timestampNs (monotonic) と tCap の紐付け用オフセット（方法B フォールバック用）
@@ -131,6 +203,10 @@ class WebRtcManager @Inject constructor(
     private val frameSampleLogCount = AtomicInteger(0)
     private val nativeLogCount = AtomicInteger(0)
     private val nativeMissingLogCount = AtomicInteger(0)
+    private val nativeClockAheadEstimateMs = AtomicLong(0L)
+    private val nativeClockAheadLastUpdateElapsedMs = AtomicLong(0L)
+    private val lastNativeCallbackE2eMs = AtomicInteger(0)
+    private val lastNativeCallbackUpdateElapsedMs = AtomicLong(0L)
 
     init {
         scope.launch {
@@ -166,10 +242,15 @@ class WebRtcManager @Inject constructor(
         latencyNativeSink.detach()
         nativeLatencyLastUpdateElapsedMs.set(0L)
         lastNativeCaptureUnixMs.set(0L)
+        nativeClockAheadEstimateMs.set(0L)
+        nativeClockAheadLastUpdateElapsedMs.set(0L)
+        lastNativeCallbackE2eMs.set(0)
+        lastNativeCallbackUpdateElapsedMs.set(0L)
         latencyOffsetEst.set(null)
         syncSamples.clear()
         frameSampleQueue.clear()
         captureTimeStore.clear()
+        nativeCaptureTimeStore.clear()
         lastLatencyMs.set(0)
         timestampToTCapOffsetMs = null
     }
@@ -214,7 +295,10 @@ class WebRtcManager @Inject constructor(
 
         val logCount = frameSampleLogCount.incrementAndGet()
         val msgLagMs = if (captureUnixMs > 0) nowUnixMs - captureUnixMs else Long.MIN_VALUE
-        if (captureUnixMs > nowUnixMs + 5) {
+        val nativeUpdatedAt = nativeLatencyLastUpdateElapsedMs.get()
+        val nativeActive =
+            nativeUpdatedAt > 0L && (android.os.SystemClock.elapsedRealtime() - nativeUpdatedAt) in 0..1500L
+        if (captureUnixMs > nowUnixMs + 5 && !nativeActive) {
             Log.w(
                 TAG,
                 "Latency[frame_sample-future]: seq=$seq frameId=$frameId captureUnixMs=$captureUnixMs nowUnixMs=$nowUnixMs msgLagMs=$msgLagMs queue=${frameSampleQueue.size}"
@@ -231,6 +315,7 @@ class WebRtcManager @Inject constructor(
 
     private fun onFrameRendered(frame: org.webrtc.VideoFrame) {
         val tRender = System.currentTimeMillis()
+        val frameTimestampUs = frame.timestampNs / 1_000L
         renderLogCount++
         val shouldLog = renderLogCount % 90 == 1
 
@@ -248,14 +333,41 @@ class WebRtcManager @Inject constructor(
         if (nativeUpdatedAt > 0L) {
             val ageMs = android.os.SystemClock.elapsedRealtime() - nativeUpdatedAt
             if (ageMs in 0..1500L) {
+                val matched = nativeCaptureTimeStore.pollByTimestamp(frameTimestampUs)
+                if (matched != null) {
+                    val e2eMs = (tRender - matched.captureUnixMs).toInt()
+                    if (e2eMs < 0) {
+                        Log.w(
+                            TAG,
+                            "Latency[C-negative]: e2e=${e2eMs}ms frameTsUs=$frameTimestampUs captureUnixMs=${matched.captureUnixMs} tRender=$tRender matchDeltaUs=${matched.timestampDeltaUs} nativeQueueAfter=${matched.queueSizeAfterMatch} queue=${frameSampleQueue.size}"
+                        )
+                    } else if (shouldLog) {
+                        lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+                        Log.d(
+                            TAG,
+                            "Latency[C]: e2e=${e2eMs}ms frameTsUs=$frameTimestampUs captureUnixMs=${matched.captureUnixMs} tRender=$tRender matchDeltaUs=${matched.timestampDeltaUs} nativeQueueAfter=${matched.queueSizeAfterMatch} queue=${frameSampleQueue.size}"
+                        )
+                    } else {
+                        lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+                    }
+                    return
+                }
                 if (shouldLog) {
-                    val lastCaptureUnixMs = lastNativeCaptureUnixMs.get()
-                    val nativeE2eMs = if (lastCaptureUnixMs > 0) tRender - lastCaptureUnixMs else Long.MIN_VALUE
-                    Log.d(
+                    Log.w(
                         TAG,
-                        "Latency[C]: native packet_infos ACT active age=${ageMs}ms lastCaptureUnixMs=$lastCaptureUnixMs e2eNow=${nativeE2eMs}ms queue=${frameSampleQueue.size}"
+                        "Latency[C-miss]: native active but no ts match frameTsUs=$frameTimestampUs nativeQueue=${nativeCaptureTimeStore.count()} age=${ageMs}ms fallbackQueue=${frameSampleQueue.size}"
                     )
                 }
+                val callbackUpdatedAt = lastNativeCallbackUpdateElapsedMs.get()
+                if (callbackUpdatedAt > 0L &&
+                    android.os.SystemClock.elapsedRealtime() - callbackUpdatedAt <= 1000L
+                ) {
+                    val provisionalMs = lastNativeCallbackE2eMs.get()
+                    if (provisionalMs > 0) {
+                        lastLatencyMs.set(provisionalMs.coerceIn(0, 9999))
+                    }
+                }
+                // Native 経路が生きている間は、不安定な A/B フォールバックで値を上書きしない。
                 return
             }
         }
@@ -266,7 +378,9 @@ class WebRtcManager @Inject constructor(
 
         if (captureUnixMsFromDecoder != null) {
             val e2eMs = (tRender - captureUnixMsFromDecoder).toInt()
-            lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+            if (e2eMs >= 0) {
+                lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+            }
             frameSampleQueue.poll()
             if (shouldLog) {
                 Log.d(
@@ -277,40 +391,39 @@ class WebRtcManager @Inject constructor(
             return
         }
 
-        // 方法B: DataChannel frame_sample の capture_unix_ms
-        val sample = frameSampleQueue.poll()
-        if (sample == null) {
-            if (shouldLog) {
-                Log.d(TAG, "Latency[skip]: captureTimeNs=$captureTimeNsFromDecoder (store empty), frameSampleQueue also empty")
-            }
-            return
-        }
-        if (sample.captureUnixMs > 0) {
-            val e2eMs = (tRender - sample.captureUnixMs).toInt()
-            lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
-            val sampleAgeMs = tRender - sample.receivedUnixMs
-            val msgLagMs = sample.receivedUnixMs - sample.captureUnixMs
-            val nativeAgeMs = if (nativeUpdatedAt > 0L) android.os.SystemClock.elapsedRealtime() - nativeUpdatedAt else -1L
-            if (e2eMs < 0) {
-                Log.w(
-                    TAG,
-                    "Latency[B-negative]: e2e=${e2eMs}ms seq=${sample.seq} frameId=${sample.frameId} captureUnixMs=${sample.captureUnixMs} sampleRecvUnixMs=${sample.receivedUnixMs} sampleAgeMs=${sampleAgeMs}ms msgLagMs=${msgLagMs}ms queueAfterPoll=${frameSampleQueue.size} nativeAgeMs=${nativeAgeMs}ms lastNativeCaptureUnixMs=${lastNativeCaptureUnixMs.get()} tRender=$tRender"
-                )
-            } else if (shouldLog) {
-                Log.d(
-                    TAG,
-                    "Latency[B]: e2e=${e2eMs}ms seq=${sample.seq} frameId=${sample.frameId} captureUnixMs=${sample.captureUnixMs} sampleRecvUnixMs=${sample.receivedUnixMs} sampleAgeMs=${sampleAgeMs}ms msgLagMs=${msgLagMs}ms queueAfterPoll=${frameSampleQueue.size} nativeAgeMs=${nativeAgeMs}ms tRender=$tRender"
-                )
-            }
-        } else if (shouldLog) {
-            Log.d(
-                TAG,
-                "Latency[B-invalid]: seq=${sample.seq} frameId=${sample.frameId} captureUnixMs=${sample.captureUnixMs} sampleRecvUnixMs=${sample.receivedUnixMs} queueAfterPoll=${frameSampleQueue.size} tRender=$tRender"
-            )
+        // 方法B（DataChannel frame_sample）にはフォールバックしない。
+        if (shouldLog) {
+            Log.d(TAG, "Latency[skip-no-b]: C/A unavailable, keeping last latency value queue=${frameSampleQueue.size}")
         }
     }
 
     private fun createLatencyVideoSink(): VideoSink = VideoSink { frame -> onFrameRendered(frame) }
+
+    private fun updateNativeClockAheadEstimate(rawMsgLagMs: Long, nowElapsedMs: Long): Long {
+        val current = nativeClockAheadEstimateMs.get()
+        val lastUpdateMs = nativeClockAheadLastUpdateElapsedMs.get()
+        var next = current
+        if (rawMsgLagMs < -5L) {
+            val observedAheadMs = (-rawMsgLagMs).coerceIn(0L, 500L)
+            next = if (current <= 0L || observedAheadMs >= current) {
+                // future 側への観測値には素早く追従
+                current + ((observedAheadMs - current) * 3L) / 4L
+            } else {
+                // 小さい観測値にはゆっくり寄せる
+                current - ((current - observedAheadMs) / 20L)
+            }
+        } else if (current > 0L && lastUpdateMs > 0L && nowElapsedMs > lastUpdateMs) {
+            // 観測が future でない間は時間ベースでゆっくり減衰 (2ms/s)
+            val elapsedMs = nowElapsedMs - lastUpdateMs
+            val decay = (elapsedMs / 1000L) * 2L
+            if (decay > 0L) {
+                next = (current - decay).coerceAtLeast(0L)
+            }
+        }
+        nativeClockAheadEstimateMs.set(next)
+        nativeClockAheadLastUpdateElapsedMs.set(nowElapsedMs)
+        return next
+    }
 
     private fun handleLatencyMessage(text: String): Boolean {
         return try {
@@ -549,17 +662,36 @@ class WebRtcManager @Inject constructor(
                     track.setEnabled(true)
                     track.addSink(latencyVideoSink)
                     Log.d(TAG, "Latency[C-attach]: attaching LatencyNativeSink to track id=${track.id()}")
-                    latencyNativeSink.attachToTrack(track, LatencyNativeSink.Callback { captureUnixMs, _ ->
-                        val e2eMs = (System.currentTimeMillis() - captureUnixMs).toInt()
-                        lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
-                        nativeLatencyLastUpdateElapsedMs.set(android.os.SystemClock.elapsedRealtime())
-                        lastNativeCaptureUnixMs.set(captureUnixMs)
+                    latencyNativeSink.attachToTrack(track, LatencyNativeSink.Callback { captureUnixMs, timestampUs ->
+                        val nowUnixMs = System.currentTimeMillis()
+                        val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+                        val rawMsgLagMs = nowUnixMs - captureUnixMs
+                        val aheadEstimateMs = updateNativeClockAheadEstimate(rawMsgLagMs, nowElapsedMs)
+                        val correctedCaptureUnixMs = captureUnixMs - aheadEstimateMs
+                        val correctedMsgLagMs = nowUnixMs - correctedCaptureUnixMs
+                        if (correctedMsgLagMs >= 0L) {
+                            lastNativeCallbackE2eMs.set(correctedMsgLagMs.toInt().coerceIn(0, 9999))
+                            lastNativeCallbackUpdateElapsedMs.set(nowElapsedMs)
+                        }
+                        nativeLatencyLastUpdateElapsedMs.set(nowElapsedMs)
+                        lastNativeCaptureUnixMs.set(correctedCaptureUnixMs)
+                        nativeCaptureTimeStore.offer(
+                            NativeCaptureSample(
+                                timestampUs = timestampUs,
+                                captureUnixMs = correctedCaptureUnixMs,
+                                receivedElapsedMs = nowElapsedMs
+                            )
+                        )
                         val count = nativeLogCount.incrementAndGet()
-                        if (e2eMs < 0 || count % 120 == 1) {
-                            val nowUnixMs = System.currentTimeMillis()
+                        if (correctedMsgLagMs < -20) {
+                            Log.w(
+                                TAG,
+                                "Latency[C-native-future]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativeQueue=${nativeCaptureTimeStore.count()} queue=${frameSampleQueue.size}"
+                            )
+                        } else if (count % 120 == 1) {
                             Log.d(
                                 TAG,
-                                "Latency[C-native]: packet_infos e2e=${e2eMs}ms captureUnixMs=$captureUnixMs nowUnixMs=$nowUnixMs queue=${frameSampleQueue.size}"
+                                "Latency[C-native]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativeQueue=${nativeCaptureTimeStore.count()} queue=${frameSampleQueue.size}"
                             )
                         }
                     })

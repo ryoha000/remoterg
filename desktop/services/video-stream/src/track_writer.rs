@@ -3,30 +3,47 @@ use bytes::Bytes;
 use core_types::EncodeResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{debug, info, error, span, warn, Level};
+use tracing::{error, info, span, warn, Level};
 use webrtc_rs::media::Sample;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
-/// Absolute Capture Time 拡張ヘッダー (8バイト: 64-bit NTP timestamp, UQ32.32)
+/// Absolute Capture Time 拡張ヘッダー
+/// - 8バイト: absolute_capture_timestamp (UQ32.32)
+/// - 16バイト: + estimated_capture_clock_offset (Q32.32, optional)
 struct AbsCaptureTimeExtension {
     ntp_timestamp: u64,
+    estimated_capture_clock_offset_q32x32: Option<i64>,
 }
 
 static ACT_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl webrtc_rs::util::MarshalSize for AbsCaptureTimeExtension {
     fn marshal_size(&self) -> usize {
-        8
+        if self.estimated_capture_clock_offset_q32x32.is_some() {
+            16
+        } else {
+            8
+        }
     }
 }
 
 impl webrtc_rs::util::Marshal for AbsCaptureTimeExtension {
     fn marshal_to(&self, buf: &mut [u8]) -> webrtc_rs::util::Result<usize> {
-        if buf.len() < 8 {
+        let size = if self.estimated_capture_clock_offset_q32x32.is_some() {
+            16
+        } else {
+            8
+        };
+        if buf.len() < size {
             return Err(webrtc_rs::util::Error::ErrBufferShort);
         }
         buf[..8].copy_from_slice(&self.ntp_timestamp.to_be_bytes());
-        Ok(8)
+        if let Some(offset_q32x32) = self.estimated_capture_clock_offset_q32x32 {
+            buf[8..16].copy_from_slice(&offset_q32x32.to_be_bytes());
+            Ok(16)
+        } else {
+            Ok(8)
+        }
     }
 }
 
@@ -46,16 +63,21 @@ pub async fn write_encoded_sample(
             uri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time".into(),
             extension: Box::new(AbsCaptureTimeExtension {
                 ntp_timestamp: ntp_ts,
+                // hostd では sender と capturer が同一時計のため 0 を明示する。
+                // これにより受信側が local_capture_clock_offset を算出できる。
+                estimated_capture_clock_offset_q32x32: Some(0),
             }),
         };
         if sample_index <= 5 || sample_index % 120 == 1 {
             info!(
-                "ACT[send]: sample={} frame_id={} t_cap_ms={:.3} ntp_timestamp={} ext_count={}",
+                "ACT[send]: sample={} frame_id={} t_cap_ms={:.3} ntp_timestamp={} est_offset_q32x32={} ext_count={} ext_bytes={}",
                 sample_index,
                 result.frame_id,
                 t_cap_ms,
                 ntp_ts,
-                1
+                0i64,
+                1,
+                16
             );
         }
         (vec![ext], ntp_ts)

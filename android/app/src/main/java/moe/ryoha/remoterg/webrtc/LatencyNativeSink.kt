@@ -11,7 +11,7 @@ import org.webrtc.VideoTrack
 class LatencyNativeSink {
 
     fun interface Callback {
-        fun onCaptureTime(captureUnixMs: Long, timestampUs: Long)
+        fun onCaptureTime(status: Int, captureUnixMs: Long, timestampUs: Long)
     }
 
     private var nativeSinkPtr: Long = 0

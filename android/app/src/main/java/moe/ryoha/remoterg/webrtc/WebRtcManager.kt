@@ -38,7 +38,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.abs
 
 /**
  * WebRTC 接続を管理するマネージャー
@@ -124,68 +123,96 @@ class WebRtcManager @Inject constructor(
         val captureUnixMs: Long,
         val receivedElapsedMs: Long
     )
-    private class NativeCaptureTimeStore {
+    private data class RenderFrameSample(
+        val timestampUs: Long,
+        val renderUnixMs: Long,
+        val receivedElapsedMs: Long
+    )
+    private class NativeRenderMatchStore(
+        private val ttlMs: Long = 1_000L,
+        private val logTag: String = "WebRtcManager"
+    ) {
         data class MatchedCapture(
+            val timestampUs: Long,
             val captureUnixMs: Long,
-            val timestampDeltaUs: Long,
-            val queueSizeAfterMatch: Int
+            val renderUnixMs: Long,
+            val nativePendingAfterMatch: Int,
+            val renderPendingAfterMatch: Int
         )
 
-        private val samples = ArrayDeque<NativeCaptureSample>()
+        private val nativeByTimestamp = HashMap<Long, NativeCaptureSample>()
+        private val renderByTimestamp = HashMap<Long, RenderFrameSample>()
 
         @Synchronized
-        fun offer(sample: NativeCaptureSample) {
-            samples.addLast(sample)
+        fun offerNative(sample: NativeCaptureSample): MatchedCapture? {
             trimLocked(sample.receivedElapsedMs)
-        }
-
-        @Synchronized
-        fun pollByTimestamp(timestampUs: Long, toleranceUs: Long = 120_000L): MatchedCapture? {
-            val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
-            trimLocked(nowElapsedMs)
-
-            var bestIndex = -1
-            var bestDeltaUs = Long.MAX_VALUE
-            var index = 0
-            for (sample in samples) {
-                val deltaUs = abs(sample.timestampUs - timestampUs)
-                if (deltaUs < bestDeltaUs) {
-                    bestDeltaUs = deltaUs
-                    bestIndex = index
-                }
-                index++
-            }
-
-            if (bestIndex >= 0 && bestDeltaUs <= toleranceUs) {
-                repeat(bestIndex) { samples.removeFirst() }
-                val matched = samples.removeFirst()
+            val pendingRender = renderByTimestamp.remove(sample.timestampUs)
+            if (pendingRender != null) {
                 return MatchedCapture(
-                    captureUnixMs = matched.captureUnixMs,
-                    timestampDeltaUs = bestDeltaUs,
-                    queueSizeAfterMatch = samples.size
+                    timestampUs = sample.timestampUs,
+                    captureUnixMs = sample.captureUnixMs,
+                    renderUnixMs = pendingRender.renderUnixMs,
+                    nativePendingAfterMatch = nativeByTimestamp.size,
+                    renderPendingAfterMatch = renderByTimestamp.size
                 )
             }
-
-            while (samples.isNotEmpty() && samples.first().timestampUs < timestampUs - 400_000L) {
-                samples.removeFirst()
-            }
+            nativeByTimestamp[sample.timestampUs] = sample
             return null
         }
 
         @Synchronized
-        fun count(): Int = samples.size
+        fun offerRender(sample: RenderFrameSample): MatchedCapture? {
+            trimLocked(sample.receivedElapsedMs)
+            val pendingNative = nativeByTimestamp.remove(sample.timestampUs)
+            if (pendingNative != null) {
+                return MatchedCapture(
+                    timestampUs = sample.timestampUs,
+                    captureUnixMs = pendingNative.captureUnixMs,
+                    renderUnixMs = sample.renderUnixMs,
+                    nativePendingAfterMatch = nativeByTimestamp.size,
+                    renderPendingAfterMatch = renderByTimestamp.size
+                )
+            }
+            renderByTimestamp[sample.timestampUs] = sample
+            return null
+        }
+
+        @Synchronized
+        fun nativePendingCount(): Int = nativeByTimestamp.size
+
+        @Synchronized
+        fun renderPendingCount(): Int = renderByTimestamp.size
 
         @Synchronized
         fun clear() {
-            samples.clear()
+            if (nativeByTimestamp.isNotEmpty() || renderByTimestamp.isNotEmpty()) {
+                Log.w(
+                    logTag,
+                    "Latency[C-clear]: drop pending entries native=${nativeByTimestamp.size} render=${renderByTimestamp.size}"
+                )
+            }
+            nativeByTimestamp.clear()
+            renderByTimestamp.clear()
         }
 
         private fun trimLocked(nowElapsedMs: Long) {
-            while (samples.size > 240) {
-                samples.removeFirst()
+            var evictedNative = 0
+            var evictedRender = 0
+            nativeByTimestamp.entries.removeIf {
+                val expired = nowElapsedMs - it.value.receivedElapsedMs > ttlMs
+                if (expired) evictedNative++
+                expired
             }
-            while (samples.isNotEmpty() && nowElapsedMs - samples.first().receivedElapsedMs > 4_000L) {
-                samples.removeFirst()
+            renderByTimestamp.entries.removeIf {
+                val expired = nowElapsedMs - it.value.receivedElapsedMs > ttlMs
+                if (expired) evictedRender++
+                expired
+            }
+            if (evictedNative > 0 || evictedRender > 0) {
+                Log.w(
+                    logTag,
+                    "Latency[C-evict]: evictedNative=$evictedNative evictedRender=$evictedRender nativePending=${nativeByTimestamp.size} renderPending=${renderByTimestamp.size} ttlMs=$ttlMs"
+                )
             }
         }
     }
@@ -195,7 +222,7 @@ class WebRtcManager @Inject constructor(
     private var latencySyncJob: kotlinx.coroutines.Job? = null
     private val latencyVideoSink: VideoSink by lazy { createLatencyVideoSink() }
     private val captureTimeStore = CaptureTimeStore()
-    private val nativeCaptureTimeStore = NativeCaptureTimeStore()
+    private val nativeRenderMatchStore = NativeRenderMatchStore()
     private val latencyNativeSink = LatencyNativeSink()
 
     // WebRTC の VideoFrame.timestampNs (monotonic) と tCap の紐付け用オフセット（方法B フォールバック用）
@@ -207,6 +234,8 @@ class WebRtcManager @Inject constructor(
     private val nativeClockAheadLastUpdateElapsedMs = AtomicLong(0L)
     private val lastNativeCallbackE2eMs = AtomicInteger(0)
     private val lastNativeCallbackUpdateElapsedMs = AtomicLong(0L)
+    private val nativeExtractOkCount = AtomicLong(0L)
+    private val nativeExtractFailCount = AtomicLong(0L)
 
     init {
         scope.launch {
@@ -250,7 +279,9 @@ class WebRtcManager @Inject constructor(
         syncSamples.clear()
         frameSampleQueue.clear()
         captureTimeStore.clear()
-        nativeCaptureTimeStore.clear()
+        nativeRenderMatchStore.clear()
+        nativeExtractOkCount.set(0L)
+        nativeExtractFailCount.set(0L)
         lastLatencyMs.set(0)
         timestampToTCapOffsetMs = null
     }
@@ -316,6 +347,7 @@ class WebRtcManager @Inject constructor(
     private fun onFrameRendered(frame: org.webrtc.VideoFrame) {
         val tRender = System.currentTimeMillis()
         val frameTimestampUs = frame.timestampNs / 1_000L
+        val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
         renderLogCount++
         val shouldLog = renderLogCount % 90 == 1
 
@@ -331,21 +363,27 @@ class WebRtcManager @Inject constructor(
             }
         }
         if (nativeUpdatedAt > 0L) {
-            val ageMs = android.os.SystemClock.elapsedRealtime() - nativeUpdatedAt
+            val ageMs = nowElapsedMs - nativeUpdatedAt
             if (ageMs in 0..1500L) {
-                val matched = nativeCaptureTimeStore.pollByTimestamp(frameTimestampUs)
+                val matched = nativeRenderMatchStore.offerRender(
+                    RenderFrameSample(
+                        timestampUs = frameTimestampUs,
+                        renderUnixMs = tRender,
+                        receivedElapsedMs = nowElapsedMs
+                    )
+                )
                 if (matched != null) {
-                    val e2eMs = (tRender - matched.captureUnixMs).toInt()
+                    val e2eMs = (matched.renderUnixMs - matched.captureUnixMs).toInt()
                     if (e2eMs < 0) {
                         Log.w(
                             TAG,
-                            "Latency[C-negative]: e2e=${e2eMs}ms frameTsUs=$frameTimestampUs captureUnixMs=${matched.captureUnixMs} tRender=$tRender matchDeltaUs=${matched.timestampDeltaUs} nativeQueueAfter=${matched.queueSizeAfterMatch} queue=${frameSampleQueue.size}"
+                            "Latency[C-negative]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} captureUnixMs=${matched.captureUnixMs} tRender=${matched.renderUnixMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} queue=${frameSampleQueue.size}"
                         )
                     } else if (shouldLog) {
                         lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
                         Log.d(
                             TAG,
-                            "Latency[C]: e2e=${e2eMs}ms frameTsUs=$frameTimestampUs captureUnixMs=${matched.captureUnixMs} tRender=$tRender matchDeltaUs=${matched.timestampDeltaUs} nativeQueueAfter=${matched.queueSizeAfterMatch} queue=${frameSampleQueue.size}"
+                            "Latency[C]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} captureUnixMs=${matched.captureUnixMs} tRender=${matched.renderUnixMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} queue=${frameSampleQueue.size}"
                         )
                     } else {
                         lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
@@ -353,14 +391,14 @@ class WebRtcManager @Inject constructor(
                     return
                 }
                 if (shouldLog) {
-                    Log.w(
+                    Log.d(
                         TAG,
-                        "Latency[C-miss]: native active but no ts match frameTsUs=$frameTimestampUs nativeQueue=${nativeCaptureTimeStore.count()} age=${ageMs}ms fallbackQueue=${frameSampleQueue.size}"
+                        "Latency[C-miss]: native active but no exact ts match frameTsUs=$frameTimestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} age=${ageMs}ms fallbackQueue=${frameSampleQueue.size}"
                     )
                 }
                 val callbackUpdatedAt = lastNativeCallbackUpdateElapsedMs.get()
                 if (callbackUpdatedAt > 0L &&
-                    android.os.SystemClock.elapsedRealtime() - callbackUpdatedAt <= 1000L
+                    nowElapsedMs - callbackUpdatedAt <= 1000L
                 ) {
                     val provisionalMs = lastNativeCallbackE2eMs.get()
                     if (provisionalMs > 0) {
@@ -662,9 +700,23 @@ class WebRtcManager @Inject constructor(
                     track.setEnabled(true)
                     track.addSink(latencyVideoSink)
                     Log.d(TAG, "Latency[C-attach]: attaching LatencyNativeSink to track id=${track.id()}")
-                    latencyNativeSink.attachToTrack(track, LatencyNativeSink.Callback { captureUnixMs, timestampUs ->
-                        val nowUnixMs = System.currentTimeMillis()
+                    latencyNativeSink.attachToTrack(track, LatencyNativeSink.Callback { status, captureUnixMs, timestampUs ->
                         val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+                        nativeLatencyLastUpdateElapsedMs.set(nowElapsedMs)
+
+                        if (status != CAPTURE_STATUS_OK) {
+                            val failCount = nativeExtractFailCount.incrementAndGet()
+                            if (failCount <= 5 || failCount % 120 == 1L) {
+                                Log.w(
+                                    TAG,
+                                    "Latency[C-native-skip]: status=${captureStatusToLabel(status)}($status) frameTsUs=$timestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} fail=$failCount ok=${nativeExtractOkCount.get()}"
+                                )
+                            }
+                            return@Callback
+                        }
+
+                        nativeExtractOkCount.incrementAndGet()
+                        val nowUnixMs = System.currentTimeMillis()
                         val rawMsgLagMs = nowUnixMs - captureUnixMs
                         val aheadEstimateMs = updateNativeClockAheadEstimate(rawMsgLagMs, nowElapsedMs)
                         val correctedCaptureUnixMs = captureUnixMs - aheadEstimateMs
@@ -673,25 +725,35 @@ class WebRtcManager @Inject constructor(
                             lastNativeCallbackE2eMs.set(correctedMsgLagMs.toInt().coerceIn(0, 9999))
                             lastNativeCallbackUpdateElapsedMs.set(nowElapsedMs)
                         }
-                        nativeLatencyLastUpdateElapsedMs.set(nowElapsedMs)
                         lastNativeCaptureUnixMs.set(correctedCaptureUnixMs)
-                        nativeCaptureTimeStore.offer(
+                        val matched = nativeRenderMatchStore.offerNative(
                             NativeCaptureSample(
                                 timestampUs = timestampUs,
                                 captureUnixMs = correctedCaptureUnixMs,
                                 receivedElapsedMs = nowElapsedMs
                             )
                         )
+                        if (matched != null) {
+                            val e2eMs = (matched.renderUnixMs - matched.captureUnixMs).toInt()
+                            if (e2eMs >= 0) {
+                                lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+                            } else {
+                                Log.w(
+                                    TAG,
+                                    "Latency[C-negative-native-first]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} captureUnixMs=${matched.captureUnixMs} tRender=${matched.renderUnixMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} queue=${frameSampleQueue.size}"
+                                )
+                            }
+                        }
                         val count = nativeLogCount.incrementAndGet()
                         if (correctedMsgLagMs < -20) {
                             Log.w(
                                 TAG,
-                                "Latency[C-native-future]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativeQueue=${nativeCaptureTimeStore.count()} queue=${frameSampleQueue.size}"
+                                "Latency[C-native-future]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} queue=${frameSampleQueue.size}"
                             )
                         } else if (count % 120 == 1) {
                             Log.d(
                                 TAG,
-                                "Latency[C-native]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativeQueue=${nativeCaptureTimeStore.count()} queue=${frameSampleQueue.size}"
+                                "Latency[C-native]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} queue=${frameSampleQueue.size}"
                             )
                         }
                     })
@@ -930,6 +992,22 @@ class WebRtcManager @Inject constructor(
         private const val TAG = "WebRtcManager"
         private const val ABS_CAPTURE_TIME_URI =
             "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time"
+        private const val CAPTURE_STATUS_OK = 0
+        private const val CAPTURE_STATUS_NO_PACKET_INFOS = 1
+        private const val CAPTURE_STATUS_NO_ABS_CAPTURE_TIME = 2
+        private const val CAPTURE_STATUS_OUT_OF_RANGE = 3
+        private const val CAPTURE_STATUS_NO_LOCAL_CAPTURE_CLOCK_OFFSET = 4
+    }
+
+    private fun captureStatusToLabel(status: Int): String {
+        return when (status) {
+            CAPTURE_STATUS_OK -> "ok"
+            CAPTURE_STATUS_NO_PACKET_INFOS -> "no_packet_infos"
+            CAPTURE_STATUS_NO_ABS_CAPTURE_TIME -> "no_abs_capture_time"
+            CAPTURE_STATUS_OUT_OF_RANGE -> "out_of_range"
+            CAPTURE_STATUS_NO_LOCAL_CAPTURE_CLOCK_OFFSET -> "no_local_capture_clock_offset"
+            else -> "unknown"
+        }
     }
 
     private fun logAbsCaptureTimeInSdp(label: String, sdp: String) {

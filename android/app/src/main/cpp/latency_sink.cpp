@@ -196,11 +196,11 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
       return;
     }
 
-    on_capture_time_method_ = env->GetMethodID(callback_class, "onCaptureTime", "(JJ)V");
+    on_capture_time_method_ = env->GetMethodID(callback_class, "onCaptureTime", "(IJJ)V");
     env->DeleteLocalRef(callback_class);
 
     if (!on_capture_time_method_) {
-      LOGD("onCaptureTime(JJ)V not found");
+      LOGD("onCaptureTime(IJJ)V not found");
       if (env->ExceptionCheck()) {
         env->ExceptionClear();
       }
@@ -292,6 +292,7 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
             extract.packet_info_count,
             static_cast<long long>(extract.timestamp_us));
       }
+      CallJava(extract.status, 0, extract.timestamp_us);
       return;
     }
 
@@ -323,7 +324,7 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
                   std::memory_order_relaxed)));
     }
 
-    CallJava(extract.capture_unix_ms, extract.timestamp_us);
+    CallJava(ExtractStatus::kOk, extract.capture_unix_ms, extract.timestamp_us);
   }
 
   void OnDiscardedFrame() override {}
@@ -332,7 +333,7 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
       const webrtc::VideoTrackSourceConstraints& /*constraints*/) override {}
 
  private:
-  void CallJava(int64_t capture_unix_ms, int64_t timestamp_us) {
+  void CallJava(ExtractStatus status, int64_t capture_unix_ms, int64_t timestamp_us) {
     if (shutting_down_.load(std::memory_order_acquire)) {
       return;
     }
@@ -349,6 +350,7 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
     }
 
     env->CallVoidMethod(callback_ref_, on_capture_time_method_,
+                        static_cast<jint>(status),
                         static_cast<jlong>(capture_unix_ms),
                         static_cast<jlong>(timestamp_us));
     if (env->ExceptionCheck()) {

@@ -343,3 +343,84 @@ Latency[B]: e2e=-72ms captureUnixMs=1772708904306 tRender=1772708904234
 - 一部環境で `offset_applied=0` が継続（`local_capture_clock_offset` 未設定）
 - その結果、`C-native-future` が散発しうるため、Android 側で時計先行補正を実施中
 - 0ms 固定化は `C` マッチ失敗時の更新停止が主因で、突合条件と更新ロジックを調整中
+
+## 追加更新（2026-03-05 深夜 / セッション追記）
+
+### 背景（この追記の目的）
+
+- 「`no packet_infos / no abs_capture_time / out_of_range` は本当に起きているのか」を推測でなく実測で確認できるようにする
+- `timestampUs` の突合を「許容幅近傍マッチ」から「完全一致マッチ」に変更し、誤対応による見かけのズレ要因を排除する
+- `C-miss` のログ意味を整理し、「未一致そのもの」と「TTLで実際に破棄」を分離して可視化する
+
+### Android 実装変更（`WebRtcManager.kt`）
+
+1. **完全一致マッチへ変更（近傍マッチ廃止）**
+   - 旧: native サンプルのみキュー保持し、`timestampUs` 近傍（許容幅）で `poll`
+   - 新: `timestampUs` 完全一致のみで突合
+   - `NativeRenderMatchStore` を導入し、**native側キュー** と **render側キュー** の双方向待ち合わせに変更
+   - どちらが先着しても、後着側到達時に即マッチ可能
+
+2. **TTLによる破棄を明示化**
+   - 未一致サンプルは native/render 双方とも `ttlMs=1000` で期限管理
+   - TTL超過で実際に破棄したときのみ `Latency[C-evict]` を `WARN` で出力
+   - `clear()` 時に未処理が残っていた場合 `Latency[C-clear]` を `WARN` 出力
+
+3. **`C-miss` のログレベル見直し**
+   - `Latency[C-miss]` は「その瞬間未一致」を示すだけで、必ずしも異常ではないため `WARN` → `DEBUG` に変更
+   - 実害（破棄）は `C-evict` / `C-clear` で判断する運用へ変更
+
+4. **native callback の失敗理由可視化**
+   - JNI callback から渡される `status` を受け、`status != OK` のとき `Latency[C-native-skip]` を出力
+   - ステータス定義:
+     - `0`: `ok`
+     - `1`: `no_packet_infos`
+     - `2`: `no_abs_capture_time`
+     - `3`: `out_of_range`
+     - `4`: `no_local_capture_clock_offset`
+
+### C++ 実装変更（`latency_sink.cpp`）
+
+1. **JNI callback シグネチャ変更**
+   - 旧: `onCaptureTime(JJ)` (`captureUnixMs`, `timestampUs`)
+   - 新: `onCaptureTime(IJJ)` (`status`, `captureUnixMs`, `timestampUs`)
+
+2. **毎フレーム callback 化**
+   - 旧: 抽出成功時のみ callback
+   - 新: 抽出失敗時も callback（`status` 付き）を実施
+   - 失敗時は `captureUnixMs=0` を渡し、Kotlin 側で `status` に基づきスキップ処理
+
+3. **既存統計ログは維持**
+   - `ACT frame=...`（成功）
+   - `ACT skip frame=... status=...`（抽出失敗）
+
+### ビルド確認（このセッション）
+
+- 実行:
+  - `cd android && .\\gradlew.bat :app:compileDebugKotlin :app:externalNativeBuildDebug`
+  - `cd android && .\\gradlew.bat :app:compileDebugKotlin`
+- 結果:
+  - **BUILD SUCCESSFUL**
+
+### 実機ログ観測（このセッション）
+
+観測されたログ例:
+
+```text
+Latency[C-miss]: native active but no exact ts match ... nativePending=0 renderPending=1 ...
+Latency[C-negative-native-first]: e2e=-28ms ...
+Latency[C-native-future]: ... correctedMsgLagMs=-28 ...
+```
+
+未観測（= 少なくとも該当実行では発生していない）:
+
+- `ACT skip`
+- `Latency[C-native-skip]`
+- `Latency[C-evict]`
+- `Latency[C-clear]`
+
+### 解釈（現時点）
+
+- 抽出失敗（`no_packet_infos` / `no_abs_capture_time` / `out_of_range`）は、少なくとも該当ログでは未発生
+- `C-miss` は「瞬間的に render 先着で未一致」の状態を示すだけで、TTL破棄を意味しない
+- `C-negative-native-first` と `C-native-future` が同時に出るケースは、主に**capture時計補正（aheadEstimate）不足**で説明できる
+  - すなわち、突合ロジックよりも「`captureUnixMs` の基準補正」の調整が次の主課題

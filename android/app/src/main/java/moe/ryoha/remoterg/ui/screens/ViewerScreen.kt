@@ -11,6 +11,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -69,15 +70,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -85,6 +92,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import android.os.Build
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.core.app.PictureInPictureModeChangedInfo
 import androidx.core.util.Consumer
@@ -149,6 +157,8 @@ fun ViewerScreen(
 
     // SurfaceViewRendererの参照を保持（ローカルスクリーンショット用）
     var surfaceViewRenderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
+    val statsGraphHistory = remember { mutableStateListOf<StatsGraphPoint>() }
+    val latestRtcStats by rememberUpdatedState(rtcStats)
 
     LaunchedEffect(signalingUrl) {
         viewModel.connectToHost(signalingUrl, codec)
@@ -184,6 +194,30 @@ fun ViewerScreen(
                 // scale = 1.0f を指定することで、ビデオストリーム本来の解像度で Bitmap を取得できる
                 svr.addFrameListener(listener, 1.0f)
             }
+        }
+    }
+
+    // 直近30秒の統計履歴を1秒ごとにサンプリング
+    LaunchedEffect(isConnected) {
+        if (!isConnected) {
+            statsGraphHistory.clear()
+            return@LaunchedEffect
+        }
+        while (isConnected) {
+            val now = SystemClock.elapsedRealtime()
+            statsGraphHistory.add(
+                StatsGraphPoint(
+                    timestampMs = now,
+                    rttMs = latestRtcStats.rttMs,
+                    clockOffsetMs = latestRtcStats.clockOffsetMs,
+                    latencyMs = latestRtcStats.latencyMs
+                )
+            )
+            val cutoff = now - STATS_GRAPH_WINDOW_MS
+            while (statsGraphHistory.isNotEmpty() && statsGraphHistory.first().timestampMs < cutoff) {
+                statsGraphHistory.removeAt(0)
+            }
+            delay(1000)
         }
     }
 
@@ -463,10 +497,16 @@ fun ViewerScreen(
                     .align(Alignment.TopStart)
                     .padding(start = 16.dp, top = overlayTopPadding)
             ) {
-                DebugPanel(
-                    rtcStats = rtcStats,
-                    deviceScreenSize = deviceScreenSize
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DebugPanel(
+                        rtcStats = rtcStats,
+                        deviceScreenSize = deviceScreenSize
+                    )
+                    StatsGraphPanel(
+                        rtcStats = rtcStats,
+                        history = statsGraphHistory
+                    )
+                }
             }
 
             // 設定パネル（右側）
@@ -934,6 +974,15 @@ private fun ScreenshotButton(
     )
 }
 
+private const val STATS_GRAPH_WINDOW_MS = 30_000L
+
+private data class StatsGraphPoint(
+    val timestampMs: Long,
+    val rttMs: Int,
+    val clockOffsetMs: Int,
+    val latencyMs: Int
+)
+
 /**
  * デバッグパネル: 頻繁に変わる統計情報を表示 (FPS/Bitrate/Loss)
  */
@@ -976,6 +1025,116 @@ private fun DebugPanel(
         Row(modifier = Modifier.fillMaxWidth()) {
             Text(text = "Latency", style = monoStyle, modifier = Modifier.width(72.dp))
             Text(text = "${rtcStats.latencyMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
+    }
+}
+
+@Composable
+private fun StatsGraphPanel(
+    rtcStats: WebRtcStats,
+    history: List<StatsGraphPoint>
+) {
+    Column(
+        modifier = Modifier
+            .width(200.dp)
+            .background(
+                Color.Black.copy(alpha = 0.6f),
+                RoundedCornerShape(8.dp)
+            )
+            .border(
+                1.dp,
+                Color.White.copy(alpha = 0.1f),
+                RoundedCornerShape(8.dp)
+            )
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Stats Graph (30s)",
+            color = Color(0xFFE4E4E7),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
+        )
+
+        MetricSparkline(
+            label = "RTT",
+            valueText = "${rtcStats.rttMs} ms",
+            color = Color(0xFF60A5FA),
+            history = history,
+            valueSelector = { it.rttMs }
+        )
+        MetricSparkline(
+            label = "Offset",
+            valueText = "${rtcStats.clockOffsetMs} ms",
+            color = Color(0xFFFBBF24),
+            history = history,
+            valueSelector = { it.clockOffsetMs }
+        )
+        MetricSparkline(
+            label = "Latency",
+            valueText = "${rtcStats.latencyMs} ms",
+            color = Color(0xFF4ADE80),
+            history = history,
+            valueSelector = { it.latencyMs }
+        )
+    }
+}
+
+@Composable
+private fun MetricSparkline(
+    label: String,
+    valueText: String,
+    color: Color,
+    history: List<StatsGraphPoint>,
+    valueSelector: (StatsGraphPoint) -> Int
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                color = color,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = valueText,
+                color = Color(0xFFE4E4E7),
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(6.dp))
+        ) {
+            if (history.isEmpty()) return@Canvas
+
+            val windowStart = SystemClock.elapsedRealtime() - STATS_GRAPH_WINDOW_MS
+            val minValue = history.minOf { valueSelector(it) }
+            val maxValue = history.maxOf { valueSelector(it) }
+            val range = (maxValue - minValue).coerceAtLeast(1)
+
+            val path = Path()
+            history.forEachIndexed { index, point ->
+                val x = ((point.timestampMs - windowStart).toFloat() / STATS_GRAPH_WINDOW_MS.toFloat())
+                    .coerceIn(0f, 1f) * size.width
+                val y = size.height - (((valueSelector(point) - minValue).toFloat() / range.toFloat())
+                    .coerceIn(0f, 1f) * size.height)
+                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+
+            drawPath(
+                path = path,
+                color = color,
+                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
         }
     }
 }

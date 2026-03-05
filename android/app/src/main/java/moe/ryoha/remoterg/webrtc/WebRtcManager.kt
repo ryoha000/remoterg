@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.roundToInt
 
 /**
  * WebRTC 接続を管理するマネージャー
@@ -102,6 +103,8 @@ class WebRtcManager @Inject constructor(
 
     // E2E latency measurement (LATENCY_MEASUREMENT.md)
     private val offsetEstMonoMs = AtomicReference<Double?>(null)
+    private val lastRttMs = AtomicInteger(0)
+    private val lastClockOffsetMs = AtomicInteger(0)
     private val lastLatencyMs = AtomicInteger(0)
     private val nativeLatencyLastUpdateElapsedMs = AtomicLong(0L)
     private data class NativeCaptureSample(
@@ -259,6 +262,8 @@ class WebRtcManager @Inject constructor(
         nativeRenderMatchStore.clear()
         nativeExtractOkCount.set(0L)
         nativeExtractFailCount.set(0L)
+        lastRttMs.set(0)
+        lastClockOffsetMs.set(0)
         lastLatencyMs.set(0)
     }
 
@@ -286,6 +291,8 @@ class WebRtcManager @Inject constructor(
             val nextOffsetMono =
                 LatencyMonotonicMath.smoothEstimate(offsetEstMonoMs.get(), medianOffsetMono, alpha)
             offsetEstMonoMs.set(nextOffsetMono)
+            lastRttMs.set(derived.rttMs.roundToInt())
+            lastClockOffsetMs.set(nextOffsetMono.roundToInt())
 
             val logCount = syncEstimateLogCount.incrementAndGet()
             if (logCount <= 5 || logCount % 30 == 1) {
@@ -515,6 +522,8 @@ class WebRtcManager @Inject constructor(
                             loss = loss,
                             frameWidth = currentFrameWidth,
                             frameHeight = currentFrameHeight,
+                            rttMs = lastRttMs.get(),
+                            clockOffsetMs = lastClockOffsetMs.get(),
                             latencyMs = lastLatencyMs.get()
                         )
                     }
@@ -527,7 +536,11 @@ class WebRtcManager @Inject constructor(
     private fun stopStatsPolling() {
         statsJob?.cancel()
         statsJob = null
-        _rtcStats.value = WebRtcStats(latencyMs = lastLatencyMs.get())
+        _rtcStats.value = WebRtcStats(
+            rttMs = lastRttMs.get(),
+            clockOffsetMs = lastClockOffsetMs.get(),
+            latencyMs = lastLatencyMs.get()
+        )
     }
 
     /**
@@ -983,6 +996,8 @@ data class WebRtcStats(
     val loss: Int = 0,
     val frameWidth: Int = 0,
     val frameHeight: Int = 0,
+    val rttMs: Int = 0,
+    val clockOffsetMs: Int = 0,
     val latencyMs: Int = 0
 )
 

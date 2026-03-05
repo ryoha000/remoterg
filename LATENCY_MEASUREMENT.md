@@ -1,195 +1,154 @@
-# RemoteRG レイテンシ測定ガイド
+# RemoteRG E2E レイテンシ計測ガイド（現行実装準拠）
+
+関連ドキュメント: [LATENCY_MEASUREMENT_ARCHITECTURE.md](LATENCY_MEASUREMENT_ARCHITECTURE.md)
 
 ## 目的
-- 別デバイス間で時計が一致していない状況でも、`hostd` とAndroidアプリ間のレイテンシを実用精度で測定する
-- 映像系（E2E）と入力系（Input-to-Photon）を分離して評価する
-- 記事で再現可能な手順として公開できる形にする
+- `hostd` と Android 間で時計が一致していない前提でも、映像 E2E レイテンシを継続計測する
+- 実装済みコードと 1:1 で対応する運用手順を記述する
+
+## スコープ
+- 本書は **映像 E2E** の現行実装のみを対象とする
+- Input-to-Photon は現時点で未実装（本書の対象外）
+- 集計（P50/P95/P99）のバッチ出力は別途運用（オンライン表示の主経路は本書記載）
 
 ## 前提
-- 計測対象の `server` は signaling server ではなく `hostd` を指す
-- 時刻同期は WebRTC の DataChannel 上で行う
-- 時計は OS の壁時計ではなく monotonic clock を使う
-  - Rust: `std::time::Instant` 相当の単調増加時刻
-  - Android(Kotlin): `SystemClock.elapsedRealtimeNanos()`（単位はns、集計時にmsへ変換）
+- `server` は signaling server ではなく `hostd`
+- 時刻同期は WebRTC DataChannel で行う
+- E2E 算出の時刻基準は monotonic clock を使用
+  - hostd: `Instant` 基準の monotonic ms
+  - Android: `SystemClock.elapsedRealtimeNanos()` 基準の monotonic ms
 
-## 方針
-- Androidアプリと `hostd` の時刻オフセットを NTP 風に推定
-- 推定したオフセットで `hostd` 側タイムスタンプをAndroid時刻系へ変換
-- 変換後に E2E / Input-to-Photon を算出
-- 1回の推定ではなく複数回サンプリングし、低RTTサンプル中心で安定化
+## 全体方針（現行）
+1. DataChannel の NTP 風往復で `offsetMonoMs`（hostd monotonic → Android monotonic の補正）を推定
+2. hostd から `frame_sample`（`t_cap` など）を送信
+3. Android JNI Sink で `VideoFrame.packet_infos().absolute_capture_time` を読んで `captureUnixMs` と `timestampUs` を取得
+4. `frame_sample` と native callback を `capture_unix_ms` 完全一致で突合
+5. 突合済み `timestampUs` と render 側 `timestampUs` を完全一致で突合
+6. `t_cap_client_mono = t_cap_hostd_mono - offsetMonoMs`、`E2E = t_render_client_mono - t_cap_client_mono`
 
-## 1. 時刻同期プロトコル（DataChannel）
+## 1. DataChannel メッセージ仕様（実装実体）
 
-### 1.1 メッセージ仕様（最小）
+### 1.1 sync_req
 ```json
 {
-  "type": "sync_req",
-  "seq": 42,
-  "c1": 12345.678
+  "sync_req": {
+    "seq": 42,
+    "c1": 12345.678
+  }
 }
 ```
 
+### 1.2 sync_res
 ```json
 {
-  "type": "sync_res",
-  "seq": 42,
-  "c1": 12345.678,
-  "s2": 56789.012,
-  "s3": 56789.045
+  "sync_res": {
+    "seq": 42,
+    "c1": 12345.678,
+    "s2": 56789.012,
+    "s3": 56789.045
+  }
 }
 ```
 
-- `c1`: client send time（Android monotonic）
-- `s2`: server receive time（hostd monotonic）
-- `s3`: server send time（hostd monotonic）
-- `c4`: client receive time（Android monotonic, 受信時にローカルで採取）
+### 1.3 frame_sample
+```json
+{
+  "frame_sample": {
+    "seq": 1001,
+    "frame_id": 56789,
+    "t_cap": 14567.101,
+    "t_enc_in": 14567.109,
+    "t_enc_out": 14567.122,
+    "t_send": 14567.124,
+    "capture_unix_ms": 1772708904306
+  }
+}
+```
 
-### 1.2 推定式
+補足:
+- `c1/c4`: Android monotonic ms
+- `s2/s3`: hostd monotonic ms
+- `capture_unix_ms`: `t_cap` を hostd 側で壁時計に変換した値（突合キー用途）
+
+## 2. 時刻同期推定（offsetMonoMs）
+
+### 2.1 推定式
 - `rtt = (c4 - c1) - (s3 - s2)`
-- `offset = ((s2 - c1) + (s3 - c4)) / 2`
+- `offsetMonoMs = ((s2 - c1) + (s3 - c4)) / 2`
 
-解釈:
-- `offset` は「Android時刻に対するserver時刻のずれ」
-- Android時刻系に変換したい場合:
-  - `server_ts_in_client = server_ts - offset`
+### 2.2 運用ルール（現行実装）
+- `sync_req` は 5 秒ごとに送信
+- サンプル履歴は最大 100 件保持
+- `rtt` が小さい順に上位 25% を採用
+- 採用サンプルの `offsetMonoMs` 中央値を算出
+- 平滑化: `offset_est = alpha * latest + (1 - alpha) * old`（`alpha = 0.1`）
 
-## 2. オフセット推定の実運用ルール
-- 1回ではなく 30-100 サンプル取得
-- `rtt` が小さい順に上位 20-30% を採用
-- 採用サンプルの `offset` の中央値を採用
-- 実験中は定期再推定（例: 5秒ごと）
-- 急な変動対策で平滑化:
-  - `offset_est = alpha * new + (1 - alpha) * old`
-  - `alpha` の初期値は `0.1` 程度
+## 3. hostd 側実装
 
-## 3. 映像系レイテンシ（E2E）測定
+### 3.1 採取時刻
+- `t_cap`: キャプチャ直後
+- `t_enc_in`: エンコード投入時
+- `t_enc_out`: エンコード出力時
+- `t_send`: `frame_sample` 送信時
 
-### 3.1 収集する時刻
-- `t_cap`（hostd, キャプチャ直後）
-- `t_enc_in`（hostd）
-- `t_enc_out`（hostd）
-- `t_send`（hostd）
-- `t_recv`（Android, RTPフレーム受信時刻またはフレーム到着時刻）
-- `t_decode_out`（Android, デコード済みフレーム取得時刻）
-- `t_render`（Android, 表示に最も近い時刻）
+### 3.2 RTP abs-capture-time 拡張
+- video RTP に abs-capture-time 拡張を付与
+- 現行は 16 byte 拡張（`absolute_capture_timestamp` + `estimated_capture_clock_offset`）
+- `estimated_capture_clock_offset` は sender/capturer 同時計前提で `0` を設定
 
-### 3.1.1 Androidでの `t_render` 取得方針
-- 最低限（実装容易）:
-  - WebRTCの `VideoSink` 受信時点で `elapsedRealtimeNanos()` を取得し `t_render_proxy` として記録
-  - これは厳密な表示時刻ではなく「表示直前」に近い時刻
-- 推奨（より厳密）:
-  - `SurfaceTexture` / `TextureView` 更新コールバックで時刻取得
-  - 必要に応じて `Choreographer` のVSync時刻と組み合わせる
-- 記事では、どのレベルの `t_render` を採用したかを明記する
+## 4. Android 側 E2E 算出フロー（C 経路）
 
-### 3.1.2 Androidでの decode時間取得方針
-- 取得できる場合（厳密）:
-  - デコーダの入力/出力コールバックから `t_packet_recv` と `t_decode_out` を取得
-  - `DecodeLatency = t_decode_out - t_packet_recv`
-- 取得が難しい場合（proxy）:
-  - RTP/フレーム受信時点を `t_recv`
-  - `VideoSink` でデコード済みフレームを受けた時刻を `t_decode_out`
-  - `DecodeProxy = t_decode_out - t_recv`
-- 記事では「厳密値」か「proxy値」かを必ず明記する
+### 4.1 native callback（JNI Sink）
+- C++ Sink で `VideoFrame.packet_infos()` を走査し `absolute_capture_time` を抽出
+- `onCaptureTime(status, captureUnixMs, timestampUs)` を毎フレーム callback
+- `status`:
+  - `0`: ok
+  - `1`: no_packet_infos
+  - `2`: no_abs_capture_time
+  - `3`: out_of_range
 
-### 3.2 算出
-- `t_cap_client = t_cap - offset_est`
-- `E2E = t_render - t_cap_client`
+### 4.2 3点結合
+1. `frame_sample` と native callback を `capture_unix_ms` 完全一致で突合
+2. 突合結果から `t_cap_hostd_mono` と `timestampUs` を確定
+3. `t_cap_client_mono = t_cap_hostd_mono - offsetMonoMs` に変換
+4. render 側の `timestampUs` と完全一致突合
+5. `E2E = t_render_client_mono - t_cap_client_mono`
 
-補助指標:
-- `EncodeLatency = t_enc_out - t_enc_in`
-- `DecodeLatency = t_decode_out - t_packet_recv`（取得可能時）
-- `DecodeProxy = t_decode_out - t_recv`（取得困難時の代替）
-- `ReadbackCost ~= t_enc_in - t_cap`（GPU->CPU readback 比較で使用）
+### 4.3 ストア仕様
+- `FrameNativeMatchStore`: key=`capture_unix_ms`、TTL=1000ms
+- `NativeRenderMatchStore`: key=`timestampUs`、TTL=1000ms
+- どちらも先着側を保持し、後着時に即マッチ
 
-## 4. 入力系レイテンシ（Input-to-Photon）測定
+## 5. 表示値更新ポリシー
+- `lastLatencyMs` は **C 経路でマッチ成功したフレームのみ**更新
+- `E2E < 0` は異常値として警告ログのみ（値更新しない）
+- C 経路が未成立のフレームは「前回値を維持」
+- DataChannel `frame_sample` 単独（旧 B 経路）では表示値を更新しない
 
-### 4.1 収集する時刻
-- `t_input_send`（Android, 入力送信時）
-- `t_input_recv`（hostd, 入力受信時）
-- `t_input_applied_frame_cap`（hostd, 入力効果が初めて現れたフレームの `t_cap`）
-- `t_render`（Android, 当該フレーム描画時）
+## 6. ログ運用
+- 主なタグ:
+  - `Latency[sync]`
+  - `Latency[frame_sample]`
+  - `Latency[C-native]`
+  - `Latency[C]`
+  - `Latency[C-miss]`
+  - `Latency[C-native-skip]`
+  - `Latency[C-evict]`
+  - `Latency[C-clear]`
+- C++ 側:
+  - `ACT frame=...`（抽出成功）
+  - `ACT skip ... status=...`（抽出失敗）
 
-### 4.2 算出
-- `t_input_recv_client = t_input_recv - offset_est`
-- `t_input_applied_frame_cap_client = t_input_applied_frame_cap - offset_est`
-- `InputToPhoton = t_render - t_input_send`
+## 7. 既知の制約
+- `capture_unix_ms` は突合キー用途であり、最終 E2E 計算は monotonic 基準で行う
+- `frame_sample` と native callback の到着順は保証されないため、TTL 内での待ち合わせが前提
+- decode 内訳（`t_recv`, `t_decode_out`）は現行主経路では未採用
 
-分解:
-- `Uplink = t_input_recv_client - t_input_send`
-- `ApplyWait = t_input_applied_frame_cap_client - t_input_recv_client`
-- `RenderAfterApply = t_render - t_input_applied_frame_cap_client`
-
-## 5. ログフォーマット（推奨）
-
-### 5.1 syncログ
-```json
-{
-  "kind": "sync_sample",
-  "seq": 42,
-  "c1": 12345.678,
-  "s2": 56789.012,
-  "s3": 56789.045,
-  "c4": 12345.912,
-  "rtt": 0.201,
-  "offset": 44443.233
-}
-```
-
-### 5.2 frameログ
-```json
-{
-  "kind": "frame_sample",
-  "frame_id": 12345,
-  "t_cap": 56790.100,
-  "t_enc_in": 56790.110,
-  "t_enc_out": 56790.122,
-  "t_send": 56790.123,
-  "t_recv": 12346.430,
-  "t_decode_out": 12346.470,
-  "t_render": 12346.500,
-  "offset_est": 44443.230
-}
-```
-
-### 5.3 inputログ
-```json
-{
-  "kind": "input_sample",
-  "input_id": 987,
-  "t_input_send": 12347.001,
-  "t_input_recv": 56790.920,
-  "t_input_applied_frame_cap": 56790.940,
-  "t_render": 12347.120,
-  "offset_est": 44443.230
-}
-```
-
-## 6. 集計ルール
-- 各条件 3-5 run、1 run 60秒以上
-- 指標は平均でなく `P50/P95/P99` を主に掲載
-- 実験条件（HW/SW、Codec、キュー戦略、readback有無）は 1変数ずつ変更
-- 出力:
-  - E2E `P50/P95/P99`
-  - Input-to-Photon `P50/P95/P99`
-  - DecodeProxy または DecodeLatency `P50/P95/P99`
-  - `CPU%`（hostd/Androidアプリ）
-  - drop率
-
-## 7. よくある落とし穴
-- 壁時計（`System.currentTimeMillis()`）を混ぜる
-- 1サンプルだけで offset を決める
-- RTTが大きいサンプルを採用してしまう
-- `t_render` を「受信時刻」で代用する（描画時刻で取る）
-- decode proxy と厳密decode時間を混同する
-- 映像系と入力系の評価軸を混在させる
-
-## 8. 妥当性確認（おすすめ）
-- 少数回だけ物理計測（高速撮影）を行い、推定値のオーダーを照合
-- 推定値と物理値に大きな乖離がないか確認
-- 記事では「主計測はNTP風補正、物理計測は妥当性確認」と明記
-
-## 9. 記事記載テンプレ（短文）
-- 本検証では、DataChannel を用いた NTP 風オフセット推定により、`hostd` とAndroidアプリの単調増加時刻を同一時間軸へ正規化した。  
-- オフセットは複数サンプルから低RTT区間を抽出して中央値を採用し、E2E、Input-to-Photon、decode指標を `P50/P95/P99` で評価した。  
-- 絶対値の誤差を抑えるため、比較は同一環境で1変数ずつ変更して実施した。
+## 8. テスト（現行）
+- `LatencyMonotonicMathTest`
+  - RTT/offset 式
+  - `hostd mono -> client mono` 変換
+  - median/smoothing
+- `FrameNativeMatchStoreTest`
+  - frame 先着 / native 先着
+  - TTL eviction

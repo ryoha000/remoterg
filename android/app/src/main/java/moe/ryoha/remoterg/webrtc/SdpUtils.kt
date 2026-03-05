@@ -77,4 +77,44 @@ object SdpUtils {
         // リストを改行で結合して返す
         return lines.joinToString("\r\n")
     }
+
+    /**
+     * SDP に Absolute Capture Time 拡張ヘッダーを強制注入する（video セクションのみ）。
+     * Offerer (Client) がサポートしていることを明示的に伝えるために使用。
+     */
+    fun addAbsCaptureTimeExtension(sdp: String): String {
+        val uri = "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time"
+        if (sdp.contains(uri)) return sdp
+
+        val lines = sdp.split("\r\n".toRegex()).toMutableList()
+
+        // video セクション内の extmap の最大 ID と最後の extmap 行の位置を検出
+        var inVideoSection = false
+        var maxExtmapId = 0
+        var lastExtmapIndex = -1
+        val idRegex = Regex("^a=extmap:(\\d+)")
+
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (line.startsWith("m=video")) {
+                inVideoSection = true
+            } else if (line.startsWith("m=") && !line.startsWith("m=video")) {
+                inVideoSection = false
+            }
+            if (inVideoSection) {
+                idRegex.find(line)?.let {
+                    val id = it.groupValues[1].toInt()
+                    if (id > maxExtmapId) maxExtmapId = id
+                    lastExtmapIndex = i
+                }
+            }
+        }
+
+        if (lastExtmapIndex == -1) return sdp
+
+        val nextId = maxExtmapId + 1
+        lines.add(lastExtmapIndex + 1, "a=extmap:$nextId $uri")
+
+        return lines.joinToString("\r\n")
+    }
 }

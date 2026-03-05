@@ -116,7 +116,8 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // ログ設定
-    let filter = EnvFilter::new(&args.log_level);
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(format!("{},ort=warn", args.log_level)));
 
     // tracing-chrome layer setup (output to trace-timestamp.json)
     let (chrome_layer, chrome_guard) = tracing_chrome::ChromeLayerBuilder::new()

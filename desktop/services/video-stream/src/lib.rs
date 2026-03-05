@@ -7,7 +7,7 @@ use core_types::{
     VideoStreamMessage,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -96,6 +96,9 @@ impl VideoStreamService {
             )
             .await
         });
+
+        // frame_sample の単調増加シーケンス番号
+        let frame_sample_seq = Arc::new(AtomicU64::new(0));
 
         // 統計情報
         let mut first_encode_result_received = false;
@@ -191,18 +194,26 @@ impl VideoStreamService {
                                     let t_enc_in_ms = encode_result.t_enc_in_ms;
                                     let t_enc_out_ms = encode_result.t_enc_out_ms;
 
-                                    track_writer::write_encoded_sample(track, encode_result).await?;
+                                    let _ntp_timestamp = track_writer::write_encoded_sample(track, encode_result).await?;
 
                                     if let (Some(ref tx), Some(t_cap), Some(t_enc_in), Some(t_enc_out)) =
                                         (&self.outgoing_dc_tx, t_cap_ms, t_enc_in_ms, t_enc_out_ms)
                                     {
                                         let t_send = core_types::latency_monotonic_ms();
+                                        let capture_system_time = core_types::hostd_mono_ms_to_system_time(t_cap);
+                                        let capture_unix_ms = capture_system_time
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as i64;
+                                        let seq = frame_sample_seq.fetch_add(1, Ordering::Relaxed);
                                         let frame_sample = DataChannelMessage::FrameSample {
+                                            seq,
                                             frame_id,
                                             t_cap,
                                             t_enc_in,
                                             t_enc_out,
                                             t_send,
+                                            capture_unix_ms,
                                         };
                                         let _ = tx
                                             .send(OutgoingDataChannelMessage::Text(frame_sample))

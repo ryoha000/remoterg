@@ -5,6 +5,12 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
+# Hilt/Dagger - preserve generated injector classes (required when minifyEnabled)
+-keep class moe.ryoha.remoterg.*_GeneratedInjector { *; }
+-keep class moe.ryoha.remoterg.*_HiltModules { *; }
+-keep,allowobfuscation,allowshrinking @dagger.hilt.EntryPoint class *
+-keep,allowobfuscation,allowshrinking @dagger.hilt.android.EarlyEntryPoint class *
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:

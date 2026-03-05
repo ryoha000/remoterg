@@ -174,6 +174,7 @@ impl WebRtcService {
                     match msg {
                         Some(WebRtcMessage::SetOffer { sdp, codec }) => {
                             info!("Received SetOffer message (codec: {:?})", codec);
+                            info!("Received SetOffer message (sdp: {:?})", sdp);
                             // 既存のPeerConnectionが存在する場合はクリーンアップ
                             if peer_connection.is_some() {
                                 info!("Cleaning up existing PeerConnection before creating new one");

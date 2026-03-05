@@ -35,6 +35,14 @@ tasks:
     dir: "android"
     cmds:
       - PowerShell -Command ".\gradlew.bat assembleDebug 2>&1 | Select-Object -Last 10"
+  android:sync-webrtc-headers:
+    dir: "."
+    cmds:
+      - python android/scripts/sync_webrtc_headers.py
+  android:verify-webrtc-headers:
+    dir: "."
+    cmds:
+      - python android/scripts/sync_webrtc_headers.py --verify
 
   fmt:hostd:
     dir: "desktop/services"

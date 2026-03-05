@@ -1,7 +1,6 @@
 package moe.ryoha.remoterg.webrtc
 
 import android.util.Log
-import org.webrtc.MediaStreamTrack
 import org.webrtc.VideoTrack
 
 /**
@@ -16,55 +15,123 @@ class LatencyNativeSink {
 
     private var nativeSinkPtr: Long = 0
     private var nativeTrackPtr: Long = 0
+    private var disabled = false
+    private var disableReason: String? = null
 
-    fun attachToTrack(track: VideoTrack, callback: Callback) {
+    @Synchronized
+    fun attachToTrack(track: VideoTrack, callback: Callback): Boolean {
+        if (disabled) {
+            Log.w(TAG, "attachToTrack skipped: native sink is disabled reason=$disableReason")
+            return false
+        }
+
         val nextTrackPtr = getNativeTrackPtr(track)
-        if (nextTrackPtr == 0L) return
+        if (nextTrackPtr == 0L) {
+            disableLocked("native video track pointer is 0")
+            return false
+        }
 
         if (nativeSinkPtr == 0L) {
-            nativeSinkPtr = nativeCreateLatencySink(callback)
+            nativeSinkPtr = try {
+                nativeCreateLatencySink(callback)
+            } catch (t: Throwable) {
+                Log.e(TAG, "nativeCreateLatencySink threw", t)
+                0L
+            }
             if (nativeSinkPtr == 0L) {
-                Log.e(TAG, "nativeCreateLatencySink failed")
-                return
+                disableLocked("nativeCreateLatencySink failed")
+                return false
             }
         }
 
         if (nativeTrackPtr == nextTrackPtr) {
-            return
+            return true
         }
 
         if (nativeTrackPtr != 0L) {
-            nativeDetachFromTrack(nativeTrackPtr, nativeSinkPtr)
+            try {
+                nativeDetachFromTrack(nativeTrackPtr, nativeSinkPtr)
+            } catch (t: Throwable) {
+                disableLocked("nativeDetachFromTrack failed", t)
+                return false
+            }
             nativeTrackPtr = 0L
         }
 
-        nativeAttachToTrack(nextTrackPtr, nativeSinkPtr)
+        try {
+            nativeAttachToTrack(nextTrackPtr, nativeSinkPtr)
+        } catch (t: Throwable) {
+            disableLocked("nativeAttachToTrack failed", t)
+            return false
+        }
         nativeTrackPtr = nextTrackPtr
+        return true
     }
 
+    @Synchronized
     fun detach() {
         if (nativeSinkPtr != 0L && nativeTrackPtr != 0L) {
-            nativeDetachFromTrack(nativeTrackPtr, nativeSinkPtr)
+            try {
+                nativeDetachFromTrack(nativeTrackPtr, nativeSinkPtr)
+            } catch (t: Throwable) {
+                Log.e(TAG, "nativeDetachFromTrack threw", t)
+            }
         }
         nativeTrackPtr = 0L
     }
 
+    @Synchronized
     fun release() {
         detach()
         if (nativeSinkPtr != 0L) {
-            nativeDestroySink(nativeSinkPtr)
+            try {
+                nativeDestroySink(nativeSinkPtr)
+            } catch (t: Throwable) {
+                Log.e(TAG, "nativeDestroySink threw", t)
+            }
         }
         nativeSinkPtr = 0L
     }
 
+    fun isEnabled(): Boolean = !disabled
+
     private fun getNativeTrackPtr(track: VideoTrack): Long {
         return try {
-            val method = MediaStreamTrack::class.java.getDeclaredMethod("getNativeMediaStreamTrack")
-            method.isAccessible = true
-            method.invoke(track) as? Long ?: 0L
-        } catch (e: Exception) {
+            track.nativeVideoTrack
+        } catch (e: Throwable) {
             Log.e(TAG, "Failed to get native track ptr", e)
             0L
+        }
+    }
+
+    private fun disableLocked(reason: String, throwable: Throwable? = null) {
+        if (disabled) return
+        disabled = true
+        disableReason = reason
+        if (throwable != null) {
+            Log.e(TAG, "Disabling native sink: $reason", throwable)
+        } else {
+            Log.e(TAG, "Disabling native sink: $reason")
+        }
+
+        val sinkPtr = nativeSinkPtr
+        val trackPtr = nativeTrackPtr
+        nativeTrackPtr = 0L
+        nativeSinkPtr = 0L
+
+        if (sinkPtr != 0L && trackPtr != 0L) {
+            try {
+                nativeDetachFromTrack(trackPtr, sinkPtr)
+            } catch (t: Throwable) {
+                Log.e(TAG, "nativeDetachFromTrack during disable threw", t)
+            }
+        }
+        if (sinkPtr != 0L) {
+            try {
+                nativeDestroySink(sinkPtr)
+            } catch (t: Throwable) {
+                Log.e(TAG, "nativeDestroySink during disable threw", t)
+            }
         }
     }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
+import moe.ryoha.remoterg.BuildConfig
 import org.webrtc.audio.JavaAudioDeviceModule
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -214,6 +215,7 @@ class WebRtcManager @Inject constructor(
     private val frameNativeMatchStore = FrameNativeMatchStore()
     private val nativeRenderMatchStore = NativeRenderMatchStore()
     private val latencyNativeSink = LatencyNativeSink()
+    private var nativeLatencySinkEnabled = BuildConfig.ENABLE_NATIVE_LATENCY_SINK
 
     private val frameSampleLogCount = AtomicInteger(0)
     private val nativeLogCount = AtomicInteger(0)
@@ -223,6 +225,9 @@ class WebRtcManager @Inject constructor(
     private val nativeExtractFailCount = AtomicLong(0L)
 
     init {
+        if (!nativeLatencySinkEnabled) {
+            Log.w(TAG, "Latency[C-disabled]: native sink disabled by BuildConfig")
+        }
         scope.launch {
             _isConnected.collect { connected ->
                 if (connected) {
@@ -333,6 +338,16 @@ class WebRtcManager @Inject constructor(
         renderLogCount++
         val shouldLog = renderLogCount % 90 == 1
 
+        if (!nativeLatencySinkEnabled) {
+            if (shouldLog) {
+                Log.d(
+                    TAG,
+                    "Latency[C-skip]: native sink disabled, keeping last latency value framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()}"
+                )
+            }
+            return
+        }
+
         // Native sink の packet_infos.absolute_capture_time から復元した t_cap を優先
         val nativeUpdatedAt = nativeLatencyLastUpdateElapsedMs.get()
         if (nativeUpdatedAt == 0L && shouldLog) {
@@ -389,6 +404,14 @@ class WebRtcManager @Inject constructor(
     }
 
     private fun createLatencyVideoSink(): VideoSink = VideoSink { frame -> onFrameRendered(frame) }
+
+    private fun disableNativeLatencySink(reason: String) {
+        if (!nativeLatencySinkEnabled) return
+        nativeLatencySinkEnabled = false
+        nativeLatencyLastUpdateElapsedMs.set(0L)
+        latencyNativeSink.release()
+        Log.e(TAG, "Latency[C-disable]: $reason")
+    }
 
     private fun deliverMatchedFrameNative(
         frameNativeMatched: FrameNativeMatchStore.MatchedSample,
@@ -678,37 +701,48 @@ class WebRtcManager @Inject constructor(
                     Log.d(TAG, "onTrack からリモート映像トラックを取得: ${track.id()}")
                     track.setEnabled(true)
                     track.addSink(latencyVideoSink)
-                    Log.d(TAG, "Latency[C-attach]: attaching LatencyNativeSink to track id=${track.id()}")
-                    latencyNativeSink.attachToTrack(track, LatencyNativeSink.Callback { status, captureUnixMs, timestampUs ->
-                        val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
-                        nativeLatencyLastUpdateElapsedMs.set(nowElapsedMs)
 
-                        if (status != CAPTURE_STATUS_OK) {
-                            val failCount = nativeExtractFailCount.incrementAndGet()
-                            if (failCount <= 5 || failCount % 120 == 1L) {
-                                Log.w(
-                                    TAG,
-                                    "Latency[C-native-skip]: status=${captureStatusToLabel(status)}($status) frameTsUs=$timestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} fail=$failCount ok=${nativeExtractOkCount.get()}"
+                    if (nativeLatencySinkEnabled) {
+                        Log.d(TAG, "Latency[C-attach]: attaching LatencyNativeSink to track id=${track.id()}")
+                        val attached = latencyNativeSink.attachToTrack(
+                            track,
+                            LatencyNativeSink.Callback { status, captureUnixMs, timestampUs ->
+                                val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+                                nativeLatencyLastUpdateElapsedMs.set(nowElapsedMs)
+
+                                if (status != CAPTURE_STATUS_OK) {
+                                    val failCount = nativeExtractFailCount.incrementAndGet()
+                                    if (failCount <= 5 || failCount % 120 == 1L) {
+                                        Log.w(
+                                            TAG,
+                                            "Latency[C-native-skip]: status=${captureStatusToLabel(status)}($status) frameTsUs=$timestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} fail=$failCount ok=${nativeExtractOkCount.get()}"
+                                        )
+                                    }
+                                    return@Callback
+                                }
+
+                                nativeExtractOkCount.incrementAndGet()
+                                val frameNativeMatched = frameNativeMatchStore.offerNative(
+                                    captureUnixMs = captureUnixMs,
+                                    timestampUs = timestampUs,
+                                    receivedElapsedMs = nowElapsedMs
                                 )
+                                if (frameNativeMatched != null) {
+                                    deliverMatchedFrameNative(frameNativeMatched, nowElapsedMs)
+                                } else if (nativeLogCount.incrementAndGet() % 120 == 1) {
+                                    Log.d(
+                                        TAG,
+                                        "Latency[C-native-pending]: frame sample not matched yet captureUnixMs=$captureUnixMs frameTsUs=$timestampUs framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()}"
+                                    )
+                                }
                             }
-                            return@Callback
-                        }
-
-                        nativeExtractOkCount.incrementAndGet()
-                        val frameNativeMatched = frameNativeMatchStore.offerNative(
-                            captureUnixMs = captureUnixMs,
-                            timestampUs = timestampUs,
-                            receivedElapsedMs = nowElapsedMs
                         )
-                        if (frameNativeMatched != null) {
-                            deliverMatchedFrameNative(frameNativeMatched, nowElapsedMs)
-                        } else if (nativeLogCount.incrementAndGet() % 120 == 1) {
-                            Log.d(
-                                TAG,
-                                "Latency[C-native-pending]: frame sample not matched yet captureUnixMs=$captureUnixMs frameTsUs=$timestampUs framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()}"
-                            )
+                        if (!attached) {
+                            disableNativeLatencySink("failed to attach native sink to video track id=${track.id()}")
                         }
-                    })
+                    } else {
+                        Log.d(TAG, "Latency[C-attach-skip]: native sink disabled, skipping native attach")
+                    }
                     _remoteVideoTrack.value = track
                 } else if (track is AudioTrack) {
                     Log.d(TAG, "onTrack からリモート音声トラックを取得: ${track.id()}")

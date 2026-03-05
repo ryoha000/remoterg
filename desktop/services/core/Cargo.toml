@@ -8,6 +8,8 @@ serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["sync"] }
 anyhow = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
 
 
 

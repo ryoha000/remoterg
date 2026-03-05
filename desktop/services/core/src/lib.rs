@@ -440,6 +440,45 @@ pub enum OutgoingDataChannelMessage {
     Binary(Vec<u8>),
 }
 
+#[cfg(test)]
+mod tests {
+    use super::DataChannelMessage;
+
+    #[test]
+    fn sync_res_json_roundtrip_without_unix_anchor_fields() {
+        let msg = DataChannelMessage::SyncRes {
+            seq: 7,
+            c1: 10.0,
+            s2: 20.0,
+            s3: 21.0,
+        };
+
+        let json = serde_json::to_string(&msg).expect("serialize sync_res");
+        assert!(json.contains("\"seq\":7"));
+        assert!(json.contains("\"c1\":10.0"));
+        assert!(json.contains("\"s2\":20.0"));
+        assert!(json.contains("\"s3\":21.0"));
+        assert!(!json.contains("u2_ms"));
+        assert!(!json.contains("u3_ms"));
+
+        let decoded: DataChannelMessage = serde_json::from_str(&json).expect("deserialize sync_res");
+        match decoded {
+            DataChannelMessage::SyncRes {
+                seq,
+                c1,
+                s2,
+                s3,
+            } => {
+                assert_eq!(seq, 7);
+                assert_eq!(c1, 10.0);
+                assert_eq!(s2, 20.0);
+                assert_eq!(s3, 21.0);
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+}
+
 /// Capture 実装の共通トレイト
 pub trait CaptureBackend: Send {
     fn new(frame_tx: CaptureFrameSender, command_rx: CaptureCommandReceiver) -> Self

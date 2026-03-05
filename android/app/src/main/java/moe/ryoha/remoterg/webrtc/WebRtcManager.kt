@@ -32,7 +32,6 @@ import org.webrtc.AudioTrack
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 import org.json.JSONObject
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -102,30 +101,17 @@ class WebRtcManager @Inject constructor(
     private var preferredCodec: String = "h264"
 
     // E2E latency measurement (LATENCY_MEASUREMENT.md)
-    private val latencyOffsetEst = AtomicReference<Double?>(null)
+    private val offsetEstMonoMs = AtomicReference<Double?>(null)
     private val lastLatencyMs = AtomicInteger(0)
     private val nativeLatencyLastUpdateElapsedMs = AtomicLong(0L)
-    private val lastNativeCaptureUnixMs = AtomicLong(0L)
-    private val frameSampleQueue = ConcurrentLinkedQueue<FrameSample>()
-    private data class FrameSample(
-        val seq: Long,
-        val frameId: Long,
-        val tCap: Double,
-        val tEncIn: Double,
-        val tEncOut: Double,
-        val tSend: Double,
-        val captureUnixMs: Long,
-        val receivedUnixMs: Long,
-        val receivedElapsedMs: Long
-    )
     private data class NativeCaptureSample(
         val timestampUs: Long,
-        val captureUnixMs: Long,
+        val tCapClientMonoMs: Double,
         val receivedElapsedMs: Long
     )
     private data class RenderFrameSample(
         val timestampUs: Long,
-        val renderUnixMs: Long,
+        val tRenderClientMonoMs: Double,
         val receivedElapsedMs: Long
     )
     private class NativeRenderMatchStore(
@@ -134,8 +120,8 @@ class WebRtcManager @Inject constructor(
     ) {
         data class MatchedCapture(
             val timestampUs: Long,
-            val captureUnixMs: Long,
-            val renderUnixMs: Long,
+            val tCapClientMonoMs: Double,
+            val tRenderClientMonoMs: Double,
             val nativePendingAfterMatch: Int,
             val renderPendingAfterMatch: Int
         )
@@ -150,8 +136,8 @@ class WebRtcManager @Inject constructor(
             if (pendingRender != null) {
                 return MatchedCapture(
                     timestampUs = sample.timestampUs,
-                    captureUnixMs = sample.captureUnixMs,
-                    renderUnixMs = pendingRender.renderUnixMs,
+                    tCapClientMonoMs = sample.tCapClientMonoMs,
+                    tRenderClientMonoMs = pendingRender.tRenderClientMonoMs,
                     nativePendingAfterMatch = nativeByTimestamp.size,
                     renderPendingAfterMatch = renderByTimestamp.size
                 )
@@ -167,8 +153,8 @@ class WebRtcManager @Inject constructor(
             if (pendingNative != null) {
                 return MatchedCapture(
                     timestampUs = sample.timestampUs,
-                    captureUnixMs = pendingNative.captureUnixMs,
-                    renderUnixMs = sample.renderUnixMs,
+                    tCapClientMonoMs = pendingNative.tCapClientMonoMs,
+                    tRenderClientMonoMs = sample.tRenderClientMonoMs,
                     nativePendingAfterMatch = nativeByTimestamp.size,
                     renderPendingAfterMatch = renderByTimestamp.size
                 )
@@ -218,22 +204,18 @@ class WebRtcManager @Inject constructor(
     }
     private var syncSeq = 0
     private val syncSamples = mutableListOf<SyncSample>()
-    private data class SyncSample(val rtt: Double, val offset: Double)
+    private data class SyncSample(val rtt: Double, val offsetMonoMs: Double)
     private var latencySyncJob: kotlinx.coroutines.Job? = null
     private val latencyVideoSink: VideoSink by lazy { createLatencyVideoSink() }
     private val captureTimeStore = CaptureTimeStore()
+    private val frameNativeMatchStore = FrameNativeMatchStore()
     private val nativeRenderMatchStore = NativeRenderMatchStore()
     private val latencyNativeSink = LatencyNativeSink()
 
-    // WebRTC の VideoFrame.timestampNs (monotonic) と tCap の紐付け用オフセット（方法B フォールバック用）
-    private var timestampToTCapOffsetMs: Double? = null
     private val frameSampleLogCount = AtomicInteger(0)
     private val nativeLogCount = AtomicInteger(0)
     private val nativeMissingLogCount = AtomicInteger(0)
-    private val nativeClockAheadEstimateMs = AtomicLong(0L)
-    private val nativeClockAheadLastUpdateElapsedMs = AtomicLong(0L)
-    private val lastNativeCallbackE2eMs = AtomicInteger(0)
-    private val lastNativeCallbackUpdateElapsedMs = AtomicLong(0L)
+    private val syncEstimateLogCount = AtomicInteger(0)
     private val nativeExtractOkCount = AtomicLong(0L)
     private val nativeExtractFailCount = AtomicLong(0L)
 
@@ -270,74 +252,67 @@ class WebRtcManager @Inject constructor(
         latencySyncJob = null
         latencyNativeSink.detach()
         nativeLatencyLastUpdateElapsedMs.set(0L)
-        lastNativeCaptureUnixMs.set(0L)
-        nativeClockAheadEstimateMs.set(0L)
-        nativeClockAheadLastUpdateElapsedMs.set(0L)
-        lastNativeCallbackE2eMs.set(0)
-        lastNativeCallbackUpdateElapsedMs.set(0L)
-        latencyOffsetEst.set(null)
+        offsetEstMonoMs.set(null)
         syncSamples.clear()
-        frameSampleQueue.clear()
+        frameNativeMatchStore.clear()
         captureTimeStore.clear()
         nativeRenderMatchStore.clear()
         nativeExtractOkCount.set(0L)
         nativeExtractFailCount.set(0L)
         lastLatencyMs.set(0)
-        timestampToTCapOffsetMs = null
     }
 
     private fun handleSyncRes(seq: Int, c1: Double, s2: Double, s3: Double) {
         val c4 = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000.0
-        val rtt = (c4 - c1) - (s3 - s2)
-        val offset = ((s2 - c1) + (s3 - c4)) / 2.0
+        val derived = LatencyMonotonicMath.deriveSyncSample(
+            c1 = c1,
+            s2 = s2,
+            s3 = s3,
+            c4 = c4
+        )
         synchronized(syncSamples) {
-            syncSamples.add(SyncSample(rtt, offset))
+            syncSamples.add(
+                SyncSample(
+                    rtt = derived.rttMs,
+                    offsetMonoMs = derived.offsetMonoMs
+                )
+            )
             if (syncSamples.size > 100) syncSamples.removeAt(0)
             val sorted = syncSamples.sortedBy { it.rtt }
             val topCount = (sorted.size * 0.25).toInt().coerceAtLeast(1)
             val adopted = sorted.take(topCount)
-            val medianOffset = adopted.map { it.offset }.sorted().let {
-                if (it.isEmpty()) 0.0 else it[it.size / 2]
-            }
-            val old = latencyOffsetEst.get()
+            val medianOffsetMono = LatencyMonotonicMath.median(adopted.map { it.offsetMonoMs })
             val alpha = 0.1
-            val newEst = if (old == null) medianOffset else alpha * medianOffset + (1 - alpha) * old
-            latencyOffsetEst.set(newEst)
+            val nextOffsetMono =
+                LatencyMonotonicMath.smoothEstimate(offsetEstMonoMs.get(), medianOffsetMono, alpha)
+            offsetEstMonoMs.set(nextOffsetMono)
+
+            val logCount = syncEstimateLogCount.incrementAndGet()
+            if (logCount <= 5 || logCount % 30 == 1) {
+                Log.d(
+                    TAG,
+                    "Latency[sync]: seq=$seq samples=${syncSamples.size} top=$topCount rtt=${derived.rttMs}ms offsetMono=${nextOffsetMono}ms"
+                )
+            }
         }
     }
 
     private fun handleFrameSample(seq: Long, frameId: Long, tCap: Double, tEncIn: Double, tEncOut: Double, tSend: Double, captureUnixMs: Long) {
-        val nowUnixMs = System.currentTimeMillis()
         val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
-        frameSampleQueue.offer(
-            FrameSample(
-                seq = seq,
-                frameId = frameId,
-                tCap = tCap,
-                tEncIn = tEncIn,
-                tEncOut = tEncOut,
-                tSend = tSend,
-                captureUnixMs = captureUnixMs,
-                receivedUnixMs = nowUnixMs,
-                receivedElapsedMs = nowElapsedMs
-            )
+        val frameNativeMatched = frameNativeMatchStore.offerFrame(
+            captureUnixMs = captureUnixMs,
+            tCapHostdMonoMs = tCap,
+            receivedElapsedMs = nowElapsedMs
         )
-        while (frameSampleQueue.size > 60) frameSampleQueue.poll()
+        if (frameNativeMatched != null) {
+            deliverMatchedFrameNative(frameNativeMatched, nowElapsedMs)
+        }
 
         val logCount = frameSampleLogCount.incrementAndGet()
-        val msgLagMs = if (captureUnixMs > 0) nowUnixMs - captureUnixMs else Long.MIN_VALUE
-        val nativeUpdatedAt = nativeLatencyLastUpdateElapsedMs.get()
-        val nativeActive =
-            nativeUpdatedAt > 0L && (android.os.SystemClock.elapsedRealtime() - nativeUpdatedAt) in 0..1500L
-        if (captureUnixMs > nowUnixMs + 5 && !nativeActive) {
-            Log.w(
-                TAG,
-                "Latency[frame_sample-future]: seq=$seq frameId=$frameId captureUnixMs=$captureUnixMs nowUnixMs=$nowUnixMs msgLagMs=$msgLagMs queue=${frameSampleQueue.size}"
-            )
-        } else if (logCount % 120 == 1) {
+        if (logCount % 120 == 1) {
             Log.d(
                 TAG,
-                "Latency[frame_sample]: seq=$seq frameId=$frameId captureUnixMs=$captureUnixMs nowUnixMs=$nowUnixMs msgLagMs=$msgLagMs queue=${frameSampleQueue.size}"
+                "Latency[frame_sample]: seq=$seq frameId=$frameId tCap=$tCap tEncIn=$tEncIn tEncOut=$tEncOut tSend=$tSend captureUnixMs=$captureUnixMs framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()}"
             )
         }
     }
@@ -345,20 +320,20 @@ class WebRtcManager @Inject constructor(
     private var renderLogCount = 0
 
     private fun onFrameRendered(frame: org.webrtc.VideoFrame) {
-        val tRender = System.currentTimeMillis()
+        val tRenderClientMonoMs = android.os.SystemClock.elapsedRealtimeNanos() / 1_000_000.0
         val frameTimestampUs = frame.timestampNs / 1_000L
         val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
         renderLogCount++
         val shouldLog = renderLogCount % 90 == 1
 
-        // 方法C: Native sink の packet_infos.absolute_capture_time が直近で更新されている間はそれを優先
+        // Native sink の packet_infos.absolute_capture_time から復元した t_cap を優先
         val nativeUpdatedAt = nativeLatencyLastUpdateElapsedMs.get()
         if (nativeUpdatedAt == 0L && shouldLog) {
             val count = nativeMissingLogCount.incrementAndGet()
             if (count <= 5 || count % 30 == 1) {
                 Log.w(
                     TAG,
-                    "Latency[C-missing]: native packet_infos callback not received yet, using fallback path queue=${frameSampleQueue.size}"
+                    "Latency[C-missing]: native callback not received yet framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()}"
                 )
             }
         }
@@ -368,22 +343,22 @@ class WebRtcManager @Inject constructor(
                 val matched = nativeRenderMatchStore.offerRender(
                     RenderFrameSample(
                         timestampUs = frameTimestampUs,
-                        renderUnixMs = tRender,
+                        tRenderClientMonoMs = tRenderClientMonoMs,
                         receivedElapsedMs = nowElapsedMs
                     )
                 )
                 if (matched != null) {
-                    val e2eMs = (matched.renderUnixMs - matched.captureUnixMs).toInt()
+                    val e2eMs = (matched.tRenderClientMonoMs - matched.tCapClientMonoMs).toInt()
                     if (e2eMs < 0) {
                         Log.w(
                             TAG,
-                            "Latency[C-negative]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} captureUnixMs=${matched.captureUnixMs} tRender=${matched.renderUnixMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} queue=${frameSampleQueue.size}"
+                            "Latency[C-negative]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} tCapClientMono=${matched.tCapClientMonoMs} tRenderClientMono=${matched.tRenderClientMonoMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} framePending=${frameNativeMatchStore.pendingFrameCount()}"
                         )
                     } else if (shouldLog) {
                         lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
                         Log.d(
                             TAG,
-                            "Latency[C]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} captureUnixMs=${matched.captureUnixMs} tRender=${matched.renderUnixMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} queue=${frameSampleQueue.size}"
+                            "Latency[C]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} tCapClientMono=${matched.tCapClientMonoMs} tRenderClientMono=${matched.tRenderClientMonoMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} framePending=${frameNativeMatchStore.pendingFrameCount()}"
                         )
                     } else {
                         lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
@@ -393,74 +368,65 @@ class WebRtcManager @Inject constructor(
                 if (shouldLog) {
                     Log.d(
                         TAG,
-                        "Latency[C-miss]: native active but no exact ts match frameTsUs=$frameTimestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} age=${ageMs}ms fallbackQueue=${frameSampleQueue.size}"
+                        "Latency[C-miss]: native active but no exact ts match frameTsUs=$frameTimestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} age=${ageMs}ms framePending=${frameNativeMatchStore.pendingFrameCount()}"
                     )
                 }
-                val callbackUpdatedAt = lastNativeCallbackUpdateElapsedMs.get()
-                if (callbackUpdatedAt > 0L &&
-                    nowElapsedMs - callbackUpdatedAt <= 1000L
-                ) {
-                    val provisionalMs = lastNativeCallbackE2eMs.get()
-                    if (provisionalMs > 0) {
-                        lastLatencyMs.set(provisionalMs.coerceIn(0, 9999))
-                    }
-                }
-                // Native 経路が生きている間は、不安定な A/B フォールバックで値を上書きしない。
+                // Native 経路が生きている間は、算出不能フレームを厳密スキップする。
                 return
             }
         }
 
-        // 方法A: Decoder の captureTimeNs（EncodedImage から、abs-capture-time 由来の可能性）
-        val captureTimeNsFromDecoder = captureTimeStore.pollCaptureTimeNs()
-        val captureUnixMsFromDecoder = captureTimeNsFromDecoder?.let { NtpUtils.captureTimeNsToUnixMs(it) }
-
-        if (captureUnixMsFromDecoder != null) {
-            val e2eMs = (tRender - captureUnixMsFromDecoder).toInt()
-            if (e2eMs >= 0) {
-                lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
-            }
-            frameSampleQueue.poll()
-            if (shouldLog) {
-                Log.d(
-                    TAG,
-                    "Latency[A]: e2e=${e2eMs}ms captureTimeNs=$captureTimeNsFromDecoder unixMs=$captureUnixMsFromDecoder tRender=$tRender queue=${frameSampleQueue.size}"
-                )
-            }
-            return
-        }
-
-        // 方法B（DataChannel frame_sample）にはフォールバックしない。
         if (shouldLog) {
-            Log.d(TAG, "Latency[skip-no-b]: C/A unavailable, keeping last latency value queue=${frameSampleQueue.size}")
+            Log.d(TAG, "Latency[C-skip]: native inactive, keeping last latency value framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()}")
         }
     }
 
     private fun createLatencyVideoSink(): VideoSink = VideoSink { frame -> onFrameRendered(frame) }
 
-    private fun updateNativeClockAheadEstimate(rawMsgLagMs: Long, nowElapsedMs: Long): Long {
-        val current = nativeClockAheadEstimateMs.get()
-        val lastUpdateMs = nativeClockAheadLastUpdateElapsedMs.get()
-        var next = current
-        if (rawMsgLagMs < -5L) {
-            val observedAheadMs = (-rawMsgLagMs).coerceIn(0L, 500L)
-            next = if (current <= 0L || observedAheadMs >= current) {
-                // future 側への観測値には素早く追従
-                current + ((observedAheadMs - current) * 3L) / 4L
-            } else {
-                // 小さい観測値にはゆっくり寄せる
-                current - ((current - observedAheadMs) / 20L)
+    private fun deliverMatchedFrameNative(
+        frameNativeMatched: FrameNativeMatchStore.MatchedSample,
+        nowElapsedMs: Long
+    ) {
+        val offsetMono = offsetEstMonoMs.get()
+        if (offsetMono == null) {
+            if (nativeLogCount.incrementAndGet() % 120 == 1) {
+                Log.w(
+                    TAG,
+                    "Latency[C-native-skip-sync]: sync estimate not ready frameTsUs=${frameNativeMatched.timestampUs} captureUnixMs=${frameNativeMatched.captureUnixMs}"
+                )
             }
-        } else if (current > 0L && lastUpdateMs > 0L && nowElapsedMs > lastUpdateMs) {
-            // 観測が future でない間は時間ベースでゆっくり減衰 (2ms/s)
-            val elapsedMs = nowElapsedMs - lastUpdateMs
-            val decay = (elapsedMs / 1000L) * 2L
-            if (decay > 0L) {
-                next = (current - decay).coerceAtLeast(0L)
+            return
+        }
+
+        val tCapClientMonoMs = LatencyMonotonicMath.hostdMonoToClientMonoMs(
+            tCapHostdMonoMs = frameNativeMatched.tCapHostdMonoMs,
+            offsetMonoMs = offsetMono
+        )
+        val matched = nativeRenderMatchStore.offerNative(
+            NativeCaptureSample(
+                timestampUs = frameNativeMatched.timestampUs,
+                tCapClientMonoMs = tCapClientMonoMs,
+                receivedElapsedMs = nowElapsedMs
+            )
+        )
+        if (matched != null) {
+            val e2eMs = (matched.tRenderClientMonoMs - matched.tCapClientMonoMs).toInt()
+            if (e2eMs >= 0) {
+                lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+            } else {
+                Log.w(
+                    TAG,
+                    "Latency[C-negative-native-first]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} tCapClientMono=${matched.tCapClientMonoMs} tRenderClientMono=${matched.tRenderClientMonoMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} framePending=${frameNativeMatchStore.pendingFrameCount()}"
+                )
             }
         }
-        nativeClockAheadEstimateMs.set(next)
-        nativeClockAheadLastUpdateElapsedMs.set(nowElapsedMs)
-        return next
+        val count = nativeLogCount.incrementAndGet()
+        if (count % 120 == 1) {
+            Log.d(
+                TAG,
+                "Latency[C-native]: captureUnixMs=${frameNativeMatched.captureUnixMs} tCapHostdMonoMs=${frameNativeMatched.tCapHostdMonoMs} tCapClientMonoMs=$tCapClientMonoMs offsetMonoMs=$offsetMono framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()}"
+            )
+        }
     }
 
     private fun handleLatencyMessage(text: String): Boolean {
@@ -716,44 +682,17 @@ class WebRtcManager @Inject constructor(
                         }
 
                         nativeExtractOkCount.incrementAndGet()
-                        val nowUnixMs = System.currentTimeMillis()
-                        val rawMsgLagMs = nowUnixMs - captureUnixMs
-                        val aheadEstimateMs = updateNativeClockAheadEstimate(rawMsgLagMs, nowElapsedMs)
-                        val correctedCaptureUnixMs = captureUnixMs - aheadEstimateMs
-                        val correctedMsgLagMs = nowUnixMs - correctedCaptureUnixMs
-                        if (correctedMsgLagMs >= 0L) {
-                            lastNativeCallbackE2eMs.set(correctedMsgLagMs.toInt().coerceIn(0, 9999))
-                            lastNativeCallbackUpdateElapsedMs.set(nowElapsedMs)
-                        }
-                        lastNativeCaptureUnixMs.set(correctedCaptureUnixMs)
-                        val matched = nativeRenderMatchStore.offerNative(
-                            NativeCaptureSample(
-                                timestampUs = timestampUs,
-                                captureUnixMs = correctedCaptureUnixMs,
-                                receivedElapsedMs = nowElapsedMs
-                            )
+                        val frameNativeMatched = frameNativeMatchStore.offerNative(
+                            captureUnixMs = captureUnixMs,
+                            timestampUs = timestampUs,
+                            receivedElapsedMs = nowElapsedMs
                         )
-                        if (matched != null) {
-                            val e2eMs = (matched.renderUnixMs - matched.captureUnixMs).toInt()
-                            if (e2eMs >= 0) {
-                                lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
-                            } else {
-                                Log.w(
-                                    TAG,
-                                    "Latency[C-negative-native-first]: e2e=${e2eMs}ms frameTsUs=${matched.timestampUs} captureUnixMs=${matched.captureUnixMs} tRender=${matched.renderUnixMs} nativePending=${matched.nativePendingAfterMatch} renderPending=${matched.renderPendingAfterMatch} queue=${frameSampleQueue.size}"
-                                )
-                            }
-                        }
-                        val count = nativeLogCount.incrementAndGet()
-                        if (correctedMsgLagMs < -20) {
-                            Log.w(
-                                TAG,
-                                "Latency[C-native-future]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} queue=${frameSampleQueue.size}"
-                            )
-                        } else if (count % 120 == 1) {
+                        if (frameNativeMatched != null) {
+                            deliverMatchedFrameNative(frameNativeMatched, nowElapsedMs)
+                        } else if (nativeLogCount.incrementAndGet() % 120 == 1) {
                             Log.d(
                                 TAG,
-                                "Latency[C-native]: rawCaptureUnixMs=$captureUnixMs correctedCaptureUnixMs=$correctedCaptureUnixMs nowUnixMs=$nowUnixMs rawMsgLagMs=$rawMsgLagMs correctedMsgLagMs=$correctedMsgLagMs aheadEstimateMs=$aheadEstimateMs frameTsUs=$timestampUs nativePending=${nativeRenderMatchStore.nativePendingCount()} renderPending=${nativeRenderMatchStore.renderPendingCount()} queue=${frameSampleQueue.size}"
+                                "Latency[C-native-pending]: frame sample not matched yet captureUnixMs=$captureUnixMs frameTsUs=$timestampUs framePending=${frameNativeMatchStore.pendingFrameCount()} nativePending=${frameNativeMatchStore.pendingNativeCount()}"
                             )
                         }
                     })
@@ -996,7 +935,6 @@ class WebRtcManager @Inject constructor(
         private const val CAPTURE_STATUS_NO_PACKET_INFOS = 1
         private const val CAPTURE_STATUS_NO_ABS_CAPTURE_TIME = 2
         private const val CAPTURE_STATUS_OUT_OF_RANGE = 3
-        private const val CAPTURE_STATUS_NO_LOCAL_CAPTURE_CLOCK_OFFSET = 4
     }
 
     private fun captureStatusToLabel(status: Int): String {
@@ -1005,7 +943,6 @@ class WebRtcManager @Inject constructor(
             CAPTURE_STATUS_NO_PACKET_INFOS -> "no_packet_infos"
             CAPTURE_STATUS_NO_ABS_CAPTURE_TIME -> "no_abs_capture_time"
             CAPTURE_STATUS_OUT_OF_RANGE -> "out_of_range"
-            CAPTURE_STATUS_NO_LOCAL_CAPTURE_CLOCK_OFFSET -> "no_local_capture_clock_offset"
             else -> "unknown"
         }
     }

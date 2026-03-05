@@ -34,7 +34,6 @@ enum class ExtractStatus : int {
   kNoPacketInfos = 1,
   kNoAbsoluteCaptureTime = 2,
   kOutOfRange = 3,
-  kNoLocalCaptureClockOffset = 4,
 };
 
 struct ExtractResult {
@@ -42,9 +41,6 @@ struct ExtractResult {
   ExtractStatus status = ExtractStatus::kNoPacketInfos;
   size_t packet_info_count = 0;
   size_t packet_info_index = 0;
-  bool used_local_offset = false;
-  bool reused_cached_local_offset = false;
-  int64_t local_offset_ms = 0;
   int64_t capture_ntp_ms = 0;
   int64_t capture_unix_ms = 0;
   int64_t timestamp_us = 0;
@@ -101,9 +97,7 @@ JNIEnv* GetEnvForCurrentThread() {
   return nullptr;
 }
 
-ExtractResult ExtractCaptureTimeFromFrame(const webrtc::VideoFrame& frame,
-                                          bool has_cached_local_offset,
-                                          int64_t cached_local_offset_ms) {
+ExtractResult ExtractCaptureTimeFromFrame(const webrtc::VideoFrame& frame) {
   ExtractResult result;
   result.timestamp_us = frame.timestamp_us();
 
@@ -115,7 +109,6 @@ ExtractResult ExtractCaptureTimeFromFrame(const webrtc::VideoFrame& frame,
   }
 
   bool saw_absolute_capture_time = false;
-  bool saw_missing_local_offset = false;
   bool saw_out_of_range = false;
   for (size_t i = 0; i < infos.size(); ++i) {
     const auto& info = infos[i];
@@ -125,31 +118,9 @@ ExtractResult ExtractCaptureTimeFromFrame(const webrtc::VideoFrame& frame,
     }
     saw_absolute_capture_time = true;
 
-    int64_t capture_ntp_ms = ntp_uq32_to_ms(act->absolute_capture_timestamp);
-    int64_t local_offset_ms = 0;
-    bool used_local_offset = false;
-    bool reused_cached_local_offset = false;
-    const auto& local_offset = info.local_capture_clock_offset();
-    if (local_offset.has_value()) {
-      local_offset_ms = local_offset->ms();
-      used_local_offset = true;
-    } else if (has_cached_local_offset) {
-      local_offset_ms = cached_local_offset_ms;
-      used_local_offset = true;
-      reused_cached_local_offset = true;
-      saw_missing_local_offset = true;
-    } else {
-      // local_capture_clock_offset が無い環境では、raw absolute_capture_timestamp
-      // （capture 側 NTP 時計）をそのまま利用して計測を継続する。
-      // 後段ログで offset_applied=0 として可視化する。
-      local_offset_ms = 0;
-      used_local_offset = false;
-      reused_cached_local_offset = false;
-      saw_missing_local_offset = true;
-    }
-    int64_t capture_local_ntp_ms = capture_ntp_ms + local_offset_ms;
+    const int64_t capture_ntp_ms = ntp_uq32_to_ms(act->absolute_capture_timestamp);
 
-    const int64_t capture_unix_ms = ntp_ms_to_unix_ms(capture_local_ntp_ms);
+    const int64_t capture_unix_ms = ntp_ms_to_unix_ms(capture_ntp_ms);
     if (!is_unix_plausible(capture_unix_ms)) {
       saw_out_of_range = true;
       continue;
@@ -158,18 +129,13 @@ ExtractResult ExtractCaptureTimeFromFrame(const webrtc::VideoFrame& frame,
     result.ok = true;
     result.status = ExtractStatus::kOk;
     result.packet_info_index = i;
-    result.used_local_offset = used_local_offset;
-    result.reused_cached_local_offset = reused_cached_local_offset;
-    result.local_offset_ms = local_offset_ms;
-    result.capture_ntp_ms = capture_local_ntp_ms;
+    result.capture_ntp_ms = capture_ntp_ms;
     result.capture_unix_ms = capture_unix_ms;
     return result;
   }
 
   if (!saw_absolute_capture_time) {
     result.status = ExtractStatus::kNoAbsoluteCaptureTime;
-  } else if (saw_missing_local_offset) {
-    result.status = ExtractStatus::kNoLocalCaptureClockOffset;
   } else if (saw_out_of_range) {
     result.status = ExtractStatus::kOutOfRange;
   } else {
@@ -246,12 +212,7 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
     }
 
     const uint64_t frame_no = frame_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-    const bool has_cached_local_offset =
-        has_last_local_offset_.load(std::memory_order_relaxed) != 0;
-    const int64_t cached_local_offset_ms =
-        last_local_offset_ms_.load(std::memory_order_relaxed);
-    const ExtractResult extract = ExtractCaptureTimeFromFrame(
-        frame, has_cached_local_offset, cached_local_offset_ms);
+    const ExtractResult extract = ExtractCaptureTimeFromFrame(frame);
     if (!extract.ok) {
       const uint64_t fail_count =
           extract_fail_count_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -262,10 +223,6 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
         case ExtractStatus::kNoAbsoluteCaptureTime:
           extract_no_abs_capture_time_count_.fetch_add(1, std::memory_order_relaxed);
           break;
-        case ExtractStatus::kNoLocalCaptureClockOffset:
-          extract_no_local_capture_clock_offset_count_.fetch_add(
-              1, std::memory_order_relaxed);
-          break;
         case ExtractStatus::kOutOfRange:
           extract_out_of_range_count_.fetch_add(1, std::memory_order_relaxed);
           break;
@@ -275,7 +232,7 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 
       if (fail_count <= 5 || frame_no % kFrameLogInterval == 1) {
         LOGW(
-            "ACT skip frame=%llu status=%d success=%llu fail=%llu no_infos=%llu no_act=%llu no_local_offset=%llu out_of_range=%llu infos=%zu timestamp_us=%lld",
+            "ACT skip frame=%llu status=%d success=%llu fail=%llu no_infos=%llu no_act=%llu out_of_range=%llu infos=%zu timestamp_us=%lld",
             static_cast<unsigned long long>(frame_no),
             static_cast<int>(extract.status),
             static_cast<unsigned long long>(
@@ -285,8 +242,6 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
                 extract_no_packet_infos_count_.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(
                 extract_no_abs_capture_time_count_.load(std::memory_order_relaxed)),
-            static_cast<unsigned long long>(extract_no_local_capture_clock_offset_count_.load(
-                std::memory_order_relaxed)),
             static_cast<unsigned long long>(
                 extract_out_of_range_count_.load(std::memory_order_relaxed)),
             extract.packet_info_count,
@@ -298,30 +253,16 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
 
     const uint64_t success_count =
         extract_success_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (extract.used_local_offset && !extract.reused_cached_local_offset) {
-      last_local_offset_ms_.store(extract.local_offset_ms, std::memory_order_relaxed);
-      has_last_local_offset_.store(1, std::memory_order_relaxed);
-    }
-    if (extract.reused_cached_local_offset) {
-      extract_reused_cached_local_offset_count_.fetch_add(
-          1, std::memory_order_relaxed);
-    }
     if (success_count <= 5 || frame_no % kFrameLogInterval == 1) {
       LOGD(
-          "ACT frame=%llu success=%llu info_index=%zu infos=%zu capture_ntp_ms=%lld offset_applied=%d offset_cached=%d offset_ms=%lld capture_unix_ms=%lld timestamp_us=%lld reuse_count=%llu",
+          "ACT frame=%llu success=%llu info_index=%zu infos=%zu capture_ntp_ms=%lld capture_unix_ms=%lld timestamp_us=%lld",
           static_cast<unsigned long long>(frame_no),
           static_cast<unsigned long long>(success_count),
           extract.packet_info_index,
           extract.packet_info_count,
           static_cast<long long>(extract.capture_ntp_ms),
-          extract.used_local_offset ? 1 : 0,
-          extract.reused_cached_local_offset ? 1 : 0,
-          static_cast<long long>(extract.local_offset_ms),
           static_cast<long long>(extract.capture_unix_ms),
-          static_cast<long long>(extract.timestamp_us),
-          static_cast<unsigned long long>(
-              extract_reused_cached_local_offset_count_.load(
-                  std::memory_order_relaxed)));
+          static_cast<long long>(extract.timestamp_us));
     }
 
     CallJava(ExtractStatus::kOk, extract.capture_unix_ms, extract.timestamp_us);
@@ -368,11 +309,7 @@ class LatencyVideoSink : public rtc::VideoSinkInterface<webrtc::VideoFrame> {
   std::atomic<uint64_t> extract_fail_count_{0};
   std::atomic<uint64_t> extract_no_packet_infos_count_{0};
   std::atomic<uint64_t> extract_no_abs_capture_time_count_{0};
-  std::atomic<uint64_t> extract_no_local_capture_clock_offset_count_{0};
   std::atomic<uint64_t> extract_out_of_range_count_{0};
-  std::atomic<uint64_t> extract_reused_cached_local_offset_count_{0};
-  std::atomic<int64_t> last_local_offset_ms_{0};
-  std::atomic<uint8_t> has_last_local_offset_{0};
   std::mutex callback_mutex_;
 };
 

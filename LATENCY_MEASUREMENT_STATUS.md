@@ -424,3 +424,60 @@ Latency[C-native-future]: ... correctedMsgLagMs=-28 ...
 - `C-miss` は「瞬間的に render 先着で未一致」の状態を示すだけで、TTL破棄を意味しない
 - `C-negative-native-first` と `C-native-future` が同時に出るケースは、主に**capture時計補正（aheadEstimate）不足**で説明できる
   - すなわち、突合ロジックよりも「`captureUnixMs` の基準補正」の調整が次の主課題
+
+## 追加更新（2026-03-06）
+
+### 方針転換: `local_capture_clock_offset` をアプリ測定系から除外
+
+議論の結果、計測値の基準を明確化するため、アプリ側の E2E 算出から `local_capture_clock_offset` 依存を外した。
+
+- 採用した基準:
+  - `t_cap` は `frame_sample.t_cap`（hostd monotonic）を正とする
+  - client 側への換算は DataChannel 同期で得る `offsetMonoMs` のみを使う
+- 連結経路:
+  - `frame_sample.capture_unix_ms` ↔ native callback `captureUnixMs`（完全一致）
+  - native callback `timestampUs` ↔ render `timestampUs`（完全一致）
+
+### 実装変更（今回）
+
+1. **`sync_res` 拡張のロールバック**
+   - `u2_ms/u3_ms` を削除し、`c1/s2/s3` のみへ戻した
+   - `offsetMonoMs` 推定は従来式のみで継続
+
+2. **Android: 3点結合フローへ変更**
+   - `FrameNativeMatchStore` を追加（`capture_unix_ms` キー、TTL管理）
+   - `frame_sample` と native callback を先に突合して `t_cap` を確定
+   - 確定した `t_cap` と native `timestampUs` を既存 `NativeRenderMatchStore` に流し、render 側で `timestampUs` 完全一致
+   - E2E は
+     - `t_cap_client = t_cap - offsetMonoMs`
+     - `E2E = t_render_client_mono - t_cap_client`
+     で更新
+
+3. **C++ JNI: raw ACT timestamp 基準へ統一**
+   - `captureUnixMs` 生成時の `local_capture_clock_offset` 加算を廃止
+   - `no_local_capture_clock_offset` 由来の分岐・統計を削除
+   - 抽出ステータスは `ok / no_packet_infos / no_abs_capture_time / out_of_range` のみ
+
+### 現時点の意味づけ
+
+- `local_capture_clock_offset` は libwebrtc 内部で有用な情報だが、**本アプリの測定計算には使わない**方針に整理
+- ACT はフレーム同定（`frame_sample` と native の連結）用途として利用
+- `t_cap` 自体は hostd が送る monotonic 値（`frame_sample.t_cap`）を採用
+
+### ビルド・テスト結果（この更新）
+
+- Rust:
+  - `cargo test -p core-types` 成功
+  - `cargo check -p webrtc@0.1.0` 成功
+- Android:
+  - `.\gradlew.bat :app:testDebugUnitTest` 成功
+  - `.\gradlew.bat :app:externalNativeBuildDebug` 成功
+
+### 追加したテスト
+
+- `LatencyMonotonicMathTest`:
+  - `offsetMonoMs` 推定式（RTT/offset）
+  - `t_cap_hostd_mono -> t_cap_client_mono` 変換
+- `FrameNativeMatchStoreTest`:
+  - frame先着 / native先着の両ケース
+  - TTL eviction の挙動

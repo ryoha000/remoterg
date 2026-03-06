@@ -10,7 +10,7 @@
 
 ## 1. 何を測りたかったのか
 
-本稿で測りたかったのは、送信側でキャプチャされたフレームが Android クライアントで表示されるまでの時間です。起点は送信側のキャプチャ時刻、終点は受信側の描画時刻です。ネットワークだけでなく、エンコード、伝送、デコード、描画までを含めた end-to-end の時間を対象にします。
+本稿で測りたかったのは、送信側でキャプチャされたフレームが Android クライアントで表示されるまでの時間です。起点は送信側のキャプチャ時刻、終点は受信側の描画時刻です。ただし厳密には、実画面への反映完了時刻ではなく、render callback が呼ばれた時刻を表示時刻の近似として用いています。ネットワークだけでなく、エンコード、伝送、デコード、描画までを含めた end-to-end の時間を対象にします。
 
 単純に考えれば、描画時刻からキャプチャ時刻を引くだけです。ただし実際に計測しようとすると、送信側のキャプチャ時刻と受信側の描画時刻はそのままでは比較できません。加えて、後述する Java API の問題によって、送信側で記録した時刻と受信側で観測したフレームを簡単に結び付けることもできません。計測を成立させるには、少なくとも次の 2 つの条件が必要です。
 
@@ -33,7 +33,7 @@
 
 素朴に考えると、Android 側で「いま描画されようとしているフレーム」を見つけて、そのフレームが送信側でいつキャプチャされたものなのかが分かれば十分に見えます。つまり、受信側で見えている 1 枚のフレームに対して、「いつのフレームなのか」と「いつ描画されたのか」を結び付けられればよさそうです。
 
-しかし、Android アプリケーションコードから見えているのは、libwebrtc の C++ 側で扱われているフレーム情報のうち、Java API へ公開されている部分だけです。今回ほしかった送信側のキャプチャ時刻に由来する情報は、その公開範囲には含まれていませんでした。
+しかし、Android アプリケーションコードから見えているのは、libwebrtc の C++ 側で扱われているフレーム情報のうち、Java API へ公開されている部分だけです。少なくとも今回利用していた Android 側の Java API（`org.webrtc.VideoFrame`）からは、`abs-capture-time` 由来の情報やそれに準ずる照合キーを直接取得できませんでした。
 
 つまり、Java 側では「いま描画されようとしているフレーム」は見えても、それが送信側でいつキャプチャされたフレームなのかまでは分かりません。そのため、フレーム同定を成立させるには、C++ 側で保持されているフレーム情報を取得できる、より下位の層を扱う必要がありました。
 
@@ -41,7 +41,7 @@
 
 ### 3.1 計測値が成立するまでの流れ
 
-この計測では、時計合わせとフレームの対応付けが別々に進み、最後に合流します。DataChannel だけでも RTP だけでも完結しません。そのため、先に「どの情報がどの経路を流れ、どこで同じフレームへ紐づくか」を全体図で示します。
+この計測では、時計合わせとフレームの対応付けが別々に進み、最後に合流します。DataChannel だけでも RTP だけでも完結しません。DataChannel だけでは実際に描画された映像フレームそのものを追えず、RTP / `VideoFrame` 側だけでは送信側 `CLOCK_MONOTONIC` と受信側 `CLOCK_MONOTONIC` の橋渡しができないためです。そのため、先に「どの情報がどの経路を流れ、どこで同じフレームへ紐づくか」を全体図で示します。
 
 ```mermaid
 flowchart LR
@@ -51,7 +51,7 @@ flowchart LR
         subgraph SenderDC["送信側 DataChannel 処理"]
             SDC1[時計合わせ要求を受信]
             SDC2[時計合わせ応答を返す]
-            SDC3[フレームメタデータを送信<br/>送信側 CLOCK_MONOTONIC のキャプチャ時刻 /<br/>abs-capture-time と同じ CLOCK_REALTIME 系の値]
+            SDC3[フレームメタデータを送信<br/>送信側 CLOCK_MONOTONIC のキャプチャ時刻 /<br/>abs-capture-time と同じ絶対時刻系の値]
         end
 
         subgraph SenderVideo["送信側 映像処理"]
@@ -77,7 +77,7 @@ flowchart LR
 
         subgraph ClientVideo["client 側 VideoFrame 取得"]
             CV1[計測用 VideoSink で<br/>C++ VideoFrame を取得]
-            CV2[abs-capture-time から<br/>CLOCK_REALTIME 系の値を取り出す]
+            CV2[abs-capture-time から<br/>絶対時刻系（NTP timestamp）の値を取り出す]
             CV3[VideoFrame.timestampUs から<br/>CLOCK_MONOTONIC 系の値を取り出す]
         end
 
@@ -120,24 +120,22 @@ flowchart LR
 
 ### 3.2 図の理解に必要な前提
 
-- `CLOCK_MONOTONIC` と `CLOCK_REALTIME` の違い
+- `CLOCK_MONOTONIC` と絶対時刻系（NTP timestamp）の違い
   - この図を読むうえで最も重要なのは、時間軸が 2 つあること。
-  - `CLOCK_REALTIME` は壁時計に近い時刻で、NTP などによって補正されうる。
-  - `CLOCK_MONOTONIC` は単調増加する経過時間用の時刻。
-  - レイテンシ計測の最終計算に向くのは `CLOCK_MONOTONIC`。
-  - 一方で、後述する `abs-capture-time` には絶対時刻系の値が載る仕様なので、送信フレーム照合では `CLOCK_REALTIME` 系の値を使っている。
+  - `CLOCK_MONOTONIC` は単調増加する経過時間用の時刻。レイテンシ計測の最終計算にはこちらを使う。
+  - 絶対時刻系（NTP timestamp）は壁時計に近い時刻体系であり、後述する `abs-capture-time` がこの時計系に基づく。実装上は OS の `CLOCK_REALTIME` から導いた値を使った。
+  - 本計測では、送信側でも `abs-capture-time` と同じ絶対時刻系の値をフレームメタデータとして保持し、受信側で照合に用いた。
 
 - `abs-capture-time` が何者か
   - `abs-capture-time` は RTP header extension。
-  - 送信側でそのフレームがいつキャプチャされたかに対応する絶対時刻系の情報を、RTP の映像パケットに載せて運ぶために使う。
-  - ここに入るのは絶対時刻系の値であり、送信フレーム照合では `CLOCK_REALTIME` 系の値として使える。
+  - 仕様上は、パケット内の最初の映像フレームが最初にキャプチャされた時点の NTP timestamp である。受信フレームの capture 時刻を推定するために使える絶対時刻系の情報として、本計測では送信フレーム照合に利用した。実装上は、送信側で `CLOCK_REALTIME` から導いた値を使った。
   - client 側で、C++ 側の `VideoFrame` を直接受け取る計測用 `VideoSink` を追加すると、この値に由来する情報を取り出せる。
-  - DataChannel で送るフレームメタデータにも、送信フレーム照合のためにこれと同じ `CLOCK_REALTIME` 系の値を含める。
+  - DataChannel で送るフレームメタデータにも、送信フレーム照合のためにこれと同じ絶対時刻系の値を含める。
 
 - DataChannel を何に使っているのか
   - DataChannel では 2 種類の情報をやり取りする。
   - ひとつは時計合わせメッセージの送受信。
-  - もうひとつは、送信側 `CLOCK_MONOTONIC` のキャプチャ時刻と、送信フレーム照合に使う `CLOCK_REALTIME` 系の値を含むフレームメタデータの受信。
+  - もうひとつは、送信側 `CLOCK_MONOTONIC` のキャプチャ時刻と、送信フレーム照合に使う絶対時刻系の値を含むフレームメタデータの受信。
 
 - 時計合わせ要求 / 応答で何を推定しているのか
   - sender と client は別マシンなので、両者の `CLOCK_MONOTONIC` はそのまま比較できない。
@@ -149,7 +147,7 @@ flowchart LR
   - フレーム照合は 2 段ある。
   - 送信フレーム照合
     - DataChannel で受け取ったフレームメタデータと、計測用 `VideoSink` で取得した `VideoFrame` を紐づける。
-    - ここで使うのは `abs-capture-time` と同じ `CLOCK_REALTIME` 系の値。
+    - ここで使うのは `abs-capture-time` と同じ絶対時刻系の値。
     - これにより、送信側 `CLOCK_MONOTONIC` のキャプチャ時刻を、その `VideoFrame` に紐づけられる。
   - 表示フレーム照合
     - 送信フレーム照合で紐づいた `VideoFrame` と render callback を紐づける。
@@ -161,12 +159,12 @@ flowchart LR
   - 今回のアプリでは、その `VideoTrack` に対して 2 つの経路を並行に持つ。
     - C++ 側で直接 `VideoFrame` を受け取る計測用 `VideoSink`
     - 既存の描画用 `VideoSink` から render callback へ進む経路
-  - 最後にこの 2 経路を表示フレーム照合で同じフレームへ紐づける。
+  - この 2 経路で同じ `timestampUs` を共有している前提で、最後に表示フレーム照合で同じフレームへ紐づける。
 
 - `VideoFrame.timestampUs` が何の時刻なのか
-  - `VideoFrame.timestampUs` は、client 側で受信後の `VideoFrame` に載っている時刻。
-  - 送信側のキャプチャ時刻そのものではなく、送信フレーム照合には使わない。
-  - この計測では、render callback 側の時刻と紐づけるための client 側 `CLOCK_MONOTONIC` 系のフレーム時刻になる。
+  - `VideoFrame.timestampUs` は、C++ API 上では単調時間系（`TimeMicros()` と同じ timebase）のタイムスタンプである。
+  - 送信側のキャプチャ時刻そのものではないため、送信フレーム照合には使わない。
+  - この計測では、`VideoFrame.timestampUs` を表示フレーム照合を行うためのキーとして利用した。
 
 ## 4. Java API の外で `VideoFrame` を取得する
 
@@ -174,7 +172,7 @@ flowchart LR
 
 第3章で整理したとおり、この計測を成立させるには 2 種類のキーが必要です。ひとつは DataChannel で届いたフレームメタデータと受信フレームを結び付けるための送信フレーム照合キー、もうひとつは受信フレームと render callback を結び付けるための表示フレーム照合キーです。
 
-後者については、Android アプリケーションコードから扱える `VideoFrame` や render callback の情報で足ります。しかし前者に必要な `abs-capture-time` 由来の値は、Java API からは直接取得できません。render callback 側で見えているのは、描画に進む段階のフレームであって、そのフレームが送信側でどの時刻にキャプチャされたものかを示す情報ではないためです。
+後者については、Android アプリケーションコードから扱える `VideoFrame` や render callback の情報で足ります。しかし前者に必要な `abs-capture-time` 由来の値は、少なくとも今回利用していた Android 側の Java API からは直接取得できませんでした。render callback 側で見えているのは、描画に進む段階のフレームであって、そのフレームが送信側でどの時刻にキャプチャされたものかを示す情報ではないためです。
 
 そのため、Java 側だけで計測を完結させる構成は取りませんでした。必要だったのは、受信した `VideoFrame` に対して、送信フレーム照合に使う値と、表示フレーム照合に使う `timestampUs` を同時に扱える場所です。今回の実装では、その役割を C++ 側の `OnFrame` に持たせました。
 
@@ -208,9 +206,9 @@ flowchart LR
 
 ここで扱っているのは、単純な値の受け渡しではありません。`libwebrtc` 側で生成された `VideoFrame` を `latency_sink` 側の `VideoSink` が受け取り、`packet_infos()` のような C++ のメソッドや内部構造へアクセスします。そのため、2 つのライブラリのあいだで、オブジェクトのメモリレイアウト、メソッド呼び出し規約、inline 関数の展開結果まで揃っている必要があります。この整合を取るために、CMake では参照する WebRTC ヘッダを明示し、自前のライブラリが `libwebrtc` と同じ型定義を前提にビルドされるようにしています。
 
-実際にも、`x86_64` のエミュレータでは動作した一方で、`ARM` 実機ではクラッシュしました。調査すると、`ARM` 側の `libwebrtc` は relative vtable ABI 前提で仮想関数を呼び出していましたが、当初の `latency_sink` はその前提でビルドされていませんでした。vtable 解釈が壊れ、不正アドレスへジャンプして `SIGSEGV` になっていました。
+実際にも、`x86_64` のエミュレータでは動作した一方で、`ARM` 実機ではクラッシュしました。調査の結果、`ARM` 側の `libwebrtc` が relative vtable ABI 前提で仮想関数を呼び出していたのに対し、当初の `latency_sink` はその前提でビルドされていなかったことが原因でした。この調査過程の詳細は付録 A に記載しています。
 
-そのため `ARM` 向けには `-fexperimental-relative-c++-abi-vtables` を有効にしました。これは `libwebrtc` と `latency_sink` のあいだで、vtable を使った仮想関数呼び出しの方式をそろえるためです。今回の修正ではこのフラグを `arm64-v8a` と `armeabi-v7a` にだけ付与し、実機で再現していたクラッシュを解消できました。
+修正として、`ARM` 向けには `-fexperimental-relative-c++-abi-vtables` を有効にしました。これは `libwebrtc` と `latency_sink` のあいだで、vtable を使った仮想関数呼び出しの方式をそろえるためです。この修正によって実機で再現していたクラッシュを解消できました。
 
 ## 5. まとめ
 
@@ -219,3 +217,45 @@ flowchart LR
 かなりニッチな話題ではありますが、似た計測系を設計するときなどで参考になれば幸いです。
 
 読んでいただきありがとうございます。
+
+---
+
+## 付録 A: ARM 実機クラッシュの調査過程
+
+第 4.3 節で、`ARM` 実機でのクラッシュは relative vtable ABI の不整合が原因だったと書きました。ここでは、どうやってその結論にたどり着いたかを補足します。
+
+### A.1 何が起きていたのか
+
+クラッシュするのは `ARM` 実機（`arm64`）だけで、`x86_64` のエミュレータでは問題なく動いていました。tombstone を見ると、状況は次のとおりでした。
+
+- 映像フレーム受信スレッド（`IncomingVideoSt`）で落ちている
+- Java/Kotlin 例外ではなく、ネイティブ領域の `SIGSEGV`
+- backtrace の中心は `libjingle_peerconnection_so.so`
+- `abiFilters` には `arm64-v8a` / `armeabi-v7a` / `x86_64` がすべて入っており、ARM 向け `.so` が欠落しているわけではない
+
+### A.2 relative vtable ABI だとどうやって分かったのか
+
+tombstone のクラッシュアドレスをもとに、`libjingle_peerconnection_so.so` の該当箇所を逆アセンブルしました。そこで目に入ったのが、仮想関数ディスパッチに `ldrsw` 命令が使われていたことです。
+
+ここで、2 つの vtable 形式の違いを簡単に整理します。
+
+- absolute vtable: vtable エントリに関数ポインタがそのまま入っている。`ldr` で読み出してジャンプする。
+- relative vtable: vtable エントリには「エントリ自身のアドレスから関数アドレスまでの 32-bit 相対オフセット」が入っている。`ldrsw`（符号拡張付き 32-bit ロード）でオフセットを読み、エントリのアドレスに加算して関数アドレスを求める。
+
+`ldrsw` を使った仮想関数ディスパッチと、後述する `use_relative_vtables_abi` のビルド条件、さらにリロケーション差分を合わせて考えると、`libjingle_peerconnection_so.so` 側が relative vtable 前提であるという解釈をしました。一方、`liblatency_sink.so` の vtable は absolute 形式のままだったため、そこには 64-bit の absolute アドレスが入っています。これを relative vtable 前提で `ldrsw` を使って下位 32-bit だけ符号拡張して読み出すと、まったく関係のないアドレスが計算されます。実際 tombstone に残っていたレジスタ値 `x9=0xffffffffa06860ac` はその符号拡張の結果で、ここへジャンプして `SIGSEGV` になっていました。
+
+修正後の裏付けとして、`llvm-readelf -r` で `liblatency_sink.so` を確認したところ、修正前にあった `LatencyVideoSink` の vtable 周りの `R_AARCH64_ABS64` リロケーションが消えていました。vtable が absolute から relative に切り替わったことが、ELF レベルでも確認できたということです。
+
+### A.3 なぜ `x86_64` では動いて `ARM` だけ壊れたのか
+
+`libwebrtc` のビルド設定で、relative vtable ABI が `ARM` ターゲットでのみ有効にされているためです。Chromium の [`build/config/compiler/compiler.gni`](https://chromium.googlesource.com/chromium/src/+/HEAD/build/config/compiler/compiler.gni) を見ると、`use_relative_vtables_abi` は次の条件で有効になります。
+
+```
+use_relative_vtables_abi =
+    is_fuchsia || (is_android && current_cpu == "arm64" &&
+                   use_custom_libcxx && !is_component_build)
+```
+
+`is_android && current_cpu == "arm64"` のときだけ対象であり、`x86_64` は含まれません。コメントには "reduce the number of relocations"（リロケーション数の削減）が目的と書かれています。
+
+そのため、`x86_64` では `libjingle_peerconnection_so.so` も `liblatency_sink.so` も absolute vtable で一致しており、食い違いが起きません。`ARM` だけ `libjingle_peerconnection_so.so` 側が relative vtable でビルドされていて、`liblatency_sink.so` はデフォルトの absolute vtable のままだったため、`ARM` でだけ問題になりました。

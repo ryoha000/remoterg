@@ -16,5 +16,11 @@ target_include_directories(latency_sink PRIVATE
 # unresolved debug check symbols from inline WebRTC headers.
 target_compile_definitions(latency_sink PRIVATE NDEBUG)
 
+# Keep C++ virtual dispatch ABI aligned with ARM WebRTC binaries that expect
+# relative vtable entries across the DSO boundary.
+if(ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_compile_options(latency_sink PRIVATE -fexperimental-relative-c++-abi-vtables)
+endif()
+
 find_library(log-lib log)
 target_link_libraries(latency_sink ${log-lib})

@@ -207,124 +207,66 @@ flowchart LR
 
 読むときは、まず時計合わせ（`CDC1`〜`CDC3`）、次にフレーム受信と照合（`SV1`〜`CDC5`, `CV1`〜`CV3`）、最後に描画との照合と最終計算（`CR1`〜`CC2`）の順に追うと分かりやすい。
 
-## 4. パイプラインの各段をどう実装したか
+## 4. Java API の外で `VideoFrame` を取得する
 
-### 4.1 時刻同期: DataChannel
-- 入力:
-  - 時計合わせ用の往復メッセージ
-- 出力:
-  - 送信側 `CLOCK_MONOTONIC` と client 側 `CLOCK_MONOTONIC` の時計差推定値
-- 保証:
-  - 送信側 `CLOCK_MONOTONIC` と Android 側 `CLOCK_MONOTONIC` を対応づけるための基準を作る
-- 非保証:
-  - これだけではフレーム同定はできない
-- 実装では:
-  - `sync_req` / `sync_res`
-  - `offsetMonoMs`
+### 4.1 Java API には必要な取得点がない
+- 第3章で必要だと整理したのは
+  - 送信フレーム照合キー
+  - 表示フレーム照合キー
+  を同時に取れる取得点だった
+- しかし Android の Java API には、その 2 つを同時に取れる地点がない
+- render callback 側では表示フレーム照合キーは見えるが、送信フレーム照合キーに使う `packet_infos.absolute_capture_time` は見えない
+- そこで C++ 側 `OnFrame` から `captureUnixMs` と `timestampUs` を取り出し、Kotlin へ返す構成にした
+- そのため、第4章では「どうやって `VideoTrack` 直下の native sink からそれを取るようにしたか」を扱う
 - 参照実装:
-  - `desktop/services/core/src/lib.rs`
-  - `desktop/services/webrtc/src/connection.rs`
-  - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/LatencyMonotonicMath.kt`
-- 一般化:
-  - 補助経路で時計同期を行い、本流とは別に時間軸対応を作る分離は、他の WebRTC 系でも応用しやすい
-
-### 4.2 フレーム同定のための送信側メタデータ
-- 入力:
-  - 送信側 `CLOCK_MONOTONIC` のキャプチャ時刻
-  - 送信側 `CLOCK_MONOTONIC` のエンコード投入時刻
-  - 送信側 `CLOCK_MONOTONIC` のエンコード完了時刻
-  - 送信側 `CLOCK_MONOTONIC` の送信時刻
-- 出力:
-  - DataChannel 上のフレームメタデータ
-  - 送信フレーム照合に使う `abs-capture-time` と同じ `CLOCK_REALTIME` 系の値
-- 保証:
-  - 送信側 `CLOCK_MONOTONIC` 起点のキャプチャ時刻を受信側まで運ぶ
-  - JNI 経路との紐づけキーを与える
-- 非保証:
-  - これ単独では「その映像フレーム」との 1:1 対応は保証しない
-- 実装では:
-  - `frame_sample`
-  - `t_cap`, `t_enc_in`, `t_enc_out`, `t_send`
-  - `capture_unix_ms`
-- 参照実装:
-  - `desktop/services/core/src/lib.rs`
-  - `desktop/services/webrtc/src/connection.rs`
-- 一般化:
-  - 本流と補助経路の情報を分けて運び、後段で紐づける構成は計測系を安定させやすい
-
-### 4.3 映像本流からのフレーム同定
-- 入力:
-  - 送信フレームに付与された `abs-capture-time`
-- 出力:
-  - RTP extension 上の `CLOCK_REALTIME` 系の値
-- 保証:
-  - DataChannel とは別に、映像本流から送信フレーム照合に使う `CLOCK_REALTIME` 系の値を得られる
-- 非保証:
-  - Android Java API だけでは直接取得できない
-- 実装では:
-  - `abs-capture-time`
-- 参照実装:
-  - `desktop/services/video-stream/src/track_writer.rs`
-  - `desktop/services/webrtc/src/connection.rs`
-- 一般化:
-  - 補助経路ではなく映像本流からフレーム由来の情報を取ることが、E2E 計測の信頼性を上げる
-
-### 4.4 ネイティブ側ビデオシンクで `VideoFrame` を取得する
-- 入力:
-  - C++ `VideoFrame`
-- 出力:
-  - `abs-capture-time` に由来する `CLOCK_REALTIME` 系の値
-  - `VideoFrame.timestampUs` に由来する `CLOCK_MONOTONIC` 系のフレーム時刻
-- 保証:
-  - Java API では見えない `packet_infos.absolute_capture_time` を取得できる
-- 非保証:
-  - これ単体では render との対応も E2E も確定しない
-- 実装では:
-  - `captureUnixMs`
-  - `timestampUs`
-- 参照実装:
-  - `android/app/src/main/cpp/latency_sink.cpp`
-  - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/LatencyNativeSink.kt`
-- 一般化:
-  - Java API で必要情報が取れない場合、取得位置を lower layer に置くのは再利用しやすい設計原則になる
-
-### 4.5 フレーム同定: 送信フレーム照合と表示フレーム照合
-- 送信フレーム照合:
-  - 入力: DataChannel 側メタデータの `CLOCK_REALTIME` 系の値と、native callback 側の `CLOCK_REALTIME` 系の値
-  - 出力: 送信側 `CLOCK_MONOTONIC` のキャプチャ時刻と、`VideoFrame.timestampUs` 由来の `CLOCK_MONOTONIC` 系フレーム時刻の組
-  - 保証: 送信側のフレーム情報と `VideoFrame` を紐づける
-- 表示フレーム照合:
-  - 入力: `VideoFrame.timestampUs` 由来の `CLOCK_MONOTONIC` 系フレーム時刻と、render 側の `CLOCK_MONOTONIC` 系フレーム時刻
-  - 出力: client 側 `CLOCK_MONOTONIC` の描画時刻と紐づいたフレーム
-  - 保証: 実際に render されたフレームへ紐づける
-- 非保証:
-  - 一致しないフレームは無理に計算しない
-- 実装では:
-  - 送信フレーム照合キー: `capture_unix_ms` / `captureUnixMs`
-  - 表示フレーム照合キー: `timestampUs`
-- 参照実装:
-  - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/FrameNativeMatchStore.kt`
   - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/WebRtcManager.kt`
-- 一般化:
-  - 異なる経路の情報を1つのキーで無理に合わせず、段階的に対応づけるほうが安定する
+  - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/LatencyNativeSink.kt`
+  - `android/app/src/main/cpp/latency_sink.cpp`
 
-### 4.6 最終計算: monotonic に揃えて E2E を出す
-- 入力:
-  - 送信側 `CLOCK_MONOTONIC` のキャプチャ時刻
-  - `CLOCK_MONOTONIC` の時計差推定値
-  - client 側 `CLOCK_MONOTONIC` の描画時刻
-- 出力:
-  - E2E レイテンシ
-- 保証:
-  - 最終値の時間軸を `CLOCK_MONOTONIC` に揃えられる
-- 非保証:
-  - display の実発光時刻までは表していない
-- 実装では:
-  - `tCapSenderMonoMs`
-  - `offsetMonoMs`
-  - `tRenderClientMonoMs`
-- 一般化:
-  - 送信フレーム照合に便利な `CLOCK_REALTIME` 系の値と、最終計算に向く `CLOCK_MONOTONIC` を分離するのは、時間軸が混在する計測で有効
+### 4.2 `VideoTrack` に native sink を追加する
+- その取得点を作るために、既存の描画経路とは別に計測専用 sink を `VideoTrack` へ追加した
+- 今回は Kotlin 側で `track.nativeVideoTrack` を取り出し、JNI で `VideoTrack.nativeAddSink` / `nativeRemoveSink` を呼ぶ構成にした
+- C++ 側では `rtc::VideoSinkInterface<webrtc::VideoFrame>` を実装し、`OnFrame` で `VideoFrame` を直接受ける
+- 記事では、「公開 API の拡張」ではなく「既存トラックに native sink を横からぶら下げる」という見せ方が分かりやすい
+- 強調したいポイント:
+  - 描画用経路を壊さずに、計測経路だけを横に増やしている
+  - attach / detach / release を Kotlin 側で管理し、失敗時は機能を無効化して本体を巻き込まない
+- 参照実装:
+  - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/LatencyNativeSink.kt`
+  - `android/app/src/main/cpp/latency_sink.cpp`
+
+### 4.3 配布済みの WebRTC にどう乗るか
+- ここでいう `org.webrtc` は、アプリが依存している Android 向け WebRTC ライブラリ
+- `AAR` は Android ライブラリの配布形式で、この中に Java / Kotlin から使う API と、内部で動くネイティブライブラリが含まれている
+- `JNI` は、その Java / Kotlin 側と C++ 側をつなぐための仕組み
+- 今回やりたかったのは、WebRTC を丸ごと自前ビルドして改造することではなく、配布済みの `org.webrtc` をそのまま使いながら、計測用の C++ コードだけを横に追加することだった
+- 具体的には
+  - Kotlin 側で `VideoTrack` から `nativeVideoTrack` を取り出す
+  - `LatencyNativeSink.kt` から JNI を呼び、自前の `latency_sink` を生成する
+  - その sink を `VideoTrack.nativeAddSink` で既存トラックへ追加する
+  - C++ 側 `OnFrame` で `VideoFrame::packet_infos()` を読み、`captureUnixMs` と `timestampUs` を Kotlin へ返す
+  という流れになる
+- こう書くと単に sink を足しただけに見えるが、実際には「配布済みライブラリの native 側に、こちらの native コードを正しく接続する」話になっている
+- だから難しさの本体は JNI の文法そのものより、既存の WebRTC 実装へ安全に乗ることにあった
+- 参照実装:
+  - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/LatencyNativeSink.kt`
+  - `android/app/src/main/cpp/latency_sink.cpp`
+  - `WEBRTC_LIBRARY_SELECTION.md`
+
+### 4.4 だから ABI とビルド条件まで管理する必要があった
+- 上の構成を取る以上、自前の native 側は `org.webrtc` が内部で使っているネイティブライブラリと ABI 前提を揃えて動かす必要がある
+- 今回は CMake で WebRTC header を直接参照しつつ、独立した `latency_sink` shared library をビルドしている
+- ARM 実機では C++ ABI の整合も必要で、`-fexperimental-relative-c++-abi-vtables` を付けて DSO 境界をまたぐ仮想関数呼び出しを合わせている
+- さらに、使う WebRTC 配布の選定自体が ABI リスクの管理になる
+  - `org.webrtc` API 互換であること
+  - どのリビジョンのバイナリか追跡しやすいこと
+  - JNI 側で参照するヘッダと整合を取りやすいこと
+- `build.gradle.kts` 側でも ABI 対象と feature flag を持ち、壊れたときに native sink を無効化できるようにしている
+- なおスレッド境界や寿命管理は当然必要だが、本文では FFI 実装の補足として短めに流し、主論点はネイティブライブラリ / ABI 整合に置く
+- 参照実装:
+  - `android/app/src/main/cpp/CMakeLists.txt`
+  - `android/app/build.gradle.kts`
+  - `WEBRTC_LIBRARY_SELECTION.md`
 
 ## 5. この設計で何が測れて、何が測れないか
 
@@ -417,28 +359,31 @@ flowchart LR
   - `handleFrameSample`
   - `deliverMatchedFrameNative`
   - `onFrameRendered`
+  - `onTrack` での native sink attach
 - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/FrameNativeMatchStore.kt`
-  - 送信フレーム照合
-  - 表示フレーム照合
+  - `captureUnixMs` での送信フレーム照合
 - `android/app/src/main/java/moe/ryoha/remoterg/webrtc/LatencyNativeSink.kt`
-  - sink attach / detach
+  - `track.nativeVideoTrack`
+  - sink attach / detach / disable
 - `android/app/src/main/cpp/latency_sink.cpp`
   - `ExtractCaptureTimeFromFrame`
+  - `LatencyVideoSink::OnFrame`
   - JNI callback
+  - thread attach / callback lifetime
 - `android/app/src/main/cpp/CMakeLists.txt`
   - ARM ABI 対応
+  - isolated JNI shim のビルド設定
 
 ## 10. 仕上げ時のチェックリスト
 - [ ] 冒頭で「何がそんなに難しいのか」が人間語で伝わる
 - [ ] 素朴な方法がどこで壊れるかを序盤で示している
 - [ ] 用語の交通整理が早い段階で済んでいる
-- [ ] 計測値が成立するまでのパイプラインを先に示してから実装説明に入っている
+- [ ] 計測値が成立するまでのパイプラインを先に示してから、実装コラムとして native `VideoSink` の話に入っている
 - [ ] 全体図を早めに出している
-- [ ] 章立てが `問題設定 -> 素朴には測れない理由 -> 全体パイプラインと図 -> 各段の実装 -> 測定範囲 -> 実装上の注意 -> まとめ` になっている
-- [ ] 送信側 `CLOCK_MONOTONIC`、`abs-capture-time` と同じ `CLOCK_REALTIME` 系の値、ネイティブでの `VideoFrame` 取得、2 段の照合、`CLOCK_MONOTONIC` ベースの最終計算が、どこで流れ、どこで合流するか説明されている
+- [ ] 章立てが `問題設定 -> 素朴には測れない理由 -> 全体パイプラインと図 -> native VideoSink 実装コラム -> 測定範囲 -> 実装上の注意 -> まとめ` になっている
+- [ ] 送信側 `CLOCK_MONOTONIC`、`abs-capture-time` と同じ `CLOCK_REALTIME` 系の値、ネイティブでの `VideoFrame` 取得、2 段の照合、`CLOCK_MONOTONIC` ベースの最終計算が、第3章の全体図と第4章の実装コラムで役割分担として説明されている
 - [ ] 失敗談が日記ではなく設計制約の説明になっている
 - [ ] 「何が測れて何が測れないか」が明示されている
-- [ ] 固有実装の説明に、一般化できる一文を適宜添えている
 
 ## 付録候補
 

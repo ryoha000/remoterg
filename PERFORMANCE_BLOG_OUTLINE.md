@@ -268,54 +268,9 @@ flowchart LR
   - `android/app/build.gradle.kts`
   - `WEBRTC_LIBRARY_SELECTION.md`
 
-## 5. この設計で何が測れて、何が測れないか
+## 5. まとめ
 
-### 5.1 測れているもの
-- 送信側の capture から Android の render callback までの E2E
-- `frame_sample` が持つ encode 周辺の補助指標
-- 成立条件を満たしたフレームについての厳密な E2E
-
-### 5.2 測っていないもの
-- 実ディスプレイの発光時刻そのもの
-- 成立条件を満たさなかったフレームの E2E
-- `abs-capture-time` 欠落や突合失敗を含む全フレーム一律の値
-
-### 5.3 重要な姿勢
-- 「すべてのフレームをざっくり測る」より
-- 「成立条件を満たしたフレームだけを厳密に測る」を優先する
-- 計測記事としては、ここを明示したほうが信頼される
-
-## 6. 実装上の注意点
-
-### 6.1 absolute time はキー用途に限定する
-- `CLOCK_REALTIME` 系の値はフレーム同定には便利
-- ただし最終 E2E を `CLOCK_REALTIME` 系の値同士の差で持つと基準がぶれやすい
-- だから `CLOCK_REALTIME` 系の値は橋渡しに限定し、最終値は `CLOCK_MONOTONIC` で計算する
-- 実装では:
-  - `capture_unix_ms`
-
-### 6.2 デコーダ側フレーム時刻は表示フレーム照合専用にする
-- Java から見えるデコーダ側フレーム時刻は、送信側の capture 時刻そのものではなく client 側 `CLOCK_MONOTONIC` 系の値である
-- render 側との紐づけには使える
-- ただし送信側起点の時刻とみなしてはいけない
-- 実装では:
-  - `timestampNs` / `timestampUs`
-
-### 6.3 Java デコーダラップを主経路にしない
-- `WrappedNativeVideoDecoder` のように、Java ラップを主経路にできないケースがある
-- だからデコーダ内部ではなく、デコード後 `VideoFrame` を取得する構成にしている
-
-### 6.4 JNI sink は ABI 整合まで含めて責任を持つ
-- C++ 側の取得点を使う以上、ABI 整合も設計責任に入る
-- 特に ARM 実機では relative vtable ABI への注意が必要だった
-- ただし本文では主軸にしすぎず、実装コラム寄りに扱う
-- 参照実装:
-  - `android/app/src/main/cpp/CMakeLists.txt`
-  - `android/app/build.gradle.kts`
-
-## 7. まとめ
-
-### 7.1 記事の結論候補
+### 5.1 記事の結論候補
 - WebRTC の E2E レイテンシ計測で最初に解くべき問題は、計算式ではなくフレーム同定である
 - DataChannel と RTP が別経路である以上、測定系にも役割分担が必要になる
 - その制約を分解すると
@@ -324,12 +279,14 @@ flowchart LR
   - `VideoFrame` の取得は JNI `VideoSink`
   - 最終計算は `CLOCK_MONOTONIC`
   という構成が自然に導かれる
+- 必要なら結語の中で短く、成立条件を満たしたフレームに対して厳密な値を作る構成であることだけ補足する
 
-### 7.2 記事の価値
+### 5.2 記事の価値
 - 「ある実装ではこうした」だけでなく
 - 「WebRTC のレイテンシ計測では、なぜその責務分担が必要になるのか」を説明できる
+- 独立した大章というより、短い結語として 2〜4 段落で締める想定
 
-## 8. 記事内で入れたい図
+## 6. 記事内で入れたい図
 - 図1: 採用アーキテクチャ全体図
 - 図1 は mermaid で先に出してもよい
 - 時計合わせの系統とフレーム同定の系統が並行し、最後に合流する形を明示する
@@ -341,7 +298,7 @@ flowchart LR
 - 図4: Java API と C++ `VideoFrame` の見える情報の差
 - 図5: JNI sink を入れたときの `VideoFrame` 取得位置と責務範囲
 
-## 9. 章ごとに差し込むコード参照候補
+## 7. 章ごとに差し込むコード参照候補
 - `desktop/services/core/src/lib.rs`
   - `DataChannelMessage::SyncReq`
   - `DataChannelMessage::SyncRes`
@@ -374,23 +331,13 @@ flowchart LR
   - ARM ABI 対応
   - isolated JNI shim のビルド設定
 
-## 10. 仕上げ時のチェックリスト
+## 8. 仕上げ時のチェックリスト
 - [ ] 冒頭で「何がそんなに難しいのか」が人間語で伝わる
 - [ ] 素朴な方法がどこで壊れるかを序盤で示している
 - [ ] 用語の交通整理が早い段階で済んでいる
 - [ ] 計測値が成立するまでのパイプラインを先に示してから、実装コラムとして native `VideoSink` の話に入っている
 - [ ] 全体図を早めに出している
-- [ ] 章立てが `問題設定 -> 素朴には測れない理由 -> 全体パイプラインと図 -> native VideoSink 実装コラム -> 測定範囲 -> 実装上の注意 -> まとめ` になっている
+- [ ] 章立てが `問題設定 -> 素朴には測れない理由 -> 全体パイプラインと図 -> native VideoSink 実装コラム -> まとめ` になっている
 - [ ] 送信側 `CLOCK_MONOTONIC`、`abs-capture-time` と同じ `CLOCK_REALTIME` 系の値、ネイティブでの `VideoFrame` 取得、2 段の照合、`CLOCK_MONOTONIC` ベースの最終計算が、第3章の全体図と第4章の実装コラムで役割分担として説明されている
 - [ ] 失敗談が日記ではなく設計制約の説明になっている
-- [ ] 「何が測れて何が測れないか」が明示されている
-
-## 付録候補
-
-### 付録A. libwebrtc と Android の API 事情
-- `Android Java API` が何を指しているのかを明確にする
-- libwebrtc 本体は C++ 実装であり、Java API はその一部を JNI 越しに扱う窓口であることを説明する
-- `VideoFrame` から見える情報と C++ 側で保持している情報の差を説明する
-- `absolute_capture_time` や `packet_infos` が Java API から直接扱えない背景を補足する
-- `org.webrtc` を直接使う場合と、その上にラッパーや SDK を重ねる場合で API の見え方がさらに変わりうることを補足する
-- 「Java API から取れない」とは、Android アプリケーションコードから通常アクセスできる公開 API だけでは足りなかった、という意味だと明記する
+- [ ] 最後に記事の結論が短く締まっている

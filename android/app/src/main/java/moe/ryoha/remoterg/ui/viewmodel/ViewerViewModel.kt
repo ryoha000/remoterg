@@ -46,6 +46,7 @@ class ViewerViewModel @Inject constructor(
     val selectedCodec: StateFlow<String> = _selectedCodec.asStateFlow()
     
     val rtcStats: StateFlow<WebRtcStats> = webRtcManager.rtcStats
+    val latencySamples = webRtcManager.latencySamples
 
     // Screen に必要な WebRTC 状態を ViewModel から直接公開
     // Screen が webRtcManager を直接参照しないようにするため

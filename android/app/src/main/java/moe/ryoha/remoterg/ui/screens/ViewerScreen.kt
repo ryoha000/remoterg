@@ -107,6 +107,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import moe.ryoha.remoterg.ui.viewmodel.ViewerViewModel
 import moe.ryoha.remoterg.webrtc.WebRtcVideoRenderer
 /**
@@ -214,27 +216,67 @@ fun ViewerScreen(
         }
     }
 
-    // 直近30秒の統計履歴を1秒ごとにサンプリング
+    // 直近30秒の統計履歴を500msごとにサンプリングし、その間の平均値をプロットする
     LaunchedEffect(isConnected) {
         if (!isConnected) {
             statsGraphHistory.clear()
             return@LaunchedEffect
         }
+
+        var sumLatency = 0L
+        var countLatency = 0
+        var sumRtt = 0L
+        var countRtt = 0
+        var sumClockOffset = 0L
+        var countClockOffset = 0
+        val mutex = Mutex()
+
+        launch {
+            viewModel.latencySamples.collect { sample ->
+                mutex.withLock {
+                    sumLatency += sample.latencyMs
+                    countLatency++
+                    sumRtt += sample.rttMs
+                    countRtt++
+                    sumClockOffset += sample.clockOffsetMs
+                    countClockOffset++
+                }
+            }
+        }
+
         while (isConnected) {
+            delay(500)
             val now = SystemClock.elapsedRealtime()
+            var avgLatency = latestRtcStats.latencyMs
+            var avgRtt = latestRtcStats.rttMs
+            var avgClockOffset = latestRtcStats.clockOffsetMs
+
+            mutex.withLock {
+                if (countLatency > 0) {
+                    avgLatency = (sumLatency / countLatency).toInt()
+                    avgRtt = (sumRtt / countRtt).toInt()
+                    avgClockOffset = (sumClockOffset / countClockOffset).toInt()
+                }
+                sumLatency = 0L
+                countLatency = 0
+                sumRtt = 0L
+                countRtt = 0
+                sumClockOffset = 0L
+                countClockOffset = 0
+            }
+
             statsGraphHistory.add(
                 StatsGraphPoint(
                     timestampMs = now,
-                    rttMs = latestRtcStats.rttMs,
-                    clockOffsetMs = latestRtcStats.clockOffsetMs,
-                    latencyMs = latestRtcStats.latencyMs
+                    rttMs = avgRtt,
+                    clockOffsetMs = avgClockOffset,
+                    latencyMs = avgLatency
                 )
             )
             val cutoff = now - STATS_GRAPH_WINDOW_MS
             while (statsGraphHistory.isNotEmpty() && statsGraphHistory.first().timestampMs < cutoff) {
                 statsGraphHistory.removeAt(0)
             }
-            delay(1000)
         }
     }
 

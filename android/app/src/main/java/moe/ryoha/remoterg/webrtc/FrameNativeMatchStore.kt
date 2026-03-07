@@ -9,12 +9,18 @@ class FrameNativeMatchStore(
         val captureUnixMs: Long,
         val timestampUs: Long,
         val tCapHostdMonoMs: Double,
+        val tEncIn: Double,
+        val tEncOut: Double,
+        val tSend: Double,
         val framePendingAfterMatch: Int,
         val nativePendingAfterMatch: Int
     )
 
     private data class FrameSample(
         val tCapHostdMonoMs: Double,
+        val tEncIn: Double,
+        val tEncOut: Double,
+        val tSend: Double,
         val receivedElapsedMs: Long
     )
 
@@ -30,6 +36,9 @@ class FrameNativeMatchStore(
     fun offerFrame(
         captureUnixMs: Long,
         tCapHostdMonoMs: Double,
+        tEncIn: Double,
+        tEncOut: Double,
+        tSend: Double,
         receivedElapsedMs: Long
     ): MatchedSample? {
         trimLocked(receivedElapsedMs)
@@ -43,13 +52,16 @@ class FrameNativeMatchStore(
                 captureUnixMs = captureUnixMs,
                 timestampUs = native.timestampUs,
                 tCapHostdMonoMs = tCapHostdMonoMs,
+                tEncIn = tEncIn,
+                tEncOut = tEncOut,
+                tSend = tSend,
                 framePendingAfterMatch = pendingFramesLocked(),
                 nativePendingAfterMatch = pendingNativesLocked()
             )
         }
 
         val frameQueue = frameByCaptureUnix.getOrPut(captureUnixMs) { ArrayDeque() }
-        frameQueue.addLast(FrameSample(tCapHostdMonoMs = tCapHostdMonoMs, receivedElapsedMs = receivedElapsedMs))
+        frameQueue.addLast(FrameSample(tCapHostdMonoMs = tCapHostdMonoMs, tEncIn = tEncIn, tEncOut = tEncOut, tSend = tSend, receivedElapsedMs = receivedElapsedMs))
         return null
     }
 
@@ -70,6 +82,9 @@ class FrameNativeMatchStore(
                 captureUnixMs = captureUnixMs,
                 timestampUs = timestampUs,
                 tCapHostdMonoMs = frame.tCapHostdMonoMs,
+                tEncIn = frame.tEncIn,
+                tEncOut = frame.tEncOut,
+                tSend = frame.tSend,
                 framePendingAfterMatch = pendingFramesLocked(),
                 nativePendingAfterMatch = pendingNativesLocked()
             )

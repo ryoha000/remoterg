@@ -98,6 +98,10 @@ class WebRtcManager @Inject constructor(
     private var statsJob: kotlinx.coroutines.Job? = null
     private var lastBytesReceived = 0L
     private var lastTimestampUs = 0.0
+    private var lastJitterBufferDelay = 0.0
+    private var lastJitterBufferEmittedCount = 0L
+    private var lastTotalDecodeTime = 0.0
+    private var lastFramesDecoded = 0L
 
     private val iceCandidateLock = Any()
     private var pendingIceCandidates = mutableListOf<IceCandidate>()
@@ -115,6 +119,10 @@ class WebRtcManager @Inject constructor(
         val timestampUs: Long,
         val captureUnixMs: Long,
         val tCapClientMonoMs: Double,
+        val tCapHostdMonoMs: Double,
+        val tEncIn: Double,
+        val tEncOut: Double,
+        val tSend: Double,
         val receivedElapsedMs: Long
     )
     private data class RenderFrameSample(
@@ -130,6 +138,10 @@ class WebRtcManager @Inject constructor(
             val timestampUs: Long,
             val captureUnixMs: Long,
             val tCapClientMonoMs: Double,
+            val tCapHostdMonoMs: Double,
+            val tEncIn: Double,
+            val tEncOut: Double,
+            val tSend: Double,
             val tRenderClientMonoMs: Double,
             val nativePendingAfterMatch: Int,
             val renderPendingAfterMatch: Int
@@ -147,6 +159,10 @@ class WebRtcManager @Inject constructor(
                     timestampUs = sample.timestampUs,
                     captureUnixMs = sample.captureUnixMs,
                     tCapClientMonoMs = sample.tCapClientMonoMs,
+                    tCapHostdMonoMs = sample.tCapHostdMonoMs,
+                    tEncIn = sample.tEncIn,
+                    tEncOut = sample.tEncOut,
+                    tSend = sample.tSend,
                     tRenderClientMonoMs = pendingRender.tRenderClientMonoMs,
                     nativePendingAfterMatch = nativeByTimestamp.size,
                     renderPendingAfterMatch = renderByTimestamp.size
@@ -165,6 +181,10 @@ class WebRtcManager @Inject constructor(
                     timestampUs = sample.timestampUs,
                     captureUnixMs = pendingNative.captureUnixMs,
                     tCapClientMonoMs = pendingNative.tCapClientMonoMs,
+                    tCapHostdMonoMs = pendingNative.tCapHostdMonoMs,
+                    tEncIn = pendingNative.tEncIn,
+                    tEncOut = pendingNative.tEncOut,
+                    tSend = pendingNative.tSend,
                     tRenderClientMonoMs = sample.tRenderClientMonoMs,
                     nativePendingAfterMatch = nativeByTimestamp.size,
                     renderPendingAfterMatch = renderByTimestamp.size
@@ -319,6 +339,9 @@ class WebRtcManager @Inject constructor(
         val frameNativeMatched = frameNativeMatchStore.offerFrame(
             captureUnixMs = captureUnixMs,
             tCapHostdMonoMs = tCap,
+            tEncIn = tEncIn,
+            tEncOut = tEncOut,
+            tSend = tSend,
             receivedElapsedMs = nowElapsedMs
         )
         if (frameNativeMatched != null) {
@@ -395,7 +418,10 @@ class WebRtcManager @Inject constructor(
                             captureUnixMs = matched.captureUnixMs,
                             latencyMs = e2eMs,
                             rttMs = lastRttMs.get(),
-                            clockOffsetMs = lastClockOffsetMs.get()
+                            clockOffsetMs = lastClockOffsetMs.get(),
+                            captureToEncInMs = (matched.tEncIn - matched.tCapHostdMonoMs).toInt().coerceAtLeast(0),
+                            encInToEncOutMs = (matched.tEncOut - matched.tEncIn).toInt().coerceAtLeast(0),
+                            encOutToSendMs = (matched.tSend - matched.tEncOut).toInt().coerceAtLeast(0)
                         ))
                     }
                     return
@@ -450,6 +476,10 @@ class WebRtcManager @Inject constructor(
                 timestampUs = frameNativeMatched.timestampUs,
                 captureUnixMs = frameNativeMatched.captureUnixMs,
                 tCapClientMonoMs = tCapClientMonoMs,
+                tCapHostdMonoMs = frameNativeMatched.tCapHostdMonoMs,
+                tEncIn = frameNativeMatched.tEncIn,
+                tEncOut = frameNativeMatched.tEncOut,
+                tSend = frameNativeMatched.tSend,
                 receivedElapsedMs = nowElapsedMs
             )
         )
@@ -461,7 +491,10 @@ class WebRtcManager @Inject constructor(
                     captureUnixMs = frameNativeMatched.captureUnixMs,
                     latencyMs = e2eMs,
                     rttMs = lastRttMs.get(),
-                    clockOffsetMs = lastClockOffsetMs.get()
+                    clockOffsetMs = lastClockOffsetMs.get(),
+                    captureToEncInMs = (frameNativeMatched.tEncIn - frameNativeMatched.tCapHostdMonoMs).toInt().coerceAtLeast(0),
+                    encInToEncOutMs = (frameNativeMatched.tEncOut - frameNativeMatched.tEncIn).toInt().coerceAtLeast(0),
+                    encOutToSendMs = (frameNativeMatched.tSend - frameNativeMatched.tEncOut).toInt().coerceAtLeast(0)
                 ))
             } else {
                 Log.w(
@@ -517,6 +550,10 @@ class WebRtcManager @Inject constructor(
         if (statsJob?.isActive == true) return
         lastBytesReceived = 0L
         lastTimestampUs = 0.0
+        lastJitterBufferDelay = 0.0
+        lastJitterBufferEmittedCount = 0L
+        lastTotalDecodeTime = 0.0
+        lastFramesDecoded = 0L
         
         statsJob = scope.launch {
             while (true) {
@@ -529,6 +566,10 @@ class WebRtcManager @Inject constructor(
                         var packetsReceived = 0L
                         var currentFrameWidth = 0
                         var currentFrameHeight = 0
+                        var currentJitterBufferDelay = 0.0
+                        var currentJitterBufferEmittedCount = 0L
+                        var currentTotalDecodeTime = 0.0
+                        var currentFramesDecoded = 0L
                         
                         report.statsMap.values.forEach { stat ->
                             val isVideo = stat.members["kind"] == "video"
@@ -540,6 +581,10 @@ class WebRtcManager @Inject constructor(
                                 packetsReceived = (stat.members["packetsReceived"] as? Number)?.toLong() ?: 0L
                                 currentFrameWidth = (stat.members["frameWidth"] as? Number)?.toInt() ?: 0
                                 currentFrameHeight = (stat.members["frameHeight"] as? Number)?.toInt() ?: 0
+                                currentJitterBufferDelay = (stat.members["jitterBufferDelay"] as? Number)?.toDouble() ?: 0.0
+                                currentJitterBufferEmittedCount = (stat.members["jitterBufferEmittedCount"] as? Number)?.toLong() ?: 0L
+                                currentTotalDecodeTime = (stat.members["totalDecodeTime"] as? Number)?.toDouble() ?: 0.0
+                                currentFramesDecoded = (stat.members["framesDecoded"] as? Number)?.toLong() ?: 0L
                             }
                         }
                         
@@ -555,9 +600,25 @@ class WebRtcManager @Inject constructor(
                         } else {
                             0
                         }
+
+                        var jitterBufferMs = 0
+                        val emittedDiff = currentJitterBufferEmittedCount - lastJitterBufferEmittedCount
+                        if (emittedDiff > 0L) {
+                            jitterBufferMs = (((currentJitterBufferDelay - lastJitterBufferDelay) / emittedDiff) * 1000.0).toInt()
+                        }
+
+                        var decodeTimeMs = 0
+                        val framesDecodedDiff = currentFramesDecoded - lastFramesDecoded
+                        if (framesDecodedDiff > 0L) {
+                            decodeTimeMs = (((currentTotalDecodeTime - lastTotalDecodeTime) / framesDecodedDiff) * 1000.0).toInt()
+                        }
                         
                         lastBytesReceived = currentBytes
                         lastTimestampUs = currentTimestamp
+                        lastJitterBufferDelay = currentJitterBufferDelay
+                        lastJitterBufferEmittedCount = currentJitterBufferEmittedCount
+                        lastTotalDecodeTime = currentTotalDecodeTime
+                        lastFramesDecoded = currentFramesDecoded
                         
                         _rtcStats.value = WebRtcStats(
                             fps = currentFps,
@@ -567,7 +628,9 @@ class WebRtcManager @Inject constructor(
                             frameHeight = currentFrameHeight,
                             rttMs = lastRttMs.get(),
                             clockOffsetMs = lastClockOffsetMs.get(),
-                            latencyMs = lastLatencyMs.get()
+                            latencyMs = lastLatencyMs.get(),
+                            jitterBufferMs = jitterBufferMs,
+                            decodeTimeMs = decodeTimeMs
                         )
                     }
                 }
@@ -582,7 +645,9 @@ class WebRtcManager @Inject constructor(
         _rtcStats.value = WebRtcStats(
             rttMs = lastRttMs.get(),
             clockOffsetMs = lastClockOffsetMs.get(),
-            latencyMs = lastLatencyMs.get()
+            latencyMs = lastLatencyMs.get(),
+            jitterBufferMs = 0,
+            decodeTimeMs = 0
         )
     }
 
@@ -1051,6 +1116,8 @@ data class WebRtcStats(
     val frameHeight: Int = 0,
     val rttMs: Int = 0,
     val clockOffsetMs: Int = 0,
-    val latencyMs: Int = 0
+    val latencyMs: Int = 0,
+    val jitterBufferMs: Int = 0,
+    val decodeTimeMs: Int = 0
 )
 

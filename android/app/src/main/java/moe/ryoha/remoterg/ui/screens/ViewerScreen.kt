@@ -166,6 +166,7 @@ fun ViewerScreen(
     var surfaceViewRenderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
     val statsGraphHistory = remember { mutableStateListOf<StatsGraphPoint>() }
     val latestRtcStats by rememberUpdatedState(rtcStats)
+    var latestLatencySample by remember { mutableStateOf<moe.ryoha.remoterg.webrtc.LatencySample?>(null) }
 
     // CSV エクスポート用の状態
     var showCsvExportDialog by remember { mutableStateOf(false) }
@@ -233,6 +234,7 @@ fun ViewerScreen(
 
         launch {
             viewModel.latencySamples.collect { sample ->
+                latestLatencySample = sample
                 mutex.withLock {
                     sumLatency += sample.latencyMs
                     countLatency++
@@ -559,6 +561,7 @@ fun ViewerScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     DebugPanel(
                         rtcStats = rtcStats,
+                        latestLatencySample = latestLatencySample,
                         deviceScreenSize = deviceScreenSize
                     )
                     StatsGraphPanel(
@@ -1080,11 +1083,12 @@ private data class StatsGraphPoint(
 @Composable
 private fun DebugPanel(
     rtcStats: WebRtcStats,
+    latestLatencySample: moe.ryoha.remoterg.webrtc.LatencySample?,
     deviceScreenSize: String
 ) {
     Column(
         modifier = Modifier
-            .width(200.dp) // 幅を制限して拡がりすぎないようにする
+            .width(220.dp) // 幅を広げてラベルを収める
             .background(
                 Color.Black.copy(alpha = 0.6f),
                 RoundedCornerShape(8.dp)
@@ -1110,12 +1114,41 @@ private fun DebugPanel(
             Text(text = "${rtcStats.bitrate} kbps", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Loss", style = monoStyle, modifier = Modifier.width(72.dp))
+            Text(text = "Loss", style = monoStyle, modifier = Modifier.width(84.dp))
             Text(text = "${rtcStats.loss}%", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Latency", style = monoStyle, modifier = Modifier.width(72.dp))
+            Text(text = "E2E Latency", style = monoStyle, modifier = Modifier.width(84.dp))
             Text(text = "${rtcStats.latencyMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
+        
+        if (latestLatencySample != null) {
+            val netAndOther = (rtcStats.latencyMs - latestLatencySample.captureToEncInMs - latestLatencySample.encInToEncOutMs - latestLatencySample.encOutToSendMs - rtcStats.jitterBufferMs - rtcStats.decodeTimeMs).coerceAtLeast(0)
+            
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Capture", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${latestLatencySample.captureToEncInMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Encode", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${latestLatencySample.encInToEncOutMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Host Q", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${latestLatencySample.encOutToSendMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Net+Other", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "$netAndOther ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ JitterBuf", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${rtcStats.jitterBufferMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "└ Decode", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${rtcStats.decodeTimeMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
         }
     }
 }

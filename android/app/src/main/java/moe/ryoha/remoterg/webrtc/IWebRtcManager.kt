@@ -11,7 +11,10 @@ data class LatencySample(
     val captureUnixMs: Long,
     val latencyMs: Int,
     val rttMs: Int,
-    val clockOffsetMs: Int
+    val clockOffsetMs: Int,
+    val captureToEncInMs: Int,
+    val encInToEncOutMs: Int,
+    val encOutToSendMs: Int
 )
 
 /**

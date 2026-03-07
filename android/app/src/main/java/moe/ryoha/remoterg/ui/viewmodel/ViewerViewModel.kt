@@ -300,11 +300,11 @@ class ViewerViewModel @Inject constructor(
                 application.contentResolver.openOutputStream(uri)?.use { outputStream ->
                     java.io.BufferedWriter(java.io.OutputStreamWriter(outputStream, "UTF-8")).use { writer ->
                         // ヘッダー書き込み
-                        writer.write("CaptureUnixMs,LatencyMs,RttMs,ClockOffsetMs\n")
+                        writer.write("CaptureUnixMs,LatencyMs,RttMs,ClockOffsetMs,CaptureToEncInMs,EncInToEncOutMs,EncOutToSendMs\n")
                         // データ行書き込み
                         val records = synchronized(fullLatencyHistory) { fullLatencyHistory.toList() }
                         for (record in records) {
-                            writer.write("${record.captureUnixMs},${record.latencyMs},${record.rttMs},${record.clockOffsetMs}\n")
+                            writer.write("${record.captureUnixMs},${record.latencyMs},${record.rttMs},${record.clockOffsetMs},${record.captureToEncInMs},${record.encInToEncOutMs},${record.encOutToSendMs}\n")
                         }
                     }
                 }

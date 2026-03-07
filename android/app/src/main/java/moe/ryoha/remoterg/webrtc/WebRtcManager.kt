@@ -218,7 +218,6 @@ class WebRtcManager @Inject constructor(
     private data class SyncSample(val rtt: Double, val offsetMonoMs: Double)
     private var latencySyncJob: kotlinx.coroutines.Job? = null
     private val latencyVideoSink: VideoSink by lazy { createLatencyVideoSink() }
-    private val captureTimeStore = CaptureTimeStore()
     private val frameNativeMatchStore = FrameNativeMatchStore()
     private val nativeRenderMatchStore = NativeRenderMatchStore()
     private val latencyNativeSink = LatencyNativeSink()
@@ -270,7 +269,6 @@ class WebRtcManager @Inject constructor(
         offsetEstMonoMs.set(null)
         syncSamples.clear()
         frameNativeMatchStore.clear()
-        captureTimeStore.clear()
         nativeRenderMatchStore.clear()
         nativeExtractOkCount.set(0L)
         nativeExtractFailCount.set(0L)
@@ -618,12 +616,11 @@ class WebRtcManager @Inject constructor(
 
         val encoderFactory = DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
         val innerDecoderFactory = DefaultVideoDecoderFactory(rootEglBase.eglBaseContext)
-        val decoderFactory = LatencyDecoderFactory(innerDecoderFactory, captureTimeStore)
 
         peerConnectionFactory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audioDeviceModule)
             .setVideoEncoderFactory(encoderFactory)
-            .setVideoDecoderFactory(decoderFactory)
+            .setVideoDecoderFactory(innerDecoderFactory)
             .createPeerConnectionFactory()
 
         // AudioDeviceModule のリソース解放（Factory に渡した後は不要）

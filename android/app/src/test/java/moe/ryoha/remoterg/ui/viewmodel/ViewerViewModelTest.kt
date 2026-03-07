@@ -49,6 +49,7 @@ class ViewerViewModelTest {
         override val signalingState = MutableStateFlow("NEW")
         override val rtcStats = MutableStateFlow(WebRtcStats())
         override val dataChannelMessages = MutableSharedFlow<DataChannelMessage>()
+        override val latencySamples = MutableSharedFlow<moe.ryoha.remoterg.webrtc.LatencySample>()
         override val eglBaseContext: EglBase.Context get() = mockk(relaxed = true)
         override val localOfferCreated = MutableSharedFlow<String>()
         override val localAnswerCreated = MutableSharedFlow<String>()

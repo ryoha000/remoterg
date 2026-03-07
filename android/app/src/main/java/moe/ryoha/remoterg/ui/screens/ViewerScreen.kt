@@ -11,6 +11,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -60,6 +62,10 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.runtime.Composable
@@ -69,15 +75,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -85,6 +97,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import android.os.Build
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.core.app.PictureInPictureModeChangedInfo
 import androidx.core.util.Consumer
@@ -94,6 +107,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import moe.ryoha.remoterg.ui.viewmodel.ViewerViewModel
 import moe.ryoha.remoterg.webrtc.WebRtcVideoRenderer
 /**
@@ -149,6 +164,21 @@ fun ViewerScreen(
 
     // SurfaceViewRendererの参照を保持（ローカルスクリーンショット用）
     var surfaceViewRenderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
+    val statsGraphHistory = remember { mutableStateListOf<StatsGraphPoint>() }
+    val latestRtcStats by rememberUpdatedState(rtcStats)
+    var latestLatencySample by remember { mutableStateOf<moe.ryoha.remoterg.webrtc.LatencySample?>(null) }
+
+    // CSV エクスポート用の状態
+    var showCsvExportDialog by remember { mutableStateOf(false) }
+
+    val csvExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportLatencyCsv(uri)
+            Toast.makeText(context, "Latency data exported successfully", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     LaunchedEffect(signalingUrl) {
         viewModel.connectToHost(signalingUrl, codec)
@@ -183,6 +213,71 @@ fun ViewerScreen(
                 }
                 // scale = 1.0f を指定することで、ビデオストリーム本来の解像度で Bitmap を取得できる
                 svr.addFrameListener(listener, 1.0f)
+            }
+        }
+    }
+
+    // 直近30秒の統計履歴を500msごとにサンプリングし、その間の平均値をプロットする
+    LaunchedEffect(isConnected) {
+        if (!isConnected) {
+            statsGraphHistory.clear()
+            return@LaunchedEffect
+        }
+
+        var sumLatency = 0L
+        var countLatency = 0
+        var sumRtt = 0L
+        var countRtt = 0
+        var sumClockOffset = 0L
+        var countClockOffset = 0
+        val mutex = Mutex()
+
+        launch {
+            viewModel.latencySamples.collect { sample ->
+                latestLatencySample = sample
+                mutex.withLock {
+                    sumLatency += sample.latencyMs
+                    countLatency++
+                    sumRtt += sample.rttMs
+                    countRtt++
+                    sumClockOffset += sample.clockOffsetMs
+                    countClockOffset++
+                }
+            }
+        }
+
+        while (isConnected) {
+            delay(500)
+            val now = SystemClock.elapsedRealtime()
+            var avgLatency = latestRtcStats.latencyMs
+            var avgRtt = latestRtcStats.rttMs
+            var avgClockOffset = latestRtcStats.clockOffsetMs
+
+            mutex.withLock {
+                if (countLatency > 0) {
+                    avgLatency = (sumLatency / countLatency).toInt()
+                    avgRtt = (sumRtt / countRtt).toInt()
+                    avgClockOffset = (sumClockOffset / countClockOffset).toInt()
+                }
+                sumLatency = 0L
+                countLatency = 0
+                sumRtt = 0L
+                countRtt = 0
+                sumClockOffset = 0L
+                countClockOffset = 0
+            }
+
+            statsGraphHistory.add(
+                StatsGraphPoint(
+                    timestampMs = now,
+                    rttMs = avgRtt,
+                    clockOffsetMs = avgClockOffset,
+                    latencyMs = avgLatency
+                )
+            )
+            val cutoff = now - STATS_GRAPH_WINDOW_MS
+            while (statsGraphHistory.isNotEmpty() && statsGraphHistory.first().timestampMs < cutoff) {
+                statsGraphHistory.removeAt(0)
             }
         }
     }
@@ -463,10 +558,18 @@ fun ViewerScreen(
                     .align(Alignment.TopStart)
                     .padding(start = 16.dp, top = overlayTopPadding)
             ) {
-                DebugPanel(
-                    rtcStats = rtcStats,
-                    deviceScreenSize = deviceScreenSize
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DebugPanel(
+                        rtcStats = rtcStats,
+                        latestLatencySample = latestLatencySample,
+                        deviceScreenSize = deviceScreenSize
+                    )
+                    StatsGraphPanel(
+                        rtcStats = rtcStats,
+                        history = statsGraphHistory,
+                        onClick = { showCsvExportDialog = true }
+                    )
+                }
             }
 
             // 設定パネル（右側）
@@ -583,6 +686,37 @@ fun ViewerScreen(
             selectedCodec = selectedCodec,
             sessionId = sessionId,
             onDismiss = { overlayState.showConnectionDetails = false }
+        )
+    }
+
+    // CSV エクスポート確認ダイアログ
+    if (showCsvExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showCsvExportDialog = false },
+            title = {
+                Text(text = "Export Latency Data")
+            },
+            text = {
+                Text("Do you want to export the accumulated latency data as a CSV file?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCsvExportDialog = false
+                        val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                        csvExportLauncher.launch("latency_$timestamp.csv")
+                    }
+                ) {
+                    Text("Export")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showCsvExportDialog = false }
+                ) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }
@@ -934,17 +1068,27 @@ private fun ScreenshotButton(
     )
 }
 
+private const val STATS_GRAPH_WINDOW_MS = 30_000L
+
+private data class StatsGraphPoint(
+    val timestampMs: Long,
+    val rttMs: Int,
+    val clockOffsetMs: Int,
+    val latencyMs: Int
+)
+
 /**
  * デバッグパネル: 頻繁に変わる統計情報を表示 (FPS/Bitrate/Loss)
  */
 @Composable
 private fun DebugPanel(
     rtcStats: WebRtcStats,
+    latestLatencySample: moe.ryoha.remoterg.webrtc.LatencySample?,
     deviceScreenSize: String
 ) {
     Column(
         modifier = Modifier
-            .width(200.dp) // 幅を制限して拡がりすぎないようにする
+            .width(220.dp) // 幅を広げてラベルを収める
             .background(
                 Color.Black.copy(alpha = 0.6f),
                 RoundedCornerShape(8.dp)
@@ -970,8 +1114,153 @@ private fun DebugPanel(
             Text(text = "${rtcStats.bitrate} kbps", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Loss", style = monoStyle, modifier = Modifier.width(72.dp))
+            Text(text = "Loss", style = monoStyle, modifier = Modifier.width(84.dp))
             Text(text = "${rtcStats.loss}%", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(text = "E2E Latency", style = monoStyle, modifier = Modifier.width(84.dp))
+            Text(text = "${rtcStats.latencyMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+        }
+        
+        if (latestLatencySample != null) {
+            val netAndOther = (rtcStats.latencyMs - latestLatencySample.captureToEncInMs - latestLatencySample.encInToEncOutMs - latestLatencySample.encOutToSendMs - rtcStats.jitterBufferMs - rtcStats.decodeTimeMs).coerceAtLeast(0)
+            
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Capture", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${latestLatencySample.captureToEncInMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Encode", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${latestLatencySample.encInToEncOutMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Host Q", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${latestLatencySample.encOutToSendMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ Net+Other", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "$netAndOther ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "├ JitterBuf", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${rtcStats.jitterBufferMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text(text = "└ Decode", style = monoStyle, modifier = Modifier.width(84.dp))
+                Text(text = "${rtcStats.decodeTimeMs} ms", style = monoStyle, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatsGraphPanel(
+    rtcStats: WebRtcStats,
+    history: List<StatsGraphPoint>,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(200.dp)
+            .background(
+                Color.Black.copy(alpha = 0.6f),
+                RoundedCornerShape(8.dp)
+            )
+            .border(
+                1.dp,
+                Color.White.copy(alpha = 0.1f),
+                RoundedCornerShape(8.dp)
+            )
+            .clickable { onClick() }
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Stats Graph (30s)",
+            color = Color(0xFFE4E4E7),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
+        )
+
+        MetricSparkline(
+            label = "RTT",
+            valueText = "${rtcStats.rttMs} ms",
+            color = Color(0xFF60A5FA),
+            history = history,
+            valueSelector = { it.rttMs }
+        )
+        MetricSparkline(
+            label = "Offset",
+            valueText = "${rtcStats.clockOffsetMs} ms",
+            color = Color(0xFFFBBF24),
+            history = history,
+            valueSelector = { it.clockOffsetMs }
+        )
+        MetricSparkline(
+            label = "Latency",
+            valueText = "${rtcStats.latencyMs} ms",
+            color = Color(0xFF4ADE80),
+            history = history,
+            valueSelector = { it.latencyMs }
+        )
+    }
+}
+
+@Composable
+private fun MetricSparkline(
+    label: String,
+    valueText: String,
+    color: Color,
+    history: List<StatsGraphPoint>,
+    valueSelector: (StatsGraphPoint) -> Int
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                color = color,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = valueText,
+                color = Color(0xFFE4E4E7),
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(6.dp))
+        ) {
+            if (history.isEmpty()) return@Canvas
+
+            val windowStart = SystemClock.elapsedRealtime() - STATS_GRAPH_WINDOW_MS
+            val minValue = history.minOf { valueSelector(it) }
+            val maxValue = history.maxOf { valueSelector(it) }
+            val range = (maxValue - minValue).coerceAtLeast(1)
+
+            val path = Path()
+            history.forEachIndexed { index, point ->
+                val x = ((point.timestampMs - windowStart).toFloat() / STATS_GRAPH_WINDOW_MS.toFloat())
+                    .coerceIn(0f, 1f) * size.width
+                val y = size.height - (((valueSelector(point) - minValue).toFloat() / range.toFloat())
+                    .coerceIn(0f, 1f) * size.height)
+                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+
+            drawPath(
+                path = path,
+                color = color,
+                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
         }
     }
 }
@@ -1025,6 +1314,7 @@ private fun ConnectionDetailsDialog(
                 "Codec" to selectedCodec,
                 "Device" to deviceScreenSize,
                 "Stream" to "${rtcStats.frameWidth}x${rtcStats.frameHeight}",
+                "E2E Latency" to "${rtcStats.latencyMs} ms",
                 "Session" to sessionId
             )
 

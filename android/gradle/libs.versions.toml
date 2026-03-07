@@ -13,7 +13,7 @@ room = "2.6.1"
 navigationCompose = "2.8.3"
 ktor = "2.3.11"
 kotlinxSerialization = "1.6.3"
-webrtc = "1.1.1"
+webrtc = "125.6422.07"
 coil = "2.7.0"
 
 [libraries]
@@ -43,7 +43,7 @@ ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.r
 ktor-client-websockets = { group = "io.ktor", name = "ktor-client-websockets", version.ref = "ktor" }
 ktor-client-content-negotiation = { group = "io.ktor", name = "ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { group = "io.ktor", name = "ktor-serialization-kotlinx-json", version.ref = "ktor" }
-webrtc = { group = "io.getstream", name = "stream-webrtc-android", version.ref = "webrtc" }
+webrtc = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtc" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 [plugins]

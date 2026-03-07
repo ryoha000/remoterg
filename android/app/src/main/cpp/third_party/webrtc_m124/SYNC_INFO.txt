@@ -1,0 +1,9 @@
+Synced by android/scripts/sync_webrtc_headers.py
+artifact=io.github.webrtc-sdk:android:125.6422.07
+webrtc_branch=M125
+webrtc_commit=07
+webrtc_revision=c4b376ac375710de19c1ba20157dba9b065930b0
+maint_version=0
+webrtc_source_repo=webrtc-sdk/webrtc
+chromium_third_party_revision=f36c4b6e56aaa94606c87fa0c3f7cbdbb5c70546
+synced_at_utc=2026-03-05T18:40:41+00:00

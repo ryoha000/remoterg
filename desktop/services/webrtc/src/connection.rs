@@ -28,10 +28,34 @@ use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_rs::track::track_local::TrackLocal;
 
+const ABS_CAPTURE_TIME_URI: &str =
+    "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time";
+
 pub fn codec_to_mime_type(codec: VideoCodec) -> String {
     match codec {
         VideoCodec::H264 => MIME_TYPE_H264.to_owned(),
         VideoCodec::AV1 => MIME_TYPE_AV1.to_owned(),
+    }
+}
+
+fn log_abs_capture_time_extmaps(label: &str, sdp: &str) {
+    let mut in_video = false;
+    let mut extmaps: Vec<String> = Vec::new();
+
+    for raw in sdp.lines() {
+        let line = raw.trim();
+        if line.starts_with("m=") {
+            in_video = line.starts_with("m=video");
+        }
+        if in_video && line.starts_with("a=extmap:") && line.contains(ABS_CAPTURE_TIME_URI) {
+            extmaps.push(line.to_string());
+        }
+    }
+
+    if extmaps.is_empty() {
+        warn!("ACT[{}]: video extmap not found in SDP", label);
+    } else {
+        info!("ACT[{}]: {}", label, extmaps.join(" | "));
     }
 }
 
@@ -45,6 +69,11 @@ pub struct SetOfferResult {
     pub codec: VideoCodec,
 }
 
+/// 単調増加時刻をミリ秒で返す (hostd起動基準)
+fn monotonic_ms_since(app_start: &std::time::Instant) -> f64 {
+    app_start.elapsed().as_secs_f64() * 1000.0
+}
+
 /// SetOfferメッセージを処理
 pub async fn handle_set_offer(
     sdp: String,
@@ -55,6 +84,7 @@ pub async fn handle_set_offer(
     video_stream_msg_tx: mpsc::Sender<VideoStreamMessage>,
     webrtc_msg_tx: mpsc::Sender<WebRtcMessage>,
     active_data_channel: Arc<std::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
+    app_start: std::time::Instant,
 ) -> Result<SetOfferResult> {
     debug!("SetOffer received, generating answer");
 
@@ -65,6 +95,15 @@ pub async fn handle_set_offer(
     // webrtc-rsのAPIを初期化
     let mut m = MediaEngine::default();
     m.register_default_codecs()?;
+
+    // Absolute Capture Time 拡張ヘッダーを登録 (SDP ネゴシエーション用)
+    m.register_header_extension(
+        webrtc_rs::rtp_transceiver::rtp_codec::RTCRtpHeaderExtensionCapability {
+            uri: "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time".to_string(),
+        },
+        webrtc_rs::rtp_transceiver::rtp_codec::RTPCodecType::Video,
+        None, // 全方向
+    )?;
 
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut m)?;
@@ -118,6 +157,7 @@ pub async fn handle_set_offer(
     // OfferをRemoteDescriptionとして設定
     let offer = RTCSessionDescription::offer(sdp).context("Failed to parse offer SDP")?;
     debug!("Offer SDP received:\n{}", offer.sdp);
+    log_abs_capture_time_extmaps("remote-offer", &offer.sdp);
     pc.set_remote_description(offer)
         .await
         .context("Failed to set remote description")?;
@@ -240,6 +280,20 @@ pub async fn handle_set_offer(
                                             debug!("Received keepalive pong from client (timestamp: {})", timestamp);
                                             // Pongメッセージは処理不要（受信だけで十分）
                                         }
+                                        DataChannelMessage::SyncReq { seq, c1 } => {
+                                            let s2 = monotonic_ms_since(&app_start);
+                                            let sync_res = DataChannelMessage::SyncRes {
+                                                seq: *seq,
+                                                c1: *c1,
+                                                s2,
+                                                s3: monotonic_ms_since(&app_start),
+                                            };
+                                            if let Ok(json) = serde_json::to_string(&sync_res) {
+                                                if let Err(e) = dc_for_pong.send_text(json).await {
+                                                    warn!("Failed to send sync_res: {}", e);
+                                                }
+                                            }
+                                        }
                                         _ => {
                                             // その他のメッセージは従来通りinputサービスに転送
                                             if let Err(e) = dc_tx_on_msg.send(parsed).await {
@@ -314,6 +368,7 @@ pub async fn handle_set_offer(
         .await
         .context("Failed to create answer")?;
     debug!("Answer SDP generated:\n{}", answer.sdp);
+    log_abs_capture_time_extmaps("local-answer", &answer.sdp);
 
     // ICE candidateのイベントハンドラを LocalDescription 設定前に登録して、
     // 初期ホスト候補を取りこぼさないようにする

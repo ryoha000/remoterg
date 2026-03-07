@@ -229,6 +229,7 @@ impl CaptureService {
                 / 100,
             id: frame_index,
             texture_handle: None,
+            t_cap_mono_ms: None,
         }
     }
 

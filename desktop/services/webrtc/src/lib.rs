@@ -22,6 +22,7 @@ pub struct WebRtcService {
     signaling_tx: mpsc::Sender<SignalingResponse>,
     data_channel_tx: mpsc::Sender<DataChannelMessage>,
     outgoing_data_channel_rx: Option<mpsc::Receiver<OutgoingDataChannelMessage>>,
+    app_start: std::time::Instant,
     video_track_tx: Option<
         mpsc::Sender<(
             Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
@@ -44,6 +45,7 @@ impl WebRtcService {
         signaling_tx: mpsc::Sender<SignalingResponse>,
         data_channel_tx: mpsc::Sender<DataChannelMessage>,
         outgoing_data_channel_rx: Option<mpsc::Receiver<OutgoingDataChannelMessage>>,
+        app_start: std::time::Instant,
         video_track_tx: Option<
             mpsc::Sender<(
                 Arc<webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample>,
@@ -67,6 +69,7 @@ impl WebRtcService {
                 signaling_tx,
                 data_channel_tx,
                 outgoing_data_channel_rx,
+                app_start,
                 video_track_tx,
                 video_stream_msg_tx,
                 audio_track_tx,
@@ -171,6 +174,7 @@ impl WebRtcService {
                     match msg {
                         Some(WebRtcMessage::SetOffer { sdp, codec }) => {
                             info!("Received SetOffer message (codec: {:?})", codec);
+                            info!("Received SetOffer message (sdp: {:?})", sdp);
                             // 既存のPeerConnectionが存在する場合はクリーンアップ
                             if peer_connection.is_some() {
                                 info!("Cleaning up existing PeerConnection before creating new one");
@@ -208,6 +212,7 @@ impl WebRtcService {
                                 video_stream_msg_tx,
                                 webrtc_msg_tx.clone(),
                                 active_data_channel.clone(),
+                                self.app_start,
                             ).await {
                                 Ok(result) => {
                                     peer_connection = Some(result.peer_connection.clone());

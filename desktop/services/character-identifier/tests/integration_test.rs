@@ -4,14 +4,17 @@ use std::fs;
 use std::time::Instant;
 use image::GenericImageView;
 use std::sync::Once;
+use tracing_subscriber::EnvFilter;
 
 
 static INIT_TRACING: Once = Once::new();
 
 fn init_tracing() {
     INIT_TRACING.call_once(|| {
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("debug,ort=warn"));
         tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
+            .with_env_filter(filter)
             .with_test_writer()
             .init();
     });

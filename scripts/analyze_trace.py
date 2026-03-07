@@ -4,17 +4,17 @@ import argparse
 import sys
 from pathlib import Path
 
+
 def analyze_trace(file_path):
-    print(f"Loading trace file: {file_path}")
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
     except FileNotFoundError:
-        print(f"Error: File not found: {file_path}")
-        return
+        print(f"Error: File not found: {file_path}", file=sys.stderr)
+        return None
     except json.JSONDecodeError:
-        print(f"Error: Invalid JSON file: {file_path}")
-        return
+        print(f"Error: Invalid JSON file: {file_path}", file=sys.stderr)
+        return None
 
     # Extract events
     if isinstance(data, list):
@@ -22,12 +22,12 @@ def analyze_trace(file_path):
     elif isinstance(data, dict):
         events = data.get('traceEvents', [])
     else:
-        print("Error: Unknown trace file format (not a list or dict)")
-        return
+        print("Error: Unknown trace file format (not a list or dict)", file=sys.stderr)
+        return None
 
     if not events:
-        print("Error: No traceEvents found")
-        return
+        print("Error: No traceEvents found", file=sys.stderr)
+        return None
 
     # Filter for relevant events with frame_id
     # We are looking for:
@@ -118,16 +118,14 @@ def analyze_trace(file_path):
                 frame_events.append({'frame_id': frame_id, 'event': 'send_start', 'ts': ts})
 
     if not frame_events:
-        print("No relevant frame events found in trace.")
-        return
+        print("No relevant frame events found in trace.", file=sys.stderr)
+        return {"frame_count": 0, "stats_cols": [], "valid_frames": pd.DataFrame()}
 
     df = pd.DataFrame(frame_events)
     
     # Pivot to have one row per frame_id (using 'first' to handle duplicates if any)
     df_pivot = df.pivot_table(index='frame_id', columns='event', values='ts', aggfunc='first')
     
-    # Debug: Print available columns
-    print(f"DEBUG: Available event columns: {df_pivot.columns.tolist()}")
 
     # Calculate Latencies
     # 1. Capture Latency
@@ -180,24 +178,98 @@ def analyze_trace(file_path):
     stats_cols = [c for c in df_pivot.columns if c.startswith('latency_')]
     valid_frames = df_pivot
 
-    print("\n" + "="*50)
-    print(f"Trace Analysis Summary (Frames found: {len(valid_frames)})")
-    print("="*50)
-    
-    if stats_cols:
-        summary = valid_frames[stats_cols].describe(percentiles=[0.5, 0.9, 0.95, 0.99])
-        print(summary.transpose().round(2))
-        
-        print("\n" + "="*50)
-        print("Detailed Latency Breakdown (Avg ms)")
-        print("="*50)
-        print(valid_frames[stats_cols].mean().round(4))
-    else:
-        print("No latency metrics could be calculated.")
+    return {
+        "frame_count": len(valid_frames),
+        "stats_cols": stats_cols,
+        "valid_frames": valid_frames,
+    }
+
+
+def format_results(result, output_format: str) -> str:
+    """Format analysis results as text, json, or markdown."""
+    stats_cols = result["stats_cols"]
+    valid_frames = result["valid_frames"]
+    frame_count = result["frame_count"]
+
+    if not stats_cols:
+        if output_format == "json":
+            return json.dumps({"frame_count": frame_count, "metrics": {}})
+        return f"Trace Analysis Summary (Frames found: {frame_count})\nNo latency metrics could be calculated."
+
+    summary = valid_frames[stats_cols].describe(percentiles=[0.5, 0.9, 0.95, 0.99])
+
+    if output_format == "json":
+        metrics = {}
+        for col in stats_cols:
+            s = valid_frames[col].dropna()
+            metrics[col] = {
+                "count": int(s.count()),
+                "mean": round(float(s.mean()), 4),
+                "std": round(float(s.std()), 4) if s.std() == s.std() else 0,
+                "min": round(float(s.min()), 4),
+                "p50": round(float(s.quantile(0.5)), 4),
+                "p90": round(float(s.quantile(0.9)), 4),
+                "p95": round(float(s.quantile(0.95)), 4),
+                "p99": round(float(s.quantile(0.99)), 4),
+                "max": round(float(s.max()), 4),
+            }
+        return json.dumps({"frame_count": frame_count, "metrics": metrics}, indent=2)
+
+    if output_format == "markdown":
+        lines = [
+            f"# RemoteRG Trace Analysis",
+            f"**Frames analyzed:** {frame_count}",
+            "",
+            "## Latency Metrics (ms)",
+            "",
+            "| Metric | Count | Mean | Std | Min | P50 | P90 | P95 | P99 | Max |",
+            "|--------|-------|------|-----|-----|-----|-----|-----|-----|-----|",
+        ]
+        for col in stats_cols:
+            s = valid_frames[col].dropna()
+            row = (
+                col,
+                int(s.count()),
+                round(float(s.mean()), 2),
+                round(float(s.std()), 2) if s.std() == s.std() else 0,
+                round(float(s.min()), 2),
+                round(float(s.quantile(0.5)), 2),
+                round(float(s.quantile(0.9)), 2),
+                round(float(s.quantile(0.95)), 2),
+                round(float(s.quantile(0.99)), 2),
+                round(float(s.max()), 2),
+            )
+            lines.append(f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} | {row[5]} | {row[6]} | {row[7]} | {row[8]} | {row[9]} |")
+        return "\n".join(lines)
+
+    # text (default)
+    lines = [
+        "\n" + "=" * 50,
+        f"Trace Analysis Summary (Frames found: {frame_count})",
+        "=" * 50,
+        "",
+        str(summary.transpose().round(2)),
+        "",
+        "=" * 50,
+        "Detailed Latency Breakdown (Avg ms)",
+        "=" * 50,
+        str(valid_frames[stats_cols].mean().round(4)),
+    ]
+    return "\n".join(lines)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze RemoteRG trace-timestamp.json")
     parser.add_argument("file", help="Path to trace-timestamp.json file")
+    parser.add_argument(
+        "--format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Output format (default: text)",
+    )
     args = parser.parse_args()
-    
-    analyze_trace(args.file)
+
+    result = analyze_trace(args.file)
+    if result is None:
+        sys.exit(1)
+    print(format_results(result, args.format))

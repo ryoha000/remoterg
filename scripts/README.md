@@ -34,7 +34,16 @@
 
    または `pandas` がインストールされた環境であれば直接 python で実行可能です:
    ```bash
-   python analyze_trace.py <path_to_trace__file>
+   python analyze_trace.py <path_to_trace_file>
+   python analyze_trace.py <path_to_trace_file> --format json    # JSON出力
+   python analyze_trace.py <path_to_trace_file> --format markdown  # Markdown表出力
+   ```
+
+3. **hostd からのレポート生成**
+   `hostd` を `--latency-report` オプションで起動すると、終了時に自動で trace を解析し、`latency-report.json` を出力します。
+
+   ```bash
+   cargo run --bin hostd -- --latency-report --latency-report-dir .
    ```
 
 ### 出力内容

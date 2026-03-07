@@ -11,6 +11,8 @@ plugins {
 android {
     namespace = "moe.ryoha.remoterg"
     compileSdk = 35
+    val enableNativeLatencySink =
+        project.findProperty("enableNativeLatencySink")?.toString() ?: "true"
 
     defaultConfig {
         applicationId = "moe.ryoha.remoterg"
@@ -20,6 +22,17 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+        buildConfigField("boolean", "ENABLE_NATIVE_LATENCY_SINK", enableNativeLatencySink)
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {
@@ -40,6 +53,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     testOptions {
         unitTests.isReturnDefaultValues = true

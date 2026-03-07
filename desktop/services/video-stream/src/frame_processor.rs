@@ -220,6 +220,8 @@ pub async fn run_frame_router(
                                 request_keyframe,
                                 frame_id: frame.id,
                                 texture_handle: frame.texture_handle,
+                                t_cap_mono_ms: frame.t_cap_mono_ms,
+                                t_enc_in_mono_ms: Some(core_types::latency_monotonic_ms()),
                             });
 
                             let job_send_dur = job_send_start.elapsed();

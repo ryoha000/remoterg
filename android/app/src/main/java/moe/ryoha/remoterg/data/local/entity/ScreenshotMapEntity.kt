@@ -2,9 +2,22 @@ package moe.ryoha.remoterg.data.local.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "screenshot_map")
+@Entity(
+    tableName = "screenshot_map",
+    foreignKeys = [
+        ForeignKey(
+            entity = GameEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["game_id"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ],
+    indices = [Index(value = ["game_id"])]
+)
 data class ScreenshotMapEntity(
     @PrimaryKey
     @ColumnInfo(name = "local_id")
@@ -23,5 +36,8 @@ data class ScreenshotMapEntity(
     val processPath: String? = null,
 
     @ColumnInfo(name = "thumbnail_path", defaultValue = "NULL")
-    val thumbnailPath: String? = null
+    val thumbnailPath: String? = null,
+
+    @ColumnInfo(name = "game_id", defaultValue = "NULL")
+    val gameId: Long? = null
 )

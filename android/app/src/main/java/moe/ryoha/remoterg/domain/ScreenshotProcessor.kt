@@ -25,6 +25,7 @@ class ScreenshotProcessor @Inject constructor(
     private val repository: ScreenshotRepository,
     private val analysisDao: moe.ryoha.remoterg.data.local.dao.AnalysisDao,
     private val screenshotDao: moe.ryoha.remoterg.data.local.dao.ScreenshotDao,
+    private val gameDao: moe.ryoha.remoterg.data.local.dao.GameDao,
     private val googleDriveRepository: GoogleDriveRepository
 ) {
     private var observeJob: Job? = null
@@ -47,6 +48,8 @@ class ScreenshotProcessor @Inject constructor(
     private var windowTitle: String? = null
     private var processPath: String? = null
     private var processName: String? = null
+    private var vndbId: String? = null
+    private var officialTitle: String? = null
 
     // For notifying UI
     private val _onScreenshotSaved = MutableSharedFlow<android.net.Uri>()
@@ -83,6 +86,8 @@ class ScreenshotProcessor @Inject constructor(
                             windowTitle = screenshotMetadata["window_title"]?.jsonPrimitive?.content
                             processPath = screenshotMetadata["process_path"]?.jsonPrimitive?.content
                             processName = screenshotMetadata["process_name"]?.jsonPrimitive?.content
+                            vndbId = screenshotMetadata["vndb_id"]?.jsonPrimitive?.content
+                            officialTitle = screenshotMetadata["official_title"]?.jsonPrimitive?.content
                             
                             currentReceived = 0
                             currentChunks.clear()
@@ -210,6 +215,10 @@ class ScreenshotProcessor @Inject constructor(
         val id = currentId ?: return
         val size = currentSize
         val format = currentFormat
+
+        val gameId = vndbId?.let { vId ->
+            gameDao.upsertGame(vId, officialTitle)
+        }
         
         val uri = if (size == 0) {
             val bitmap = pendingLocalBitmap
@@ -219,7 +228,8 @@ class ScreenshotProcessor @Inject constructor(
                     hostId = id,
                     windowTitle = windowTitle,
                     processPath = processPath,
-                    processName = processName
+                    processName = processName,
+                    gameId = gameId
                 )
                 
                 if (googleDriveRepository.isConnected.value) {
@@ -253,7 +263,8 @@ class ScreenshotProcessor @Inject constructor(
                 data = combined,
                 windowTitle = windowTitle,
                 processPath = processPath,
-                processName = processName
+                processName = processName,
+                gameId = gameId
             )
             
             if (googleDriveRepository.isConnected.value) {
@@ -271,6 +282,8 @@ class ScreenshotProcessor @Inject constructor(
         currentReceived = 0
         currentChunks.clear()
         pendingLocalBitmap = null
+        vndbId = null
+        officialTitle = null
 
         if (uri != null) {
             _onScreenshotSaved.emit(uri)

@@ -110,8 +110,12 @@ class GalleryViewModel @Inject constructor(
             if (filters.isFavorite && !favIds.contains(item.localId)) return@filter false
 
             // Game title filter
-            // 検索時の gameTitle は cleanTitle の可能性があるため、前方一致で判定
-            if (filters.gameTitle != null && !item.windowTitle.startsWith(filters.gameTitle)) return@filter false
+            // 検索時の gameTitle は直値か windowTitle の prefix である可能性がある
+            if (filters.gameTitle != null) {
+                val matchGameTitle = item.gameTitle == filters.gameTitle
+                val matchWindowTitle = item.windowTitle.startsWith(filters.gameTitle)
+                if (!matchGameTitle && !matchWindowTitle) return@filter false
+            }
 
             // Character text filter
             if (filters.charaText != null && charaMatchedIds?.contains(item.localId) != true) return@filter false
@@ -140,22 +144,19 @@ class GalleryViewModel @Inject constructor(
     // Extract unique titles for the title cards UI
     val recentTitles = repository.getAllScreenshotsWithDimensions()
         .map { list ->
-            // processPath があるものは processPath でグループ化し、
-            // 空のものは windowTitle でフォールバックしてグループ化する
-            val grouped = list.filter { it.windowTitle.isNotBlank() }
-                .groupBy { it.processPath?.takeIf { p -> p.isNotBlank() } ?: it.windowTitle }
+            // gameTitle があるものは gameTitle、次に processPath、最後に windowTitle でグループ化する
+            val grouped = list.filter { it.windowTitle.isNotBlank() || !it.gameTitle.isNullOrBlank() }
+                .groupBy { it.gameTitle?.takeIf { gt -> gt.isNotBlank() }
+                    ?: it.processPath?.takeIf { p -> p.isNotBlank() } 
+                    ?: it.windowTitle }
 
             grouped.map { (_, items) ->
                 // items are sorted descending by dateAdded from repository
                 val latestScreenshot = items.first()
 
-                // グループ内の全ウィンドウタイトルの LCP を計算し、不要な記号を除去
-                val titles = items.map { it.windowTitle }.distinct()
-                val lcp = moe.ryoha.remoterg.ui.util.StringUtil.longestCommonPrefix(titles)
-                val cleanTitle = moe.ryoha.remoterg.ui.util.StringUtil.cleanPrefix(lcp)
-
-                // もし共通部分がうまく抽出できなかった（空になった）場合は最新のタイトルをそのまま使う
-                val displayTitle = if (cleanTitle.isNotBlank()) cleanTitle else latestScreenshot.windowTitle
+                // gameTitle があればそれを表示タイトルとし、なければ最新の windowTitle を使う
+                val displayTitle = latestScreenshot.gameTitle?.takeIf { it.isNotBlank() } 
+                    ?: latestScreenshot.windowTitle
 
                 Pair(displayTitle, latestScreenshot)
             }

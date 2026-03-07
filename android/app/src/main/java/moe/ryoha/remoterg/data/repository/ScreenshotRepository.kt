@@ -32,7 +32,9 @@ data class MediaStoreScreenshot(
     val windowTitle: String,
     val processName: String,
     val processPath: String? = null,
-    val thumbnailPath: String? = null
+    val thumbnailPath: String? = null,
+    val vndbId: String? = null,
+    val gameTitle: String? = null
 )
 
 @Singleton
@@ -49,8 +51,8 @@ class ScreenshotRepository @Inject constructor(
      * This ensures MediaStore is the Source of Truth while still utilizing DB metadata.
      */
     fun getAllScreenshotsWithDimensions(): Flow<List<MediaStoreScreenshot>> {
-        return screenshotDao.getAllScreenshots().map { dbList ->
-            val dbMap = dbList.associateBy { it.localId }
+        return screenshotDao.getAllScreenshotsWithGame().map { dbList ->
+            val dbMap = dbList.associateBy { it.screenshot.localId }
             val mediaStoreItems = mutableListOf<MediaStoreScreenshot>()
 
             val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -97,15 +99,17 @@ class ScreenshotRepository @Inject constructor(
                         mediaStoreItems.add(
                             MediaStoreScreenshot(
                                 localId = localId,
-                                hostId = dbEntity.hostId,
+                                hostId = dbEntity.screenshot.hostId,
                                 uri = contentUri,
                                 width = width,
                                 height = height,
                                 dateAdded = dateAdded,
-                                windowTitle = dbEntity.windowTitle,
-                                processName = dbEntity.processName,
-                                processPath = dbEntity.processPath,
-                                thumbnailPath = dbEntity.thumbnailPath
+                                windowTitle = dbEntity.screenshot.windowTitle,
+                                processName = dbEntity.screenshot.processName,
+                                processPath = dbEntity.screenshot.processPath,
+                                thumbnailPath = dbEntity.screenshot.thumbnailPath,
+                                vndbId = dbEntity.vndbId,
+                                gameTitle = dbEntity.officialTitle
                             )
                         )
                     }
@@ -121,7 +125,8 @@ class ScreenshotRepository @Inject constructor(
         data: ByteArray,
         windowTitle: String?,
         processPath: String?,
-        processName: String?
+        processName: String?,
+        gameId: Long? = null
     ): Uri? = withContext(Dispatchers.IO) {
         try {
             val fileName = "$hostId.$format"
@@ -167,7 +172,8 @@ class ScreenshotRepository @Inject constructor(
                         windowTitle = windowTitle ?: "",
                         processName = processName ?: "",
                         processPath = processPath,
-                        thumbnailPath = thumbnailPath
+                        thumbnailPath = thumbnailPath,
+                        gameId = gameId
                     )
                 )
 
@@ -188,7 +194,8 @@ class ScreenshotRepository @Inject constructor(
         hostId: String = "local_${System.currentTimeMillis()}",
         windowTitle: String? = "Client Screenshot",
         processPath: String? = "remoterg/client",
-        processName: String? = "Android Client"
+        processName: String? = "Android Client",
+        gameId: Long? = null
     ): Uri? = withContext(Dispatchers.IO) {
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream)
@@ -200,7 +207,8 @@ class ScreenshotRepository @Inject constructor(
             data = data,
             windowTitle = windowTitle,
             processPath = processPath,
-            processName = processName
+            processName = processName,
+            gameId = gameId
         )
     }
 

@@ -10,6 +10,7 @@ import dagger.hilt.components.SingletonComponent
 import moe.ryoha.remoterg.data.local.AppDatabase
 import moe.ryoha.remoterg.data.local.dao.AnalysisDao
 import moe.ryoha.remoterg.data.local.dao.ScreenshotDao
+import moe.ryoha.remoterg.data.local.dao.GameDao
 import javax.inject.Singleton
 
 @Module
@@ -24,7 +25,12 @@ object DatabaseModule {
             AppDatabase::class.java,
             "remoterg_db"
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5
+            )
             .build()
     }
 
@@ -36,5 +42,10 @@ object DatabaseModule {
     @Provides
     fun provideAnalysisDao(database: AppDatabase): AnalysisDao {
         return database.analysisDao()
+    }
+
+    @Provides
+    fun provideGameDao(database: AppDatabase): GameDao {
+        return database.gameDao()
     }
 }

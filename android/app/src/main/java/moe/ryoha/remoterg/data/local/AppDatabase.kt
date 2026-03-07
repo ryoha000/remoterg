@@ -13,6 +13,9 @@ import moe.ryoha.remoterg.data.local.entity.ScreenshotMapEntity
 import moe.ryoha.remoterg.data.local.entity.AnalysisCharacterEntity
 import moe.ryoha.remoterg.data.local.entity.AnalysisDialogueEntity
 import moe.ryoha.remoterg.data.local.entity.AnalysisSceneEntity
+import moe.ryoha.remoterg.data.local.entity.GameEntity
+import moe.ryoha.remoterg.data.local.entity.GameVndbMapEntity
+import moe.ryoha.remoterg.data.local.dao.GameDao
 
 @Database(
     entities = [
@@ -21,14 +24,17 @@ import moe.ryoha.remoterg.data.local.entity.AnalysisSceneEntity
         AnalysisDialogueEntity::class,
         AnalysisCharacterEntity::class,
         ScreenshotFavoriteEntity::class,
-        ScreenshotMapEntity::class
+        ScreenshotMapEntity::class,
+        GameEntity::class,
+        GameVndbMapEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun screenshotDao(): ScreenshotDao
     abstract fun analysisDao(): AnalysisDao
+    abstract fun gameDao(): GameDao
 
     companion object {
         /** v1→v2: サムネイルパスカラムを追加 */
@@ -99,6 +105,30 @@ abstract class AppDatabase : RoomDatabase() {
                 } catch (e: Exception) {
                     // ignore JSON extraction failure if not supported
                 }
+            }
+        }
+
+        /** v4→v5: GameEntity, GameVndbMapEntity追加、ScreenshotMapEntityにgame_id追加 */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `games` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `game_vndb_maps` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `game_id` INTEGER NOT NULL, `vndb_id` TEXT NOT NULL, `official_title` TEXT, FOREIGN KEY(`game_id`) REFERENCES `games`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_game_vndb_maps_vndb_id` ON `game_vndb_maps` (`vndb_id`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_game_vndb_maps_game_id` ON `game_vndb_maps` (`game_id`)"
+                )
+                db.execSQL(
+                    "ALTER TABLE screenshot_map ADD COLUMN game_id INTEGER DEFAULT NULL REFERENCES `games`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_screenshot_map_game_id` ON `screenshot_map` (`game_id`)"
+                )
             }
         }
     }

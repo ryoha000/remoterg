@@ -11,12 +11,56 @@ import moe.ryoha.remoterg.data.local.entity.AnalysisResultEntity
 import moe.ryoha.remoterg.data.local.entity.AnalysisSceneEntity
 import moe.ryoha.remoterg.data.local.entity.ScreenshotFavoriteEntity
 import moe.ryoha.remoterg.data.local.entity.ScreenshotMapEntity
+import moe.ryoha.remoterg.data.local.entity.GameEntity
+import moe.ryoha.remoterg.data.local.entity.GameVndbMapEntity
+import androidx.room.Embedded
+import androidx.room.ColumnInfo
+
+data class ScreenshotWithGame(
+    @Embedded
+    val screenshot: ScreenshotMapEntity,
+    
+    @ColumnInfo(name = "vndb_id")
+    val vndbId: String?,
+    
+    @ColumnInfo(name = "official_title")
+    val officialTitle: String?
+)
+
+@Dao
+interface GameDao {
+    @Query("SELECT * FROM game_vndb_maps WHERE vndb_id = :vndbId")
+    suspend fun getGameVndbMapByVndbId(vndbId: String): GameVndbMapEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertGame(game: GameEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertGameVndbMap(map: GameVndbMapEntity): Long
+
+    suspend fun upsertGame(vndbId: String, officialTitle: String?): Long {
+        val existing = getGameVndbMapByVndbId(vndbId)
+        if (existing != null) {
+            return existing.gameId
+        }
+        val gameId = insertGame(GameEntity())
+        insertGameVndbMap(GameVndbMapEntity(gameId = gameId, vndbId = vndbId, officialTitle = officialTitle))
+        return gameId
+    }
+}
 
 @Dao
 interface ScreenshotDao {
 
     @Query("SELECT * FROM screenshot_map")
     fun getAllScreenshots(): Flow<List<ScreenshotMapEntity>>
+
+    @Query("""
+        SELECT s.*, g.vndb_id, g.official_title 
+        FROM screenshot_map s 
+        LEFT JOIN game_vndb_maps g ON s.game_id = g.game_id
+    """)
+    fun getAllScreenshotsWithGame(): Flow<List<ScreenshotWithGame>>
 
     @Query("SELECT * FROM screenshot_map")
     suspend fun getAllScreenshotsSync(): List<ScreenshotMapEntity>

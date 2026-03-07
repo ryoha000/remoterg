@@ -679,45 +679,6 @@ private fun InfoSectionHeader(
 private fun AnalysisViewer(analysis: moe.ryoha.remoterg.data.model.AnalysisResult) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         
-        // Scene Info
-        analysis.sceneInfo?.let { scene ->
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Outlined.LocationOn,
-                        contentDescription = null,
-                        tint = Zinc400,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Scene", color = Zinc400, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Zinc900.copy(alpha = 0.5f))
-                        .border(1.dp, Zinc800, RoundedCornerShape(6.dp))
-                        .padding(12.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row {
-                            Text(text = "Location", color = Zinc500, fontSize = 14.sp, modifier = Modifier.width(80.dp))
-                            Text(text = scene.location, color = Zinc200, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                        }
-                        Row {
-                            Text(text = "Time", color = Zinc500, fontSize = 14.sp, modifier = Modifier.width(80.dp))
-                            Text(text = scene.timeOfDay, color = Zinc200, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                        }
-                        Row {
-                            Text(text = "Mood", color = Zinc500, fontSize = 14.sp, modifier = Modifier.width(80.dp))
-                            Text(text = scene.atmosphere, color = Zinc200, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        }
-
         // Dialogue
         analysis.dialogue?.let { dialog ->
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -778,27 +739,6 @@ private fun AnalysisViewer(analysis: moe.ryoha.remoterg.data.model.AnalysisResul
                                 ) {
                                     Text(text = char.name, color = Color(0xFF6EE7B7), fontWeight = FontWeight.SemiBold) // emerald-300
                                     Text(text = char.position.uppercase(), color = Zinc500, fontSize = 12.sp)
-                                }
-                                Text(
-                                    text = char.visualDescription,
-                                    color = Zinc300,
-                                    fontSize = 14.sp,
-                                    modifier = Modifier.padding(bottom = 8.dp)
-                                )
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    char.expressionTags.forEach { tag ->
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(Zinc800)
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(text = tag, color = Zinc400, fontSize = 10.sp)
-                                        }
-                                    }
                                 }
                             }
                         }

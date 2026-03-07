@@ -6,17 +6,9 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Download, ArrowLeft, Calendar, FileType, HardDrive, X, Sparkles, Loader2, User, MapPin, MessageSquare } from "lucide-react";
+import { Download, ArrowLeft, Calendar, FileType, HardDrive, X, Sparkles, Loader2, User, MessageSquare } from "lucide-react";
 import { useState, useMemo } from "react";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-
-// JSON Schema Types
-interface SceneInfo {
-  location: string;
-  time_of_day: string;
-  atmosphere: string;
-}
 
 interface Dialogue {
   speaker: string;
@@ -25,13 +17,10 @@ interface Dialogue {
 
 interface Character {
   name: string;
-  expression_tags: string[];
-  visual_description: string;
   position: string;
 }
 
 export interface AnalysisResult {
-  scene_info?: SceneInfo;
   dialogue?: Dialogue;
   characters?: Character[];
 }
@@ -75,29 +64,6 @@ const handleDownload = (img: GalleryImage) => {
 function AnalysisViewer({ analysis }: { analysis: AnalysisResult }) {
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-      {/* Scene Info */}
-      {analysis.scene_info && (
-        <div className="space-y-2">
-          <h4 className="text-sm font-semibold text-zinc-400 flex items-center gap-2">
-            <MapPin className="w-4 h-4" /> Scene
-          </h4>
-          <div className="bg-zinc-900/50 rounded-md p-3 text-sm space-y-1 border border-zinc-800">
-            <div className="grid grid-cols-[80px_1fr] gap-2">
-              <span className="text-zinc-500">Location</span>
-              <span className="text-zinc-200">{analysis.scene_info.location}</span>
-            </div>
-            <div className="grid grid-cols-[80px_1fr] gap-2">
-              <span className="text-zinc-500">Time</span>
-              <span className="text-zinc-200">{analysis.scene_info.time_of_day}</span>
-            </div>
-            <div className="grid grid-cols-[80px_1fr] gap-2">
-              <span className="text-zinc-500">Mood</span>
-              <span className="text-zinc-200">{analysis.scene_info.atmosphere}</span>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Dialogue */}
       {analysis.dialogue && (
         <div className="space-y-2">
@@ -120,17 +86,9 @@ function AnalysisViewer({ analysis }: { analysis: AnalysisResult }) {
           <div className="space-y-3">
             {analysis.characters.map((char, i) => (
               <div key={i} className="bg-zinc-900/50 rounded-md p-3 text-sm border border-zinc-800">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between">
                   <span className="font-semibold text-emerald-300">{char.name}</span>
                   <span className="text-xs text-zinc-500 uppercase">{char.position}</span>
-                </div>
-                <div className="text-zinc-300 mb-2">{char.visual_description}</div>
-                <div className="flex flex-wrap gap-1">
-                  {char.expression_tags?.map((tag, j) => (
-                    <Badge key={j} variant="secondary" className="bg-zinc-800 text-zinc-400 text-[10px] hover:bg-zinc-700">
-                      {tag}
-                    </Badge>
-                  ))}
                 </div>
               </div>
             ))}

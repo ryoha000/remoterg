@@ -26,7 +26,7 @@ data class Character(
 
 @Serializable
 data class AnalysisResult(
-    @SerialName("scene_info") val sceneInfo: SceneInfo? = null,
     val dialogue: Dialogue? = null,
+    // Add characters here so it can be passed around in UI if needed, though not parsed from LLM JSON anymore
     val characters: List<Character> = emptyList()
 )

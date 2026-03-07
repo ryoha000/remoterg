@@ -103,6 +103,9 @@ interface AnalysisDao {
     @Query("SELECT * FROM analysis_results WHERE local_id = :localId")
     suspend fun getAnalysisResult(localId: String): AnalysisResultEntity?
 
+    @Query("SELECT * FROM analysis_character WHERE local_id = :localId")
+    suspend fun getAnalysisCharacters(localId: String): List<AnalysisCharacterEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAnalysisResult(result: AnalysisResultEntity)
 

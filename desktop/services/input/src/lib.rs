@@ -8,8 +8,8 @@ use uuid::Uuid;
 use tagger::TaggerService;
 
 use core_types::{
-    CaptureMessage, DataChannelMessage, OutgoingDataChannelMessage, ScreenshotFrame,
-    ScreenshotMetadataPayload,
+    AnalysisCharacter, CaptureMessage, DataChannelMessage, OutgoingDataChannelMessage,
+    ScreenshotFrame, ScreenshotMetadataPayload,
 };
 
 use window_info::WindowInfoProvider;
@@ -53,7 +53,7 @@ pub struct InputService {
 /// キャラクター情報のキャッシュ
 struct CharacterCache {
     vndb_id: String,
-    characters: Vec<VndbCharacter>,
+    _characters: Vec<VndbCharacter>,
 }
 
 const PROMPT_BASE: &str = r#"以下のJSONスキーマに従って、スクリーンショットの解析結果を出力してください。
@@ -61,23 +61,10 @@ const PROMPT_BASE: &str = r#"以下のJSONスキーマに従って、スクリ�
 
 ### JSON Schema:
 {
-  "scene_info": {
-    "location": "文字列: 背景から推測される場所",
-    "time_of_day": "文字列: 昼、夕方、夜、不明など",
-    "atmosphere": "文字列: 場面の雰囲気（例：平穏、緊張、ロマンチック）"
-  },
   "dialogue": {
     "speaker": "文字列: 名前欄に表示されている名前",
     "text": "文字列: メッセージウィンドウ内の全文（改行は \n で保持）"
-  },
-  "characters": [
-    {
-      "name": "文字列: キャラクター名",
-      "expression_tags": ["文字列: 表情を示すタグ（例：微笑、怒り、照れ）"],
-      "visual_description": "文字列: 服装やポーズの簡潔な説明",
-      "position": "文字列: 画面内の位置（左、中央、右）"
-    }
-  ]
+  }
 }
 
 ### 出力制約:
@@ -322,7 +309,7 @@ impl InputService {
         }
 
         // --- キャラクター情報の取得（VNDB API） ---
-        let prompt = if let Some(ref title) = title_info {
+        let (prompt, analysis_characters) = if let Some(ref title) = title_info {
             let mut char_cache = self.cached_characters.lock().await;
             let need_fetch = match &*char_cache {
                 Some(cache) => cache.vndb_id != title.vndb_id,
@@ -351,7 +338,7 @@ impl InputService {
 
                         *char_cache = Some(CharacterCache {
                             vndb_id: title.vndb_id.clone(),
-                            characters,
+                            _characters: characters,
                         });
                     }
                     Err(e) => {
@@ -361,7 +348,7 @@ impl InputService {
             }
 
             match &*char_cache {
-                Some(cache) => {
+                Some(_cache) => {
                     let chars_in_screenshot = if let Some(ci_arc) = &self.character_identifier {
                         let mut ci = ci_arc.lock().await;
                         match ci.identify(&jpeg_data) {
@@ -375,23 +362,40 @@ impl InputService {
                         Vec::new()
                     };
 
-                    let mut text_prompt = PROMPT_BASE.to_string();
-                    let identified_known: Vec<_> = chars_in_screenshot.iter().filter(|c| c.name != "Unknown").collect();
-                    if !identified_known.is_empty() {
-                        text_prompt.push_str("\n### 画面に映っていると判定されたキャラクター:\n");
-                        for char_info in identified_known {
-                            let desc = cache.characters.iter().find(|c| {
-                                c.original.as_deref().unwrap_or(&c.name) == char_info.name
-                            }).map(|c| c.description.clone()).unwrap_or_default();
-                            text_prompt.push_str(&format!("- {}: (信頼度: {:.2}, 位置: 左から{}) {}\n", char_info.name, char_info.confidence, char_info.position_index + 1, desc));
-                        }
-                    }
-                    text_prompt
-                },
-                None => PROMPT_BASE.to_string(),
+                    let total_detected = chars_in_screenshot.len();
+
+                    let identified_known: Vec<_> = chars_in_screenshot
+                        .into_iter()
+                        .filter(|c| c.name != "Unknown")
+                        .collect();
+
+                    let total_identified = identified_known.len();
+                    info!("Character Identifier: Detected {} characters, successfully identified {}", total_detected, total_identified);
+
+                    let analysis_characters: Vec<AnalysisCharacter> = identified_known
+                        .into_iter()
+                        .map(|c| {
+                            let position_str = match c.position_index {
+                                0 => "Left",
+                                1 => "Center",
+                                2 => "Right",
+                                _ => "Unknown",
+                            }
+                            .to_string();
+
+                            AnalysisCharacter {
+                                name: c.name.clone(),
+                                position: position_str,
+                            }
+                        })
+                        .collect();
+
+                    (PROMPT_BASE.to_string(), analysis_characters)
+                }
+                None => (PROMPT_BASE.to_string(), Vec::new()),
             }
         } else {
-            PROMPT_BASE.to_string()
+            (PROMPT_BASE.to_string(), Vec::new())
         };
 
         // --- Auto AI Analysis Trigger ---
@@ -449,7 +453,7 @@ impl InputService {
                 }
             }
 
-            let response = DataChannelMessage::AnalyzeResponseDone { id: id_for_task.clone() };
+            let response = DataChannelMessage::AnalyzeResponseDone { id: id_for_task.clone(), characters: analysis_characters };
             let _ = outgoing_tx.send(OutgoingDataChannelMessage::Text(response)).await;
             info!("Finished background auto AI analysis for {}", id_for_task);
         });
@@ -561,7 +565,7 @@ impl InputService {
         }
 
         // 4. Send Done
-        let response = DataChannelMessage::AnalyzeResponseDone { id };
+        let response = DataChannelMessage::AnalyzeResponseDone { id, characters: Vec::new() };
         self.outgoing_dc_tx
             .send(OutgoingDataChannelMessage::Text(response))
             .await?;

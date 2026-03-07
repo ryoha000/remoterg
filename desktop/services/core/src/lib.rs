@@ -383,6 +383,8 @@ pub enum DataChannelMessage {
     #[serde(rename = "ANALYZE_RESPONSE_DONE")]
     AnalyzeResponseDone {
         id: String,
+        #[serde(default)]
+        characters: Vec<AnalysisCharacter>,
     },
     // LLM Config
     GetLlmConfig,
@@ -392,6 +394,12 @@ pub enum DataChannelMessage {
     LlmConfigResponse {
         config: LlmConfig,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnalysisCharacter {
+    pub name: String,
+    pub position: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

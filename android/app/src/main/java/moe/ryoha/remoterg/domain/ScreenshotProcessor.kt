@@ -139,9 +139,24 @@ class ScreenshotProcessor @Inject constructor(
                 jsonObject.has("ANALYZE_RESPONSE_DONE") -> {
                     val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_DONE")
                     val id = resp.getString("id")
+                    
+                    val charactersList = mutableListOf<moe.ryoha.remoterg.data.model.Character>()
+                    if (resp.has("characters")) {
+                        val charsArray = resp.getJSONArray("characters")
+                        for (i in 0 until charsArray.length()) {
+                            val charObj = charsArray.getJSONObject(i)
+                            charactersList.add(
+                                moe.ryoha.remoterg.data.model.Character(
+                                    name = charObj.optString("name", ""),
+                                    position = charObj.optString("position", "")
+                                )
+                            )
+                        }
+                    }
+
                     val buffer = analysisBuffers.remove(id)
                     if (buffer != null) {
-                        saveAnalysisToDb(id, buffer.toString())
+                        saveAnalysisToDb(id, buffer.toString(), charactersList)
                     }
                 }
             }
@@ -150,7 +165,11 @@ class ScreenshotProcessor @Inject constructor(
         }
     }
 
-    private suspend fun saveAnalysisToDb(hostId: String, jsonString: String) {
+    private suspend fun saveAnalysisToDb(
+        hostId: String, 
+        jsonString: String,
+        characters: List<moe.ryoha.remoterg.data.model.Character> = emptyList()
+    ) {
         try {
             val jsonParser = Json { ignoreUnknownKeys = true }
             val result = try {
@@ -170,19 +189,9 @@ class ScreenshotProcessor @Inject constructor(
                     )
                 )
 
-                if (result != null) {
-                    result.sceneInfo?.let { scene ->
-                        analysisDao.insertAnalysisScene(
-                            moe.ryoha.remoterg.data.local.entity.AnalysisSceneEntity(
-                                localId = ss.localId,
-                                location = scene.location,
-                                timeOfDay = scene.timeOfDay,
-                                atmosphere = scene.atmosphere
-                            )
-                        )
-                    }
 
-                    result.dialogue?.let { dialogue ->
+
+                    result?.dialogue?.let { dialogue ->
                         analysisDao.insertAnalysisDialogue(
                             moe.ryoha.remoterg.data.local.entity.AnalysisDialogueEntity(
                                 localId = ss.localId,
@@ -192,19 +201,18 @@ class ScreenshotProcessor @Inject constructor(
                         )
                     }
 
-                    if (result.characters.isNotEmpty()) {
-                        val entities = result.characters.map { char ->
+                    if (characters.isNotEmpty()) {
+                        val entities = characters.map { char ->
                             moe.ryoha.remoterg.data.local.entity.AnalysisCharacterEntity(
                                 localId = ss.localId,
                                 name = char.name,
-                                expressionTags = char.expressionTags.joinToString(","),
-                                visualDescription = char.visualDescription,
+                                expressionTags = "",
+                                visualDescription = "",
                                 position = char.position
                             )
                         }
                         analysisDao.insertAnalysisCharacters(entities)
                     }
-                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save analysis result to DB: $e")

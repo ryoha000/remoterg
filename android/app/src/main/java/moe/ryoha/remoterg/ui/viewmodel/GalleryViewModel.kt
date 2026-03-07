@@ -218,7 +218,23 @@ class GalleryViewModel @Inject constructor(
                     val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE")
                     val id = resp.getString("id")
                     val resultText = resp.getString("text")
-                    saveAndEmitAnalysis(id, resultText, false)
+                    
+                    val charactersList = mutableListOf<moe.ryoha.remoterg.data.model.Character>()
+                    if (resp.has("characters")) {
+                        val charsArray = resp.getJSONArray("characters")
+                        for (i in 0 until charsArray.length()) {
+                            val charObj = charsArray.getJSONObject(i)
+                            charactersList.add(
+                                moe.ryoha.remoterg.data.model.Character(
+                                    name = charObj.getString("name"),
+                                    position = charObj.optString("position", ""),
+                                    expressionTags = emptyList(),
+                                    visualDescription = ""
+                                )
+                            )
+                        }
+                    }
+                    saveAndEmitAnalysis(id, resultText, false, charactersList)
                 }
                 jsonObject.has("ANALYZE_RESPONSE_CHUNK") -> {
                     val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_CHUNK")
@@ -233,9 +249,26 @@ class GalleryViewModel @Inject constructor(
                 jsonObject.has("ANALYZE_RESPONSE_DONE") -> {
                     val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_DONE")
                     val id = resp.getString("id")
+                    
+                    val charactersList = mutableListOf<moe.ryoha.remoterg.data.model.Character>()
+                    if (resp.has("characters")) {
+                        val charsArray = resp.getJSONArray("characters")
+                        for (i in 0 until charsArray.length()) {
+                            val charObj = charsArray.getJSONObject(i)
+                            charactersList.add(
+                                moe.ryoha.remoterg.data.model.Character(
+                                    name = charObj.getString("name"),
+                                    position = charObj.optString("position", ""),
+                                    expressionTags = emptyList(),
+                                    visualDescription = ""
+                                )
+                            )
+                        }
+                    }
+                    
                     val buffer = analysisBuffers.remove(id)
                     if (buffer != null) {
-                        saveAndEmitAnalysis(id, buffer.toString(), false)
+                        saveAndEmitAnalysis(id, buffer.toString(), false, charactersList)
                     }
                 }
             }
@@ -244,9 +277,9 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
-    private suspend fun saveAndEmitAnalysis(hostId: String, jsonString: String, isPartial: Boolean) {
+    private suspend fun saveAndEmitAnalysis(hostId: String, jsonString: String, isPartial: Boolean, characters: List<moe.ryoha.remoterg.data.model.Character> = emptyList()) {
         try {
-            val resultObj = jsonParser.decodeFromString<AnalysisResult>(jsonString)
+            val resultObj = jsonParser.decodeFromString<AnalysisResult>(jsonString).copy(characters = characters)
             
             val localScreenshots = screenshotDao.getScreenshotsByHostId(hostId)
             localScreenshots.forEach { ss ->
@@ -276,8 +309,18 @@ class GalleryViewModel @Inject constructor(
                 if (entity != null) {
                     try {
                         val resultObj = jsonParser.decodeFromString<AnalysisResult>(entity.data)
+                        
+                        val characters = analysisDao.getAnalysisCharacters(localId).map {
+                            moe.ryoha.remoterg.data.model.Character(
+                                name = it.name,
+                                position = it.position,
+                                expressionTags = emptyList(),
+                                visualDescription = ""
+                            )
+                        }
+                        
                         _analysisResults.value = _analysisResults.value.toMutableMap().apply {
-                            put(localId, resultObj)
+                            put(localId, resultObj.copy(characters = characters))
                         }
                     } catch (e: Exception) {
                         Log.e("GalleryViewModel", "Failed to decode DB analysis result", e)

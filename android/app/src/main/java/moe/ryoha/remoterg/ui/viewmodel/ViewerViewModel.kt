@@ -74,6 +74,9 @@ class ViewerViewModel @Inject constructor(
     // Host session url that we are currently connecting to
     private var currentSignalingUrl: String? = null
 
+    // 全てのレイテンシ履歴を保持するリスト
+    private val fullLatencyHistory = mutableListOf<moe.ryoha.remoterg.webrtc.LatencySample>()
+
     init {
         setupSignaling()
         setupWebRtcCallbacks()
@@ -111,6 +114,15 @@ class ViewerViewModel @Inject constructor(
                 } else if (state == "DISCONNECTED" && _connectionState.value != "Failed") {
                     _connectionError.value = "Host Disconnected"
                     _connectionState.value = "Failed"
+                }
+            }
+        }
+        viewModelScope.launch {
+            webRtcManager.latencySamples.collect { sample ->
+                if (isConnected.value) {
+                    synchronized(fullLatencyHistory) {
+                        fullLatencyHistory.add(sample)
+                    }
                 }
             }
         }
@@ -211,6 +223,9 @@ class ViewerViewModel @Inject constructor(
         _connectionState.value = "Disconnected"
         signalingClient.disconnect()
         webRtcManager.close()
+        synchronized(fullLatencyHistory) {
+            fullLatencyHistory.clear()
+        }
     }
 
     fun takeScreenshot() {
@@ -273,6 +288,30 @@ class ViewerViewModel @Inject constructor(
         super.onCleared()
         screenshotProcessor.stopObserving()
         disconnect()
+    }
+
+    /**
+     * 保持しているレイテンシ履歴をCSV形式で指定されたURIに出力する
+     */
+    fun exportLatencyCsv(uri: android.net.Uri) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                application.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    java.io.BufferedWriter(java.io.OutputStreamWriter(outputStream, "UTF-8")).use { writer ->
+                        // ヘッダー書き込み
+                        writer.write("CaptureUnixMs,LatencyMs,RttMs,ClockOffsetMs\n")
+                        // データ行書き込み
+                        val records = synchronized(fullLatencyHistory) { fullLatencyHistory.toList() }
+                        for (record in records) {
+                            writer.write("${record.captureUnixMs},${record.latencyMs},${record.rttMs},${record.clockOffsetMs}\n")
+                        }
+                    }
+                }
+                Log.d(TAG, "Latency CSV export completed: ${uri.toString()}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to export Latency CSV", e)
+            }
+        }
     }
 
     companion object {

@@ -7,6 +7,13 @@ import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.VideoTrack
 
+data class LatencySample(
+    val captureUnixMs: Long,
+    val latencyMs: Int,
+    val rttMs: Int,
+    val clockOffsetMs: Int
+)
+
 /**
  * WebRTC 接続を管理するインターフェース
  *
@@ -22,6 +29,7 @@ interface IWebRtcManager {
     val iceConnectionState: StateFlow<String>
     val signalingState: StateFlow<String>
     val rtcStats: StateFlow<WebRtcStats>
+    val latencySamples: SharedFlow<LatencySample>
     val dataChannelMessages: SharedFlow<DataChannelMessage>
     val eglBaseContext: EglBase.Context
 

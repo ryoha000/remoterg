@@ -11,6 +11,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.combinedClickable
@@ -61,6 +62,10 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.runtime.Composable
@@ -159,6 +164,18 @@ fun ViewerScreen(
     var surfaceViewRenderer by remember { mutableStateOf<org.webrtc.SurfaceViewRenderer?>(null) }
     val statsGraphHistory = remember { mutableStateListOf<StatsGraphPoint>() }
     val latestRtcStats by rememberUpdatedState(rtcStats)
+
+    // CSV エクスポート用の状態
+    var showCsvExportDialog by remember { mutableStateOf(false) }
+
+    val csvExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportLatencyCsv(uri)
+            Toast.makeText(context, "Latency data exported successfully", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     LaunchedEffect(signalingUrl) {
         viewModel.connectToHost(signalingUrl, codec)
@@ -504,7 +521,8 @@ fun ViewerScreen(
                     )
                     StatsGraphPanel(
                         rtcStats = rtcStats,
-                        history = statsGraphHistory
+                        history = statsGraphHistory,
+                        onClick = { showCsvExportDialog = true }
                     )
                 }
             }
@@ -623,6 +641,37 @@ fun ViewerScreen(
             selectedCodec = selectedCodec,
             sessionId = sessionId,
             onDismiss = { overlayState.showConnectionDetails = false }
+        )
+    }
+
+    // CSV エクスポート確認ダイアログ
+    if (showCsvExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showCsvExportDialog = false },
+            title = {
+                Text(text = "Export Latency Data")
+            },
+            text = {
+                Text("Do you want to export the accumulated latency data as a CSV file?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCsvExportDialog = false
+                        val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                        csvExportLauncher.launch("latency_$timestamp.csv")
+                    }
+                ) {
+                    Text("Export")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showCsvExportDialog = false }
+                ) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }
@@ -1032,7 +1081,8 @@ private fun DebugPanel(
 @Composable
 private fun StatsGraphPanel(
     rtcStats: WebRtcStats,
-    history: List<StatsGraphPoint>
+    history: List<StatsGraphPoint>,
+    onClick: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1046,6 +1096,7 @@ private fun StatsGraphPanel(
                 Color.White.copy(alpha = 0.1f),
                 RoundedCornerShape(8.dp)
             )
+            .clickable { onClick() }
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {

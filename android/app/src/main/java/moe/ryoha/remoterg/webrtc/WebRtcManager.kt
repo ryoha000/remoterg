@@ -87,6 +87,9 @@ class WebRtcManager @Inject constructor(
     private val _dataChannelMessages = MutableSharedFlow<DataChannelMessage>(extraBufferCapacity = 8192)
     override val dataChannelMessages: SharedFlow<DataChannelMessage> = _dataChannelMessages.asSharedFlow()
 
+    private val _latencySamples = MutableSharedFlow<LatencySample>(extraBufferCapacity = 8192)
+    override val latencySamples: SharedFlow<LatencySample> = _latencySamples.asSharedFlow()
+
     private val scope = CoroutineScope(Dispatchers.IO)
 
     private val _rtcStats = MutableStateFlow(WebRtcStats())
@@ -110,6 +113,7 @@ class WebRtcManager @Inject constructor(
     private val nativeLatencyLastUpdateElapsedMs = AtomicLong(0L)
     private data class NativeCaptureSample(
         val timestampUs: Long,
+        val captureUnixMs: Long,
         val tCapClientMonoMs: Double,
         val receivedElapsedMs: Long
     )
@@ -124,6 +128,7 @@ class WebRtcManager @Inject constructor(
     ) {
         data class MatchedCapture(
             val timestampUs: Long,
+            val captureUnixMs: Long,
             val tCapClientMonoMs: Double,
             val tRenderClientMonoMs: Double,
             val nativePendingAfterMatch: Int,
@@ -140,6 +145,7 @@ class WebRtcManager @Inject constructor(
             if (pendingRender != null) {
                 return MatchedCapture(
                     timestampUs = sample.timestampUs,
+                    captureUnixMs = sample.captureUnixMs,
                     tCapClientMonoMs = sample.tCapClientMonoMs,
                     tRenderClientMonoMs = pendingRender.tRenderClientMonoMs,
                     nativePendingAfterMatch = nativeByTimestamp.size,
@@ -157,6 +163,7 @@ class WebRtcManager @Inject constructor(
             if (pendingNative != null) {
                 return MatchedCapture(
                     timestampUs = sample.timestampUs,
+                    captureUnixMs = pendingNative.captureUnixMs,
                     tCapClientMonoMs = pendingNative.tCapClientMonoMs,
                     tRenderClientMonoMs = sample.tRenderClientMonoMs,
                     nativePendingAfterMatch = nativeByTimestamp.size,
@@ -385,6 +392,14 @@ class WebRtcManager @Inject constructor(
                     } else {
                         lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
                     }
+                    if (e2eMs >= 0) {
+                        _latencySamples.tryEmit(LatencySample(
+                            captureUnixMs = matched.captureUnixMs,
+                            latencyMs = e2eMs,
+                            rttMs = lastRttMs.get(),
+                            clockOffsetMs = lastClockOffsetMs.get()
+                        ))
+                    }
                     return
                 }
                 if (shouldLog) {
@@ -435,6 +450,7 @@ class WebRtcManager @Inject constructor(
         val matched = nativeRenderMatchStore.offerNative(
             NativeCaptureSample(
                 timestampUs = frameNativeMatched.timestampUs,
+                captureUnixMs = frameNativeMatched.captureUnixMs,
                 tCapClientMonoMs = tCapClientMonoMs,
                 receivedElapsedMs = nowElapsedMs
             )
@@ -443,6 +459,12 @@ class WebRtcManager @Inject constructor(
             val e2eMs = (matched.tRenderClientMonoMs - matched.tCapClientMonoMs).toInt()
             if (e2eMs >= 0) {
                 lastLatencyMs.set(e2eMs.coerceIn(0, 9999))
+                _latencySamples.tryEmit(LatencySample(
+                    captureUnixMs = frameNativeMatched.captureUnixMs,
+                    latencyMs = e2eMs,
+                    rttMs = lastRttMs.get(),
+                    clockOffsetMs = lastClockOffsetMs.get()
+                ))
             } else {
                 Log.w(
                     TAG,

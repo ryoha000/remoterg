@@ -189,7 +189,6 @@ class GalleryViewModel @Inject constructor(
     }
 
     // --- AI Analysis ---
-    private val analysisBuffers = mutableMapOf<String, java.lang.StringBuilder>()
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
     private val _analysisResults = MutableStateFlow<Map<String, AnalysisResult>>(emptyMap())
@@ -226,7 +225,7 @@ class GalleryViewModel @Inject constructor(
                             val charObj = charsArray.getJSONObject(i)
                             charactersList.add(
                                 moe.ryoha.remoterg.data.model.Character(
-                                    name = charObj.getString("name"),
+                                    name = charObj.optString("name", ""),
                                     position = charObj.optString("position", ""),
                                     expressionTags = emptyList(),
                                     visualDescription = ""
@@ -235,41 +234,6 @@ class GalleryViewModel @Inject constructor(
                         }
                     }
                     saveAndEmitAnalysis(id, resultText, false, charactersList)
-                }
-                jsonObject.has("ANALYZE_RESPONSE_CHUNK") -> {
-                    val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_CHUNK")
-                    val id = resp.getString("id")
-                    val delta = resp.getString("delta")
-                    
-                    val buffer = analysisBuffers.getOrPut(id) { java.lang.StringBuilder() }
-                    buffer.append(delta)
-                    
-                    _isAnalyzingMap.value = _isAnalyzingMap.value.toMutableMap().apply { put(id, true) }
-                }
-                jsonObject.has("ANALYZE_RESPONSE_DONE") -> {
-                    val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_DONE")
-                    val id = resp.getString("id")
-                    
-                    val charactersList = mutableListOf<moe.ryoha.remoterg.data.model.Character>()
-                    if (resp.has("characters")) {
-                        val charsArray = resp.getJSONArray("characters")
-                        for (i in 0 until charsArray.length()) {
-                            val charObj = charsArray.getJSONObject(i)
-                            charactersList.add(
-                                moe.ryoha.remoterg.data.model.Character(
-                                    name = charObj.getString("name"),
-                                    position = charObj.optString("position", ""),
-                                    expressionTags = emptyList(),
-                                    visualDescription = ""
-                                )
-                            )
-                        }
-                    }
-                    
-                    val buffer = analysisBuffers.remove(id)
-                    if (buffer != null) {
-                        saveAndEmitAnalysis(id, buffer.toString(), false, charactersList)
-                    }
                 }
             }
         } catch (e: Exception) {

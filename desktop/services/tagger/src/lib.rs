@@ -93,7 +93,7 @@ impl TaggerService {
                     },
                 ],
             }],
-            max_tokens: Some(512),
+            max_tokens: Some(2048),
             temperature: Some(0.7),
             stream: None,
         };
@@ -104,9 +104,15 @@ impl TaggerService {
             .json(&request)
             .send()
             .await
-            .context("Failed to send request to llama-server")?
-            .error_for_status()
-            .context("llama-server returned error status")?
+            .context("Failed to send request to llama-server")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_else(|_| "Failed to get error body".to_string());
+            anyhow::bail!("llama-server returned error status {}: {}", status, body);
+        }
+
+        let response = response
             .json::<ChatCompletionResponse>()
             .await
             .context("Failed to parse response from llama-server")?;
@@ -143,7 +149,7 @@ impl TaggerService {
                     },
                 ],
             }],
-            max_tokens: Some(512),
+            max_tokens: Some(2048),
             temperature: Some(0.7),
             stream: Some(true),
         };
@@ -167,8 +173,10 @@ impl TaggerService {
                 }
             };
 
-            if let Err(e) = res.error_for_status_ref() {
-                let _ = tx.send(Err(anyhow::anyhow!("Server error: {}", e))).await;
+            if !res.status().is_success() {
+                let status = res.status();
+                let body = res.text().await.unwrap_or_else(|_| "Failed to get error body".to_string());
+                let _ = tx.send(Err(anyhow::anyhow!("Server error {}: {}", status, body))).await;
                 return;
             }
 

@@ -374,15 +374,6 @@ pub enum DataChannelMessage {
     AnalyzeResponse {
         id: String,
         text: String,
-    },
-    #[serde(rename = "ANALYZE_RESPONSE_CHUNK")]
-    AnalyzeResponseChunk {
-        id: String,
-        delta: String,
-    },
-    #[serde(rename = "ANALYZE_RESPONSE_DONE")]
-    AnalyzeResponseDone {
-        id: String,
         #[serde(default)]
         characters: Vec<AnalysisCharacter>,
     },

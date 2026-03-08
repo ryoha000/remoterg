@@ -38,8 +38,7 @@ class ScreenshotProcessor @Inject constructor(
     private var currentReceived: Int = 0
     private var currentChunks = mutableListOf<ByteArray>()
     
-    // Auto AI Analysis Buffers
-    private val analysisBuffers = mutableMapOf<String, StringBuilder>()
+    // No more chunk buffering needed
 
     // Pending local bitmap to be saved when metadata arrives
     var pendingLocalBitmap: android.graphics.Bitmap? = null
@@ -96,7 +95,7 @@ class ScreenshotProcessor @Inject constructor(
                                 Log.d(TAG, "Screenshot metadata size is 0, processing finished immediately using local bitmap")
                                 processFinishedScreenshot()
                             }
-                        } else if (root.containsKey("ANALYZE_RESPONSE") || root.containsKey("ANALYZE_RESPONSE_CHUNK") || root.containsKey("ANALYZE_RESPONSE_DONE")) {
+                        } else if (root.containsKey("ANALYZE_RESPONSE")) {
                             handleAnalysisMessage(msg.text)
                         }
                     }
@@ -126,20 +125,7 @@ class ScreenshotProcessor @Inject constructor(
                     val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE")
                     val id = resp.getString("id")
                     val resultText = resp.getString("text")
-                    saveAnalysisToDb(id, resultText)
-                }
-                jsonObject.has("ANALYZE_RESPONSE_CHUNK") -> {
-                    val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_CHUNK")
-                    val id = resp.getString("id")
-                    val delta = resp.getString("delta")
-                    
-                    val buffer = analysisBuffers.getOrPut(id) { StringBuilder() }
-                    buffer.append(delta)
-                }
-                jsonObject.has("ANALYZE_RESPONSE_DONE") -> {
-                    val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE_DONE")
-                    val id = resp.getString("id")
-                    
+
                     val charactersList = mutableListOf<moe.ryoha.remoterg.data.model.Character>()
                     if (resp.has("characters")) {
                         val charsArray = resp.getJSONArray("characters")
@@ -154,10 +140,7 @@ class ScreenshotProcessor @Inject constructor(
                         }
                     }
 
-                    val buffer = analysisBuffers.remove(id)
-                    if (buffer != null) {
-                        saveAnalysisToDb(id, buffer.toString(), charactersList)
-                    }
+                    saveAnalysisToDb(id, resultText, charactersList)
                 }
             }
         } catch (e: Exception) {

@@ -3,7 +3,7 @@ use bytes::Bytes;
 use core_types::EncodeResult;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{error, info, span, warn, Level};
+use tracing::{error, span, warn, Level};
 use webrtc_rs::media::Sample;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
@@ -68,18 +68,6 @@ pub async fn write_encoded_sample(
                 estimated_capture_clock_offset_q32x32: Some(0),
             }),
         };
-        if sample_index <= 5 || sample_index % 120 == 1 {
-            info!(
-                "ACT[send]: sample={} frame_id={} t_cap_ms={:.3} ntp_timestamp={} est_offset_q32x32={} ext_count={} ext_bytes={}",
-                sample_index,
-                result.frame_id,
-                t_cap_ms,
-                ntp_ts,
-                0i64,
-                1,
-                16
-            );
-        }
         (vec![ext], ntp_ts)
     } else {
         if sample_index <= 5 || sample_index % 120 == 1 {

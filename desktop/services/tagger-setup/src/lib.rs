@@ -203,7 +203,8 @@ impl TaggerSetup {
     }
 
     fn resolve_model_path(&self, server_path: &Path) -> Result<PathBuf> {
-        let model_path = server_path.join("Qwen3VL-8B-Instruct-Q4_K_M.gguf");
+        // let model_path = server_path.join("Qwen3VL-8B-Instruct-Q4_K_M.gguf");
+        let model_path = server_path.join("Qwen3.5-2B-Q4_K_M.gguf");
         // We don't strictly error if missing here, just return the path to let llama-server fail or we handle it later.
         // But better to check.
         if !model_path.exists() {
@@ -216,7 +217,8 @@ impl TaggerSetup {
     }
 
     fn resolve_mmproj_path(&self, server_path: &Path) -> Result<PathBuf> {
-        let model_path = server_path.join("mmproj-Qwen3VL-8B-Instruct-F16.gguf");
+        // let model_path = server_path.join("mmproj-Qwen3VL-8B-Instruct-F16.gguf");
+        let model_path = server_path.join("mmproj-Qwen3.5-2B-Q4_K_M-F16.gguf");
         // We don't strictly error if missing here, just return the path to let llama-server fail or we handle it later.
         // But better to check.
         if !model_path.exists() {

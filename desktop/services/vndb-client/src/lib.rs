@@ -79,10 +79,7 @@ impl VndbClient {
                 "page": page
             });
 
-            debug!(
-                "VNDB API リクエスト: vndb_id={}, page={}",
-                vndb_id, page
-            );
+            debug!("VNDB API リクエスト: vndb_id={}, page={}", vndb_id, page);
 
             let response = self
                 .http
@@ -96,11 +93,7 @@ impl VndbClient {
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                anyhow::bail!(
-                    "VNDB API エラー: status={}, body={}",
-                    status,
-                    body
-                );
+                anyhow::bail!("VNDB API エラー: status={}, body={}", status, body);
             }
 
             let api_response: CharacterApiResponse = response
@@ -177,7 +170,11 @@ impl VndbClient {
                     }
                 }
                 if load_success && !images.is_empty() {
-                    info!("キャラ画像をキャッシュから{}枚読み込みました (vndb_id={})", images.len(), vndb_id);
+                    info!(
+                        "キャラ画像をキャッシュから{}枚読み込みました (vndb_id={})",
+                        images.len(),
+                        vndb_id
+                    );
                     // もし max_images より多ければ切り詰める（任意）
                     images.truncate(max_images);
                     return images;
@@ -212,21 +209,24 @@ impl VndbClient {
                                 );
                                 let data = bytes.to_vec();
                                 images.push((display_name.clone(), data.clone()));
-                                
+
                                 // ファイル名に使用できない文字を置換
-                                let safe_name = display_name.replace(|c: char| {
-                                    matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
-                                }, "_");
+                                let safe_name = display_name.replace(
+                                    |c: char| {
+                                        matches!(
+                                            c,
+                                            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                                        )
+                                    },
+                                    "_",
+                                );
                                 let file_path = save_dir.join(format!("{}.jpg", safe_name));
                                 if let Err(e) = tokio::fs::write(&file_path, &data).await {
                                     warn!("画像の保存に失敗しました {}: {}", safe_name, e);
                                 }
                             }
                             Err(e) => {
-                                warn!(
-                                    "キャラ画像のボディ読み取り失敗: {}: {}",
-                                    display_name, e
-                                );
+                                warn!("キャラ画像のボディ読み取り失敗: {}: {}", display_name, e);
                             }
                         }
                     } else {
@@ -249,7 +249,11 @@ impl VndbClient {
         info!(
             "キャラ画像ダウンロード完了: {}/{}枚",
             images.len(),
-            characters.iter().take(max_images).filter(|c| c.image_url.is_some()).count()
+            characters
+                .iter()
+                .take(max_images)
+                .filter(|c| c.image_url.is_some())
+                .count()
         );
 
         images
@@ -284,7 +288,9 @@ mod tests {
         let client = VndbClient::new();
         let characters = client.get_characters("v60196", 8).await.unwrap();
         let temp_dir = std::env::temp_dir().join("remoterg_test_chars");
-        let images = client.download_character_images(&characters, 4, &temp_dir, "v60196").await;
+        let images = client
+            .download_character_images(&characters, 4, &temp_dir, "v60196")
+            .await;
         println!("ダウンロードした画像数: {}", images.len());
         for (name, data) in &images {
             println!("  {} ({} bytes)", name, data.len());

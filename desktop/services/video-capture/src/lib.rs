@@ -393,7 +393,10 @@ impl CaptureService {
         if !window.is_valid() {
             info!("Window is not valid for capture according to is_valid().");
             if hwnd != 0 {
-                return Err(anyhow::anyhow!("Capture target window (HWND: {}) is not valid or not found", hwnd));
+                return Err(anyhow::anyhow!(
+                    "Capture target window (HWND: {}) is not valid or not found",
+                    hwnd
+                ));
             }
         } else {
             info!("Window is valid for capture");

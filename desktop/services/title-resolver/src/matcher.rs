@@ -25,25 +25,29 @@ pub struct MatchResult {
     pub weighted_score: f64, // For step 4
 }
 
-pub fn match_token(entries: &[DictEntry], token: &str, derived_rule: &TokenRule) -> Vec<MatchResult> {
+pub fn match_token(
+    entries: &[DictEntry],
+    token: &str,
+    derived_rule: &TokenRule,
+) -> Vec<MatchResult> {
     let norm_token = normalize_for_match(token);
     if norm_token.is_empty() {
         return Vec::new();
     }
-    
+
     let token_no_space = norm_token.replace(" ", "");
-    
+
     let mut results = Vec::new();
     let norm_token_chars = norm_token.chars().count() as f64;
     let token_no_space_chars = token_no_space.chars().count() as f64;
-    
+
     for entry in entries {
         let norm_name = &entry.normalized_name;
         let name_no_space = &entry.no_space_name;
-        
+
         let mut method = None;
         let mut score = 0.0;
-        
+
         if norm_token == *norm_name {
             method = Some(MatchMethod::Exact);
             score = 1.0;
@@ -75,7 +79,7 @@ pub fn match_token(entries: &[DictEntry], token: &str, derived_rule: &TokenRule)
                 score = 0.95 * (name_no_space_chars / token_no_space_chars);
             }
         }
-        
+
         if let Some(m) = method {
             results.push(MatchResult {
                 vndb_id: entry.vndb_id.clone(),
@@ -89,7 +93,7 @@ pub fn match_token(entries: &[DictEntry], token: &str, derived_rule: &TokenRule)
             });
         }
     }
-    
+
     results
 }
 
@@ -112,7 +116,7 @@ mod tests {
                 vndb_id: "v60196".to_string(),
                 match_type: "title".to_string(),
                 original_name: "流星ワールドアクター Gaslight Bullet".to_string(),
-            }
+            },
         ]
     }
 

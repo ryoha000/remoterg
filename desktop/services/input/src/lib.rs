@@ -12,19 +12,19 @@ use core_types::{
     ScreenshotFrame, ScreenshotMetadataPayload,
 };
 
-use window_info::WindowInfoProvider;
-use std::sync::Arc;
-use title_resolver::{TitleResolver, TitleResolveResult};
-use vndb_client::{VndbClient, VndbCharacter};
 use character_identifier::CharacterIdentifier;
+use std::sync::Arc;
+use title_resolver::{TitleResolveResult, TitleResolver};
+use vndb_client::{VndbCharacter, VndbClient};
+use window_info::WindowInfoProvider;
 
 use std::path::PathBuf;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
-    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, VK_LCONTROL, VK_LSHIFT,
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
+    MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+    MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, VK_LCONTROL, VK_LSHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowRect, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -70,8 +70,6 @@ const PROMPT_BASE: &str = r#"以下のJSONスキーマに従って、スクリ�
 ### 出力制約:
 - JSON形式のみを出力し、それ以外の説明テキストは一切含めないでください。
 "#;
-
-
 
 /// キャラ画像付き分析に使用するキャラクターの最大数
 const MAX_CHARACTER_IMAGES: usize = 32;
@@ -255,7 +253,7 @@ impl InputService {
                         title_info = Some(cached_result.clone());
                     }
                 }
-                
+
                 if title_info.is_none() {
                     if let Some(result) = resolver.resolve(path) {
                         *cache = Some((path.clone(), result.clone()));
@@ -318,18 +316,35 @@ impl InputService {
 
             if need_fetch {
                 info!("VNDB キャラクター取得開始: {}", title.vndb_id);
-                match self.vndb_client.get_characters(&title.vndb_id, MAX_CHARACTERS).await {
+                match self
+                    .vndb_client
+                    .get_characters(&title.vndb_id, MAX_CHARACTERS)
+                    .await
+                {
                     Ok(characters) => {
                         info!("VNDB キャラクター取得成功: {}件", characters.len());
                         // 画像ダウンロード（完了まで待機）
-                        let images = self.vndb_client
-                            .download_character_images(&characters, MAX_CHARACTER_IMAGES, &self.characters_dir, &title.vndb_id)
+                        let images = self
+                            .vndb_client
+                            .download_character_images(
+                                &characters,
+                                MAX_CHARACTER_IMAGES,
+                                &self.characters_dir,
+                                &title.vndb_id,
+                            )
                             .await;
                         info!("キャラ画像ダウンロード完了: {}枚", images.len());
-                        
+
                         if let Some(ci_arc) = &self.character_identifier {
                             let mut ci = ci_arc.lock().await;
-                            if let Err(e) = ci.register_references(&images, &self.characters_dir.join(&title.vndb_id), &title.vndb_id).await {
+                            if let Err(e) = ci
+                                .register_references(
+                                    &images,
+                                    &self.characters_dir.join(&title.vndb_id),
+                                    &title.vndb_id,
+                                )
+                                .await
+                            {
                                 error!("Failed to register character references: {}", e);
                             } else {
                                 info!("Character references registered successfully.");
@@ -370,7 +385,10 @@ impl InputService {
                         .collect();
 
                     let total_identified = identified_known.len();
-                    info!("Character Identifier: Detected {} characters, successfully identified {}", total_detected, total_identified);
+                    info!(
+                        "Character Identifier: Detected {} characters, successfully identified {}",
+                        total_detected, total_identified
+                    );
 
                     let analysis_characters: Vec<AnalysisCharacter> = identified_known
                         .into_iter()
@@ -403,10 +421,10 @@ impl InputService {
         let outgoing_tx = self.outgoing_dc_tx.clone();
         let image_data = jpeg_data;
         let id_for_task = id.clone();
-        
+
         tokio::spawn(async move {
             info!("Starting background auto AI analysis for {}", id_for_task);
-            
+
             // Resize for analysis
             let image_data_for_analysis = match image::load_from_memory(&image_data) {
                 Ok(img) => {
@@ -414,10 +432,12 @@ impl InputService {
                     let h = img.height();
                     let max_edge = 512;
                     if w > max_edge || h > max_edge {
-                        let resized = img.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3);
+                        let resized =
+                            img.resize(max_edge, max_edge, image::imageops::FilterType::Lanczos3);
                         let mut resized_data = Vec::new();
                         let mut cursor = std::io::Cursor::new(&mut resized_data);
-                        if let Ok(_) = resized.write_to(&mut cursor, image::ImageOutputFormat::Png) {
+                        if let Ok(_) = resized.write_to(&mut cursor, image::ImageOutputFormat::Png)
+                        {
                             resized_data
                         } else {
                             image_data
@@ -426,10 +446,13 @@ impl InputService {
                         image_data
                     }
                 }
-                Err(_) => image_data
+                Err(_) => image_data,
             };
 
-            let mut rx = match tagger_service.analyze_screenshot_stream(&image_data_for_analysis, &prompt).await {
+            let mut rx = match tagger_service
+                .analyze_screenshot_stream(&image_data_for_analysis, &prompt)
+                .await
+            {
                 Ok(rx) => rx,
                 Err(e) => {
                     error!("Auto AI analysis failed for {}: {}", id_for_task, e);
@@ -444,7 +467,9 @@ impl InputService {
                             id: id_for_task.clone(),
                             delta,
                         };
-                        let _ = outgoing_tx.send(OutgoingDataChannelMessage::Text(response)).await;
+                        let _ = outgoing_tx
+                            .send(OutgoingDataChannelMessage::Text(response))
+                            .await;
                     }
                     Err(e) => {
                         error!("Stream error during auto AI analysis: {}", e);
@@ -453,8 +478,13 @@ impl InputService {
                 }
             }
 
-            let response = DataChannelMessage::AnalyzeResponseDone { id: id_for_task.clone(), characters: analysis_characters };
-            let _ = outgoing_tx.send(OutgoingDataChannelMessage::Text(response)).await;
+            let response = DataChannelMessage::AnalyzeResponseDone {
+                id: id_for_task.clone(),
+                characters: analysis_characters,
+            };
+            let _ = outgoing_tx
+                .send(OutgoingDataChannelMessage::Text(response))
+                .await;
             info!("Finished background auto AI analysis for {}", id_for_task);
         });
 
@@ -565,7 +595,10 @@ impl InputService {
         }
 
         // 4. Send Done
-        let response = DataChannelMessage::AnalyzeResponseDone { id, characters: Vec::new() };
+        let response = DataChannelMessage::AnalyzeResponseDone {
+            id,
+            characters: Vec::new(),
+        };
         self.outgoing_dc_tx
             .send(OutgoingDataChannelMessage::Text(response))
             .await?;
@@ -668,9 +701,7 @@ impl InputService {
                         dx: abs_x,
                         dy: abs_y,
                         mouseData: 0,
-                        dwFlags: MOUSEEVENTF_ABSOLUTE
-                            | down_flag
-                            | MOUSEEVENTF_VIRTUALDESK,
+                        dwFlags: MOUSEEVENTF_ABSOLUTE | down_flag | MOUSEEVENTF_VIRTUALDESK,
                         time: 0,
                         dwExtraInfo: 0,
                     },
@@ -683,9 +714,7 @@ impl InputService {
                         dx: abs_x,
                         dy: abs_y,
                         mouseData: 0,
-                        dwFlags: MOUSEEVENTF_ABSOLUTE
-                            | up_flag
-                            | MOUSEEVENTF_VIRTUALDESK,
+                        dwFlags: MOUSEEVENTF_ABSOLUTE | up_flag | MOUSEEVENTF_VIRTUALDESK,
                         time: 0,
                         dwExtraInfo: 0,
                     },

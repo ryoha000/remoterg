@@ -28,8 +28,7 @@ use webrtc_rs::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc_rs::track::track_local::TrackLocal;
 
-const ABS_CAPTURE_TIME_URI: &str =
-    "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time";
+const ABS_CAPTURE_TIME_URI: &str = "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time";
 
 pub fn codec_to_mime_type(codec: VideoCodec) -> String {
     match codec {
@@ -630,7 +629,10 @@ pub async fn handle_add_ice_candidate(
     sdp_mline_index: Option<u16>,
     username_fragment: Option<String>,
 ) -> Result<()> {
-    info!("AddIceCandidate received: candidate={}, sdp_mid={:?}", candidate, sdp_mid);
+    info!(
+        "AddIceCandidate received: candidate={}, sdp_mid={:?}",
+        candidate, sdp_mid
+    );
     let ice_candidate = RTCIceCandidateInit {
         candidate,
         sdp_mid,

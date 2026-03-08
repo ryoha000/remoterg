@@ -1,8 +1,8 @@
 use anyhow::Result;
 use bytes::Bytes;
 use core_types::EncodeResult;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tracing::{error, info, span, warn, Level};
 use webrtc_rs::media::Sample;
 use webrtc_rs::track::track_local::track_local_static_sample::TrackLocalStaticSample;
@@ -85,8 +85,7 @@ pub async fn write_encoded_sample(
         if sample_index <= 5 || sample_index % 120 == 1 {
             warn!(
                 "ACT[send-missing-tcap]: sample={} frame_id={} ext_count=0",
-                sample_index,
-                result.frame_id
+                sample_index, result.frame_id
             );
         }
         (vec![], 0u64)

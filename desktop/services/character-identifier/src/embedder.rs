@@ -1,7 +1,12 @@
 use anyhow::{Context, Result};
-use image::{DynamicImage, imageops::FilterType};
+use image::{imageops::FilterType, DynamicImage};
 use ndarray::{Array, Array4};
-use ort::{session::Session, session::builder::GraphOptimizationLevel, value::Value, execution_providers::{CPUExecutionProvider, CUDAExecutionProvider}};
+use ort::{
+    execution_providers::{CPUExecutionProvider, CUDAExecutionProvider},
+    session::builder::GraphOptimizationLevel,
+    session::Session,
+    value::Value,
+};
 use std::path::Path;
 
 pub struct Embedder {
@@ -16,9 +21,11 @@ impl Embedder {
             .with_intra_threads(4)?;
 
         if use_gpu {
-            builder = builder.with_execution_providers([CUDAExecutionProvider::default().build()])?;
+            builder =
+                builder.with_execution_providers([CUDAExecutionProvider::default().build()])?;
         } else {
-            builder = builder.with_execution_providers([CPUExecutionProvider::default().build()])?;
+            builder =
+                builder.with_execution_providers([CPUExecutionProvider::default().build()])?;
         }
 
         let session = builder.commit_from_file(model_path)?;
@@ -61,12 +68,12 @@ impl Embedder {
     /// 顔画像のcrop（または全体）からEmbedding（例: 384次元ベクトル）を生成する
     pub fn embed(&mut self, image: &DynamicImage) -> Result<Vec<f32>> {
         let tensor = Self::preprocess(image, self.input_size);
-        
+
         let shape: Vec<i64> = tensor.shape().iter().map(|&x| x as i64).collect();
         let data = tensor.into_raw_vec();
-        
+
         let input_tensor = Value::from_array((shape, data))?;
-        
+
         let mask_shape: Vec<i64> = vec![1];
         let mask_data: Vec<bool> = vec![false];
         let mask_tensor = Value::from_array((mask_shape, mask_data))?;
@@ -75,13 +82,13 @@ impl Embedder {
             "input" => input_tensor,
             "masks" => mask_tensor
         ])?;
-        
+
         let output = outputs.into_iter().next().context("No output tensor")?.1;
         let (_shape, data) = output.try_extract_tensor::<f32>()?;
-        
+
         let mut vec = data.to_vec();
         Self::l2_normalize(&mut vec);
-        
+
         Ok(vec)
     }
 }
@@ -98,17 +105,17 @@ mod tests {
             *p = image::Rgb([0, 0, 0]);
         }
         let dyn_img = DynamicImage::ImageRgb8(img);
-        
+
         let tensor = Embedder::preprocess(&dyn_img, 224);
         let mean = [0.485, 0.456, 0.406];
         let std = [0.229, 0.224, 0.225];
-        
+
         assert_eq!(tensor.shape(), &[1, 3, 224, 224]);
-        
+
         let val_r = tensor[[0, 0, 100, 100]];
         let val_g = tensor[[0, 1, 100, 100]];
         let val_b = tensor[[0, 2, 100, 100]];
-        
+
         assert!((val_r - (0.0 - mean[0]) / std[0]).abs() < 1e-5);
         assert!((val_g - (0.0 - mean[1]) / std[1]).abs() < 1e-5);
         assert!((val_b - (0.0 - mean[2]) / std[2]).abs() < 1e-5);
@@ -118,10 +125,10 @@ mod tests {
     fn test_l2_normalize() {
         let mut vec = vec![3.0, 4.0];
         Embedder::l2_normalize(&mut vec);
-        
+
         assert!((vec[0] - 0.6).abs() < 1e-5);
         assert!((vec[1] - 0.8).abs() < 1e-5);
-        
+
         let sum_sq: f32 = vec.iter().map(|&x| x * x).sum();
         assert!((sum_sq - 1.0).abs() < 1e-5);
     }

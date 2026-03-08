@@ -66,8 +66,6 @@ struct ChunkDelta {
     content: Option<String>,
 }
 
-
-
 impl TaggerService {
     pub fn new(port: u16) -> Self {
         Self {
@@ -217,6 +215,4 @@ impl TaggerService {
 
         Ok(rx)
     }
-
-
 }

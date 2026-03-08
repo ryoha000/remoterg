@@ -469,14 +469,10 @@ mod tests {
         assert!(!json.contains("u2_ms"));
         assert!(!json.contains("u3_ms"));
 
-        let decoded: DataChannelMessage = serde_json::from_str(&json).expect("deserialize sync_res");
+        let decoded: DataChannelMessage =
+            serde_json::from_str(&json).expect("deserialize sync_res");
         match decoded {
-            DataChannelMessage::SyncRes {
-                seq,
-                c1,
-                s2,
-                s3,
-            } => {
+            DataChannelMessage::SyncRes { seq, c1, s2, s3 } => {
                 assert_eq!(seq, 7);
                 assert_eq!(c1, 10.0);
                 assert_eq!(s2, 20.0);

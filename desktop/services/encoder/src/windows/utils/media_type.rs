@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use tracing::debug;
 use windows::core::GUID;
 use windows::Win32::Media::MediaFoundation::{
-    CODECAPI_AVEncCommonLowLatency, CODECAPI_AVEncMPVDefaultBPictureCount,
-    CODECAPI_AVLowLatencyMode, CODECAPI_AVEncAdaptiveMode, IMFMediaType, IMFTransform, MFCreateMediaType, MFMediaType_Video,
-    MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFT_SET_TYPE_TEST_ONLY,
-    MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY,
+    CODECAPI_AVEncAdaptiveMode, CODECAPI_AVEncCommonLowLatency,
+    CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVLowLatencyMode, IMFMediaType, IMFTransform,
+    MFCreateMediaType, MFMediaType_Video, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    MFT_SET_TYPE_TEST_ONLY, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES, MF_LOW_LATENCY,
 };
 
 /// サポートされている入力解像度を検出
@@ -365,7 +365,10 @@ pub fn setup_low_latency_attributes(transform: &IMFTransform) -> Result<()> {
         // 解像度優先 (eAVEncAdaptiveMode_Resolution = 1) に設定してテキスト等の鮮明さを維持
         // (非対応のエンコーダーもあるためエラーは無視する)
         if let Err(e) = attributes.SetUINT32(&CODECAPI_AVEncAdaptiveMode, 1) {
-            tracing::debug!("CODECAPI_AVEncAdaptiveMode is not supported by this MFT: {}", e);
+            tracing::debug!(
+                "CODECAPI_AVEncAdaptiveMode is not supported by this MFT: {}",
+                e
+            );
         }
 
         Ok(())

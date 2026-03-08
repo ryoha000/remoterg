@@ -24,11 +24,11 @@ use input::InputService;
 use signaling::SignalingClient;
 use tagger::TaggerService;
 use tagger_setup::TaggerSetup;
+use title_resolver::{DictDownloader, TitleResolver};
 use video_capture;
 use video_capture_mock;
 use video_stream::VideoStreamService;
 use webrtc::WebRtcService;
-use title_resolver::{DictDownloader, TitleResolver};
 
 #[derive(Parser, Debug)]
 #[command(name = "hostd")]
@@ -71,7 +71,11 @@ struct Args {
     llama_server_path: Option<String>,
 
     /// Path to the character identifier models directory
-    #[arg(long, env = "REMOTERG_CHARACTER_IDENTIFIER_MODELS_DIR", default_value = "models")]
+    #[arg(
+        long,
+        env = "REMOTERG_CHARACTER_IDENTIFIER_MODELS_DIR",
+        default_value = "models"
+    )]
     character_identifier_models_dir: String,
 
     /// Enable latency report generation (JSON + trace analysis)
@@ -289,11 +293,17 @@ async fn main() -> Result<()> {
     let models_dir = std::path::PathBuf::from(args.character_identifier_models_dir);
     let character_identifier = match character_identifier::CharacterIdentifier::new(&models_dir) {
         Ok(ci) => {
-            info!("CharacterIdentifier initialized with models in {:?}", models_dir);
+            info!(
+                "CharacterIdentifier initialized with models in {:?}",
+                models_dir
+            );
             Some(Arc::new(tokio::sync::Mutex::new(ci)))
         }
         Err(e) => {
-            tracing::warn!("Failed to initialize CharacterIdentifier (maybe missing ONNX models): {}", e);
+            tracing::warn!(
+                "Failed to initialize CharacterIdentifier (maybe missing ONNX models): {}",
+                e
+            );
             None
         }
     };

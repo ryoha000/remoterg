@@ -353,18 +353,22 @@ pub fn start_mf_encode_workers(
                         // キーフレーム要求がある場合は強制
                         if job.request_keyframe {
                             // 1. ICodecAPI を使ってエンコーダーに直接指示 (Windows 8+, H.264 ハードウェアエンコーダ用標準手法)
-                            use windows::Win32::Media::MediaFoundation::ICodecAPI;
                             use windows::Win32::Media::MediaFoundation::CODECAPI_AVEncVideoForceKeyFrame;
-                            
+                            use windows::Win32::Media::MediaFoundation::ICodecAPI;
+
                             if let Ok(codec_api) = encoder.transform().cast::<ICodecAPI>() {
                                 let var = windows::Win32::System::Variant::VARIANT::from(1u32);
-                                if let Err(e) = codec_api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &var) {
+                                if let Err(e) =
+                                    codec_api.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &var)
+                                {
                                     tracing::debug!("MF encoder worker: ICodecAPI::SetValue for ForceKeyFrame failed: {}", e);
                                 } else {
                                     tracing::debug!("MF encoder worker: Successfully forced keyframe via ICodecAPI");
                                 }
                             } else {
-                                tracing::debug!("MF encoder worker: Encoder does not support ICodecAPI");
+                                tracing::debug!(
+                                    "MF encoder worker: Encoder does not support ICodecAPI"
+                                );
                             }
 
                             // 2. ソフトウェアエンコーダ等へのフォールバックとして MFSampleExtension_VideoEncodePictureType をサンプルに付与
@@ -464,7 +468,9 @@ pub fn start_mf_encode_workers(
                                                     frame_id: meta.frame_id,
                                                     t_cap_ms: meta.t_cap_ms,
                                                     t_enc_in_ms: meta.t_enc_in_ms,
-                                                    t_enc_out_ms: Some(core_types::latency_monotonic_ms()),
+                                                    t_enc_out_ms: Some(
+                                                        core_types::latency_monotonic_ms(),
+                                                    ),
                                                 })
                                                 .is_err()
                                             {

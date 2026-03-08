@@ -31,7 +31,10 @@ impl WindowInfoProvider {
             .get_process_info(hwnd)
             .unwrap_or_else(|_| ("Unknown".to_string(), "Unknown".to_string()));
 
-        info!("Window info: title={}, process_path={}, process_name={}", title, process_path, process_name);
+        info!(
+            "Window info: title={}, process_path={}, process_name={}",
+            title, process_path, process_name
+        );
 
         Ok(WindowMetadata {
             title,

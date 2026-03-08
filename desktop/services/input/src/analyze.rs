@@ -10,8 +10,13 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 use uuid::Uuid;
 
+pub enum ImageSource {
+    Memory(Vec<u8>),
+    File(String),
+}
+
 impl InputService {
-    pub(crate) async fn handle_screenshot_request(&self, include_image: bool) -> Result<()> {
+    pub(crate) async fn handle_screenshot_request(&self, include_image: bool, max_edge: u32) -> Result<()> {
         // 1. Request screenshot from CaptureService
         let (tx, rx) = oneshot::channel::<ScreenshotFrame>();
         self.capture_cmd_tx
@@ -134,8 +139,60 @@ impl InputService {
             info!("Sent screenshot metadata only for {}", id);
         }
 
-        // --- キャラクター情報の取得（VNDB API） ---
-        let (prompt, analysis_characters) = if let Some(ref title) = title_info {
+        // Prepare and spawn AI analysis task
+        self.prepare_and_spawn_analysis(
+            id,
+            ImageSource::Memory(jpeg_data),
+            max_edge,
+            title_info,
+        ).await;
+
+        Ok(())
+    }
+
+    pub(crate) async fn handle_analyze_request(&self, id: String, max_edge: u32) -> Result<()> {
+        info!("Starting explicit AI analysis for {}", id);
+        self.prepare_and_spawn_analysis(
+            id.clone(),
+            ImageSource::File(id),
+            max_edge,
+            None,
+        ).await;
+
+        Ok(())
+    }
+
+    pub(crate) async fn prepare_and_spawn_analysis(
+        &self,
+        id: String,
+        source: ImageSource,
+        max_edge: u32,
+        title_info: Option<title_resolver::TitleResolveResult>,
+    ) {
+        // 1. Get image data
+        let image_data = match source {
+            ImageSource::Memory(data) => data,
+            ImageSource::File(file_id) => {
+                let file_path = self.screenshot_dir.join(format!("{}.jpeg", file_id));
+                if !file_path.exists() {
+                    error!("Requested analysis for missing screenshot: {}", file_id);
+                    return;
+                }
+                match tokio::fs::read(&file_path).await {
+                    Ok(data) => {
+                        info!("Read screenshot file: {:?} ({} bytes)", file_path, data.len());
+                        data
+                    }
+                    Err(e) => {
+                        error!("Failed to read screenshot file {}: {}", file_id, e);
+                        return;
+                    }
+                }
+            }
+        };
+
+        // 2. Character Recognition (VNDB + ONNX)
+        if let Some(ref title) = title_info {
             let mut char_cache = self.cached_characters.lock().await;
             let need_fetch = match &*char_cache {
                 Some(cache) => cache.vndb_id != title.vndb_id,
@@ -189,117 +246,71 @@ impl InputService {
                     }
                 }
             }
+        }
 
-            match &*char_cache {
-                Some(_cache) => {
-                    let chars_in_screenshot = if let Some(ci_arc) = &self.character_identifier {
-                        let mut ci = ci_arc.lock().await;
-                        match ci.identify(&jpeg_data) {
-                            Ok(results) => results,
-                            Err(e) => {
-                                error!("Character identification failed: {}", e);
-                                Vec::new()
-                            }
-                        }
-                    } else {
-                        Vec::new()
-                    };
-
-                    let total_detected = chars_in_screenshot.len();
-
-                    let identified_known: Vec<_> = chars_in_screenshot
-                        .into_iter()
-                        .filter(|c| c.name != "Unknown")
-                        .collect();
-
-                    let total_identified = identified_known.len();
-                    info!(
-                        "Character Identifier: Detected {} characters, successfully identified {}",
-                        total_detected, total_identified
-                    );
-
-                    let analysis_characters: Vec<AnalysisCharacter> = identified_known
-                        .into_iter()
-                        .map(|c| {
-                            let position_str = match c.position_index {
-                                0 => "Left",
-                                1 => "Center",
-                                2 => "Right",
-                                _ => "Unknown",
-                            }
-                            .to_string();
-
-                            AnalysisCharacter {
-                                name: c.name.clone(),
-                                position: position_str,
-                            }
-                        })
-                        .collect();
-
-                    (PROMPT_BASE.to_string(), analysis_characters)
+        let chars_in_screenshot = if let Some(ci_arc) = &self.character_identifier {
+            let mut ci = ci_arc.lock().await;
+            match ci.identify(&image_data) {
+                Ok(results) => results,
+                Err(e) => {
+                    error!("Character identification failed: {}", e);
+                    Vec::new()
                 }
-                None => (PROMPT_BASE.to_string(), Vec::new()),
             }
         } else {
-            (PROMPT_BASE.to_string(), Vec::new())
+            Vec::new()
         };
 
-        // Background auto AI analysis trigger
+        let total_detected = chars_in_screenshot.len();
+
+        let identified_known: Vec<_> = chars_in_screenshot
+            .into_iter()
+            .filter(|c| c.name != "Unknown")
+            .collect();
+
+        let total_identified = identified_known.len();
+        info!(
+            "Character Identifier: Detected {} characters, successfully identified {}",
+            total_detected, total_identified
+        );
+
+        let analysis_characters: Vec<AnalysisCharacter> = identified_known
+            .into_iter()
+            .map(|c| {
+                let position_str = match c.position_index {
+                    0 => "Left",
+                    1 => "Center",
+                    2 => "Right",
+                    _ => "Unknown",
+                }
+                .to_string();
+
+                AnalysisCharacter {
+                    name: c.name.clone(),
+                    position: position_str,
+                }
+            })
+            .collect();
+
+        // 3. Spawn LLM background task
         let tagger_service = self.tagger_service.clone();
         let outgoing_tx = self.outgoing_dc_tx.clone();
-        let image_data = jpeg_data;
-        let id_for_task = id.clone();
+        let prompt = PROMPT_BASE.to_string();
 
         tokio::spawn(async move {
-            info!("Starting background auto AI analysis for {}", id_for_task);
+            info!("Starting background AI analysis for {} with max_edge {}", id, max_edge);
             Self::execute_image_analysis(
                 tagger_service,
                 outgoing_tx,
-                id_for_task.clone(),
+                id.clone(),
                 image_data,
-                512,
+                max_edge,
                 &prompt,
                 analysis_characters,
             )
             .await;
-            info!("Finished background auto AI analysis for {}", id_for_task);
+            info!("Finished background AI analysis for {}", id);
         });
-
-        Ok(())
-    }
-
-    pub(crate) async fn handle_analyze_request(&self, id: String, max_edge: u32) -> Result<()> {
-        let file_path = self.screenshot_dir.join(format!("{}.jpeg", id));
-        if !file_path.exists() {
-            error!("Requested analysis for missing screenshot: {}", id);
-            return Ok(());
-        }
-
-        // 1. Read file
-        let image_data = tokio::fs::read(&file_path).await?;
-        info!(
-            "Read screenshot file: {:?} ({} bytes)",
-            file_path,
-            image_data.len()
-        );
-
-        let tagger_service = self.tagger_service.clone();
-        let outgoing_tx = self.outgoing_dc_tx.clone();
-
-        info!("Starting explicit AI analysis for {}", id);
-        // Explicit request does not include character bounding box identifiers unless extracted
-        Self::execute_image_analysis(
-            tagger_service,
-            outgoing_tx,
-            id,
-            image_data,
-            max_edge,
-            PROMPT_BASE,
-            Vec::new(),
-        )
-        .await;
-
-        Ok(())
     }
 
     pub(crate) async fn execute_image_analysis(

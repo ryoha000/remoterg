@@ -302,6 +302,10 @@ pub enum SignalingResponse {
     },
 }
 
+fn default_max_edge() -> u32 {
+    512
+}
+
 /// DataChannel経由でやり取りするメッセージ
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DataChannelMessage {
@@ -314,6 +318,8 @@ pub enum DataChannelMessage {
     },
     ScreenshotRequest {
         include_image: bool,
+        #[serde(default = "default_max_edge")]
+        max_edge: u32,
     },
     Ping {
         timestamp: u64,

@@ -127,9 +127,9 @@ impl InputService {
             DataChannelMessage::CursorClick { button } => {
                 self.handle_cursor_click(&button).await?;
             }
-            DataChannelMessage::ScreenshotRequest { include_image } => {
-                info!("Screenshot requested (include_image: {})", include_image);
-                self.handle_screenshot_request(include_image).await?;
+            DataChannelMessage::ScreenshotRequest { include_image, max_edge } => {
+                info!("Screenshot requested (include_image: {}, max_edge: {})", include_image, max_edge);
+                self.handle_screenshot_request(include_image, max_edge).await?;
             }
             DataChannelMessage::AnalyzeRequest { id, max_edge } => {
                 info!(

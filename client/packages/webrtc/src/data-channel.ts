@@ -27,6 +27,23 @@ export const LlmConfigSchema = v.object({
 
 export type LlmConfig = v.InferOutput<typeof LlmConfigSchema>;
 
+const AnalysisCharacterSchema = v.object({
+  name: v.string(),
+  position: v.string(),
+});
+
+const AnalysisDialoguePayloadSchema = v.object({
+  speaker: v.string(),
+  text: v.string(),
+});
+
+export const AnalysisResultPayloadSchema = v.object({
+  dialogue: v.optional(AnalysisDialoguePayloadSchema),
+  characters: v.optional(v.array(AnalysisCharacterSchema)),
+});
+
+export type AnalysisResultPayload = v.InferOutput<typeof AnalysisResultPayloadSchema>;
+
 const IncomingMessageSchema = v.object({
   SCREENSHOT_METADATA: v.optional(
     v.object({
@@ -36,18 +53,7 @@ const IncomingMessageSchema = v.object({
   ANALYZE_RESPONSE: v.optional(
     v.object({
       id: v.string(),
-      text: v.string(),
-    }),
-  ),
-  ANALYZE_RESPONSE_CHUNK: v.optional(
-    v.object({
-      id: v.string(),
-      delta: v.string(),
-    }),
-  ),
-  ANALYZE_RESPONSE_DONE: v.optional(
-    v.object({
-      id: v.string(),
+      analysis: v.optional(AnalysisResultPayloadSchema),
     }),
   ),
   Pong: v.optional(v.unknown()),
@@ -66,9 +72,7 @@ export const runDataChannel = (
   mouseClickQ: Queue.Queue<{ x: number; y: number; button: string }>,
   onOpen: () => void,
   onScreenshot: (blob: Blob, meta: { id: string; format: string; size: number }) => void,
-  onAnalyzeResult: (id: string, text: string) => void,
-  onAnalyzeResultDelta: (id: string, delta: string) => void,
-  onAnalyzeDone: (id: string) => void,
+  onAnalyzeResult: (id: string, analysis: AnalysisResultPayload | undefined) => void,
   getLlmConfigQ: Queue.Queue<void>,
   updateLlmConfigQ: Queue.Queue<LlmConfig>,
   onLlmConfig: (config: LlmConfig) => void,
@@ -224,17 +228,7 @@ export const runDataChannel = (
               };
             } else if (msg.ANALYZE_RESPONSE) {
               console.log("Analysis response received");
-              console.log("Analysis response received");
-              onAnalyzeResult(msg.ANALYZE_RESPONSE.id, msg.ANALYZE_RESPONSE.text);
-            } else if (msg.ANALYZE_RESPONSE_CHUNK) {
-               // console.log("Analysis chunk received");
-               onAnalyzeResultDelta(
-                 msg.ANALYZE_RESPONSE_CHUNK.id,
-                 msg.ANALYZE_RESPONSE_CHUNK.delta,
-               );
-            } else if (msg.ANALYZE_RESPONSE_DONE) {
-               console.log("Analysis done received");
-               onAnalyzeDone(msg.ANALYZE_RESPONSE_DONE.id);
+              onAnalyzeResult(msg.ANALYZE_RESPONSE.id, msg.ANALYZE_RESPONSE.analysis);
             } else if (msg.LlmConfigResponse) {
               console.log("LlmConfig received:", msg.LlmConfigResponse.config);
               onLlmConfig(msg.LlmConfigResponse.config);

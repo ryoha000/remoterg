@@ -124,23 +124,29 @@ class ScreenshotProcessor @Inject constructor(
                 jsonObject.has("ANALYZE_RESPONSE") -> {
                     val resp = jsonObject.getJSONObject("ANALYZE_RESPONSE")
                     val id = resp.getString("id")
-                    val resultText = resp.getString("text")
 
+                    var analysisJsonString = "{}"
                     val charactersList = mutableListOf<moe.ryoha.remoterg.data.model.Character>()
-                    if (resp.has("characters")) {
-                        val charsArray = resp.getJSONArray("characters")
-                        for (i in 0 until charsArray.length()) {
-                            val charObj = charsArray.getJSONObject(i)
-                            charactersList.add(
-                                moe.ryoha.remoterg.data.model.Character(
-                                    name = charObj.optString("name", ""),
-                                    position = charObj.optString("position", "")
+
+                    if (resp.has("analysis") && !resp.isNull("analysis")) {
+                        val analysisObj = resp.getJSONObject("analysis")
+                        analysisJsonString = analysisObj.toString()
+
+                        if (analysisObj.has("characters") && !analysisObj.isNull("characters")) {
+                            val charsArray = analysisObj.getJSONArray("characters")
+                            for (i in 0 until charsArray.length()) {
+                                val charObj = charsArray.getJSONObject(i)
+                                charactersList.add(
+                                    moe.ryoha.remoterg.data.model.Character(
+                                        name = charObj.optString("name", ""),
+                                        position = charObj.optString("position", "")
+                                    )
                                 )
-                            )
+                            }
                         }
                     }
 
-                    saveAnalysisToDb(id, resultText, charactersList)
+                    saveAnalysisToDb(id, analysisJsonString, charactersList)
                 }
             }
         } catch (e: Exception) {

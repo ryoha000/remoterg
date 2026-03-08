@@ -6,9 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ViewerOverlay } from "@/components/viewer/viewer-overlay";
 import { GalleryModal, type GalleryImage } from "@/components/viewer/gallery-modal";
 import { SettingsModal } from "@/components/viewer/settings-modal";
-import { type LlmConfig } from "@remoterg/webrtc";
-import { parse } from "best-effort-json-parser";
-
+import { type LlmConfig, type AnalysisResultPayload } from "@remoterg/webrtc";
 import * as v from "valibot";
 
 const CodecSchema = v.picklist(["h264", "av1", "any"]);
@@ -61,46 +59,12 @@ function ViewerPage() {
     [],
   );
 
-  const handleAnalyzeResult = useCallback((id: string, text: string) => {
-    console.log(`Analyze result for ${id}:`, text);
-    try {
-      const analysis = JSON.parse(text);
-      setGalleryImages((prev) =>
-        prev.map((img) =>
-          img.id === id ? { ...img, analysis, isAnalyzing: false } : img
-        )
-      );
-    } catch (e) {
-      console.error("Failed to parse analysis result", e);
-    }
-  }, []);
-
-  const handleAnalyzeResultDelta = useCallback((id: string, delta: string) => {
+  const handleAnalyzeResult = useCallback((id: string, analysis: AnalysisResultPayload | undefined) => {
+    console.log(`Analyze result for ${id}:`, analysis);
     setGalleryImages((prev) =>
-      prev.map((img) => {
-        if (img.id !== id) return img;
-
-        const newRawText = (img.rawAnalysisText || "") + delta;
-        let analysis = img.analysis;
-        try {
-          analysis = parse(newRawText);
-        } catch {
-          // ignore transient parse errors
-        }
-
-        return {
-          ...img,
-          rawAnalysisText: newRawText,
-          analysis,
-          isAnalyzing: true,
-        };
-      })
-    );
-  }, []);
-
-  const handleAnalyzeDone = useCallback((id: string) => {
-    setGalleryImages((prev) =>
-      prev.map((img) => (img.id === id ? { ...img, isAnalyzing: false } : img))
+      prev.map((img) =>
+        img.id === id ? { ...img, analysis, isAnalyzing: false, rawAnalysisText: undefined } : img
+      )
     );
   }, []);
 
@@ -131,8 +95,6 @@ function ViewerPage() {
     onTrack: handleTrack,
     onScreenshot: handleScreenshot,
     onAnalyzeResult: handleAnalyzeResult,
-    onAnalyzeResultDelta: handleAnalyzeResultDelta,
-    onAnalyzeDone: handleAnalyzeDone,
     onLlmConfig: handleLlmConfig,
   });
 

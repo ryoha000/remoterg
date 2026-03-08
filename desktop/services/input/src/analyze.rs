@@ -364,12 +364,17 @@ impl InputService {
             Ok(text) => text,
             Err(e) => {
                 error!("Tagger analysis failed: {}", e);
-                // Send Error response using chunk mechanism which clients gracefully handle
-                let fallback = format!(r#"{{"error": "{}"}}"#, e);
+                // Send Error response
+                let fallback_analysis = core_types::AnalysisResultPayload {
+                    dialogue: Some(core_types::AnalysisDialoguePayload {
+                        speaker: "System".to_string(),
+                        text: format!("Error: {}", e),
+                    }),
+                    characters: Some(analysis_characters),
+                };
                 let response = DataChannelMessage::AnalyzeResponse {
                     id: id.clone(),
-                    text: fallback,
-                    characters: analysis_characters,
+                    analysis: Some(fallback_analysis),
                 };
                 let _ = outgoing_dc_tx
                     .send(OutgoingDataChannelMessage::Text(response))
@@ -380,14 +385,84 @@ impl InputService {
 
         info!("LLM AI Analysis Result for {}:\n{}", id, result);
 
+        let parsed_analysis = extract_and_parse_json(&result);
+        let final_analysis = match parsed_analysis {
+            Some(mut a) => {
+                a.characters = Some(analysis_characters);
+                Some(a)
+            }
+            None => Some(core_types::AnalysisResultPayload {
+                dialogue: None,
+                characters: Some(analysis_characters),
+            }),
+        };
+
         // 3. Send Single Message containing everything
         let response = DataChannelMessage::AnalyzeResponse {
             id: id.clone(),
-            text: result,
-            characters: analysis_characters,
+            analysis: final_analysis,
         };
         let _ = outgoing_dc_tx
             .send(OutgoingDataChannelMessage::Text(response))
             .await;
     }
 }
+
+fn extract_and_parse_json(text: &str) -> Option<core_types::AnalysisResultPayload> {
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) {
+        if start <= end {
+            let json_slice = &text[start..=end];
+            match serde_json::from_str::<core_types::AnalysisResultPayload>(json_slice) {
+                Ok(parsed) => return Some(parsed),
+                Err(e) => {
+                    error!("Failed to parse extracted JSON: {}. Extracted: {}", e, json_slice);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_and_parse_json_pure() {
+        let text = r#"{"dialogue":{"speaker":"兎亜","text":"女の子としてなんて……本気で言ってるの？"}}"#;
+        let parsed = extract_and_parse_json(text).unwrap();
+        assert_eq!(parsed.dialogue.unwrap().speaker, "兎亜");
+    }
+
+    #[test]
+    fn test_extract_and_parse_json_markdown() {
+        let text = r#"Here is the output:
+```json
+{
+  "dialogue": {
+    "speaker": "Alice",
+    "text": "Hello, world!"
+  }
+}
+```"#;
+        let parsed = extract_and_parse_json(text).unwrap();
+        assert_eq!(parsed.dialogue.unwrap().speaker, "Alice");
+    }
+
+    #[test]
+    fn test_extract_and_parse_json_garbage() {
+        let text = r#"Some thoughts:
+The speaker appears to be Bob.
+{
+  "dialogue": {
+    "speaker": "Bob",
+    "text": "Wait a minute."
+  }
+}
+And that's all.
+"#;
+        let parsed = extract_and_parse_json(text).unwrap();
+        assert_eq!(parsed.dialogue.unwrap().speaker, "Bob");
+    }
+}
+

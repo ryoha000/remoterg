@@ -379,9 +379,8 @@ pub enum DataChannelMessage {
     #[serde(rename = "ANALYZE_RESPONSE")]
     AnalyzeResponse {
         id: String,
-        text: String,
-        #[serde(default)]
-        characters: Vec<AnalysisCharacter>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        analysis: Option<AnalysisResultPayload>,
     },
     // LLM Config
     GetLlmConfig,
@@ -397,6 +396,20 @@ pub enum DataChannelMessage {
 pub struct AnalysisCharacter {
     pub name: String,
     pub position: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnalysisDialoguePayload {
+    pub speaker: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnalysisResultPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dialogue: Option<AnalysisDialoguePayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub characters: Option<Vec<AnalysisCharacter>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

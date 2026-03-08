@@ -16,6 +16,7 @@ import {
   createMockWebSocket,
   createMockPeerConnection,
   setAv1Preferences,
+  type AnalysisResultPayload,
 } from "@remoterg/webrtc";
 
 export interface WebRTCOptions {
@@ -28,9 +29,7 @@ export interface WebRTCOptions {
   onIceConnectionStateChange?: (state: string) => void;
   onScreenshot?: (blob: Blob, meta: { id: string; format: string; size: number }) => void;
 
-  onAnalyzeResult?: (id: string, text: string) => void;
-  onAnalyzeResultDelta?: (id: string, delta: string) => void;
-  onAnalyzeDone?: (id: string) => void;
+  onAnalyzeResult?: (id: string, analysis: AnalysisResultPayload | undefined) => void;
   onLlmConfig?: (config: LlmConfig) => void;
 }
 
@@ -48,8 +47,6 @@ export function useWebRTC(options: WebRTCOptions) {
     onScreenshot,
 
     onAnalyzeResult,
-    onAnalyzeResultDelta,
-    onAnalyzeDone,
     onLlmConfig,
   } = options;
 
@@ -400,15 +397,9 @@ export function useWebRTC(options: WebRTCOptions) {
           addLog("スクリーンショット受信", "success");
           onScreenshot?.(blob, meta);
         },
-        (id, text) => {
+        (id, analysis) => {
           addLog("解析結果受信", "success");
-          onAnalyzeResult?.(id, text);
-        },
-        (id, delta) => {
-          onAnalyzeResultDelta?.(id, delta);
-        },
-        (id) => {
-            onAnalyzeDone?.(id);
+          onAnalyzeResult?.(id, analysis);
         },
         getLlmConfigQ,
         updateLlmConfigQ,
@@ -501,8 +492,6 @@ export function useWebRTC(options: WebRTCOptions) {
     onTrack,
     onScreenshot,
     onAnalyzeResult,
-    onAnalyzeResultDelta,
-    onAnalyzeDone,
     onLlmConfig,
     useMock,
   ]);

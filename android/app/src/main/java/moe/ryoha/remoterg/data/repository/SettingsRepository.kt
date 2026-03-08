@@ -45,10 +45,21 @@ class SettingsRepository @Inject constructor(
         _isTrackpadModeEnabled.value = enabled
     }
 
+    private val _maxEdge = MutableStateFlow(
+        prefs.getInt(KEY_MAX_EDGE, 512)
+    )
+    val maxEdge: StateFlow<Int> = _maxEdge.asStateFlow()
+
+    fun setMaxEdge(edge: Int) {
+        prefs.edit().putInt(KEY_MAX_EDGE, edge).apply()
+        _maxEdge.value = edge
+    }
+
     companion object {
         private const val PREFS_NAME = "remoterg_settings"
         private const val KEY_USE_ORIGINAL_QUALITY_SCREENSHOT = "use_original_quality_screenshot"
         private const val KEY_IS_SHIFT_BUTTON_ENABLED = "is_shift_button_enabled"
         private const val KEY_IS_TRACKPAD_MODE_ENABLED = "is_trackpad_mode_enabled"
+        private const val KEY_MAX_EDGE = "max_edge"
     }
 }

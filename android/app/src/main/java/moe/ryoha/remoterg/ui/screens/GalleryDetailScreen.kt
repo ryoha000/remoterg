@@ -391,7 +391,7 @@ fun GalleryDetailScreen(
                 analysisResult = analysisResult,
                 isAnalyzing = isAnalyzing,
                 isConnected = isConnected,
-                onRequestAnalyze = { hostId -> viewModel.requestAnalyze(hostId, 512) },
+                onRequestAnalyze = { hostId -> viewModel.requestAnalyze(hostId) },
                 modifier = Modifier.fillMaxSize()
             )
         }

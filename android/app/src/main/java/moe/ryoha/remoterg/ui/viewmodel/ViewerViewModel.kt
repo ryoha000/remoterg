@@ -60,6 +60,7 @@ class ViewerViewModel @Inject constructor(
     val useOriginalQualityScreenshot: StateFlow<Boolean> = settingsRepository.useOriginalQualityScreenshot
     val isShiftButtonEnabled: StateFlow<Boolean> = settingsRepository.isShiftButtonEnabled
     val isTrackpadModeEnabled: StateFlow<Boolean> = settingsRepository.isTrackpadModeEnabled
+    val maxEdge: StateFlow<Int> = settingsRepository.maxEdge
 
     private val _connectionError = MutableStateFlow<String?>(null)
     val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
@@ -231,7 +232,8 @@ class ViewerViewModel @Inject constructor(
 
     fun takeScreenshot() {
         val useOriginal = useOriginalQualityScreenshot.value
-        screenshotProcessor.requestScreenshot(includeImage = useOriginal)
+        val currentMaxEdge = maxEdge.value
+        screenshotProcessor.requestScreenshot(includeImage = useOriginal, maxEdge = currentMaxEdge)
         
         if (useOriginal) {
             _screenshotTriggerFlow.tryEmit(Unit)
@@ -261,6 +263,10 @@ class ViewerViewModel @Inject constructor(
 
     fun setTrackpadModeEnabled(enabled: Boolean) {
         settingsRepository.setTrackpadModeEnabled(enabled)
+    }
+
+    fun setMaxEdge(edge: Int) {
+        settingsRepository.setMaxEdge(edge)
     }
 
     fun sendMouseClick(x: Float, y: Float, button: String = "left") {

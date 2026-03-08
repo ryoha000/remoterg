@@ -10,8 +10,10 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.combinedClickable
@@ -49,14 +51,18 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -651,11 +657,14 @@ fun ViewerScreen(
     if (overlayState.showDetailedSettings) {
         val useOriginal by viewModel.useOriginalQualityScreenshot.collectAsState()
         val isShiftButtonEnabled by viewModel.isShiftButtonEnabled.collectAsState()
+        val maxEdge by viewModel.maxEdge.collectAsState()
         DetailedSettingsDialog(
             useOriginalQualityScreenshot = useOriginal,
             isShiftButtonEnabled = isShiftButtonEnabled,
+            maxEdge = maxEdge,
             onUseOriginalQualityScreenshotChange = { viewModel.setUseOriginalQualityScreenshot(it) },
             onShiftButtonEnabledChange = { viewModel.setShiftButtonEnabled(it) },
+            onMaxEdgeChange = { viewModel.setMaxEdge(it) },
             onDismiss = { overlayState.showDetailedSettings = false }
         )
     }
@@ -1527,8 +1536,10 @@ private fun SettingsPanel(
 private fun DetailedSettingsDialog(
     useOriginalQualityScreenshot: Boolean,
     isShiftButtonEnabled: Boolean,
+    maxEdge: Int,
     onUseOriginalQualityScreenshotChange: (Boolean) -> Unit,
     onShiftButtonEnabledChange: (Boolean) -> Unit,
+    onMaxEdgeChange: (Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -1640,6 +1651,90 @@ private fun DetailedSettingsDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "オンにすると、画面右下のボタンがShiftキーとして動作します。",
+                        color = Color(0xFFA1A1AA), // zinc-400
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 送信画像サイズ設定
+            Column(modifier = Modifier.fillMaxWidth()) {
+                var expanded by remember { mutableStateOf(false) }
+                val options = listOf(
+                    512 to "512px (高速)",
+                    1024 to "1024px (標準)",
+                    2048 to "2048px (高画質)",
+                    99999 to "縮小しない"
+                )
+                val selectedOptionText = options.find { it.first == maxEdge }?.second ?: "${maxEdge}px"
+
+                Text(
+                    text = "送信画像サイズ (max_edge)",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { expanded = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color.White
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFF3F3F46)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = selectedOptionText)
+                            Text(
+                                text = if (expanded) "▲" else "▼",
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier
+                            .background(Color(0xFF18181B))
+                            .border(1.dp, Color(0xFF27272A), RoundedCornerShape(4.dp))
+                    ) {
+                        options.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.second, color = Color.White) },
+                                onClick = {
+                                    onMaxEdgeChange(option.first)
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ErrorOutline,
+                        contentDescription = "Info",
+                        tint = Color(0xFF60A5FA), // blue-400
+                        modifier = Modifier.size(16.dp).padding(top = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "スクリーンショットやAI解析時に、Host PCで画像を縮小してから転送します。\n「縮小しない」は通信量とPC負荷が非常に大きくなります。",
                         color = Color(0xFFA1A1AA), // zinc-400
                         fontSize = 12.sp,
                         lineHeight = 16.sp

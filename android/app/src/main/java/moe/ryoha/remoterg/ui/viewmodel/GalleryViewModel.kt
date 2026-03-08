@@ -60,7 +60,8 @@ class GalleryViewModel @Inject constructor(
     private val repository: ScreenshotRepository,
     private val screenshotDao: ScreenshotDao,
     private val analysisDao: AnalysisDao,
-    private val webRtcManager: IWebRtcManager
+    private val webRtcManager: IWebRtcManager,
+    private val settingsRepository: moe.ryoha.remoterg.data.repository.SettingsRepository
 ) : ViewModel() {
 
     private val _searchFilters = MutableStateFlow(SearchFilters())
@@ -294,10 +295,11 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
-    fun requestAnalyze(hostId: String, maxEdge: Int = 512) {
+    fun requestAnalyze(hostId: String) {
         if (!webRtcManager.isConnected.value) return
         _isAnalyzingMap.value = _isAnalyzingMap.value.toMutableMap().apply { put(hostId, true) }
         
+        val maxEdge = settingsRepository.maxEdge.value
         val msg = JSONObject().apply {
             put("AnalyzeRequest", JSONObject().apply {
                 put("id", hostId)

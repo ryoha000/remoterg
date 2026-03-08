@@ -46,7 +46,7 @@ class SettingsRepository @Inject constructor(
     }
 
     private val _maxEdge = MutableStateFlow(
-        prefs.getInt(KEY_MAX_EDGE, 512)
+        prefs.getInt(KEY_MAX_EDGE, 99999)
     )
     val maxEdge: StateFlow<Int> = _maxEdge.asStateFlow()
 

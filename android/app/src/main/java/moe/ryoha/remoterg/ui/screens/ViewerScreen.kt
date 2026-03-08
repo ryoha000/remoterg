@@ -1672,7 +1672,7 @@ private fun DetailedSettingsDialog(
                 val selectedOptionText = options.find { it.first == maxEdge }?.second ?: "${maxEdge}px"
 
                 Text(
-                    text = "送信画像サイズ (max_edge)",
+                    text = "解析時の画像サイズ",
                     color = Color.White,
                     fontSize = 14.sp,
                     modifier = Modifier.padding(bottom = 8.dp)
@@ -1694,9 +1694,11 @@ private fun DetailedSettingsDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(text = selectedOptionText)
-                            Text(
-                                text = if (expanded) "▲" else "▼",
-                                color = Color.White
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = if (expanded) "閉じる" else "開く",
+                                tint = Color.White,
+                                modifier = Modifier.rotate(if (expanded) 180f else 0f)
                             )
                         }
                     }
@@ -1734,7 +1736,7 @@ private fun DetailedSettingsDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "スクリーンショットやAI解析時に、Host PCで画像を縮小してから転送します。\n「縮小しない」は通信量とPC負荷が非常に大きくなります。",
+                        text = "Host PCで画像を縮小してからスクリーンショットを解析します。\n画像サイズが大きいほど正確な結果が得られますが処理に時間がかかります。",
                         color = Color(0xFFA1A1AA), // zinc-400
                         fontSize = 12.sp,
                         lineHeight = 16.sp

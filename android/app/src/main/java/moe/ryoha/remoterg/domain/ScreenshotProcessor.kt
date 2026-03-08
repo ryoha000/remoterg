@@ -284,7 +284,7 @@ class ScreenshotProcessor @Inject constructor(
     /**
      * DataChannel に Screenshot リクエストを送信する
      */
-    fun requestScreenshot(includeImage: Boolean, maxEdge: Int = 512) {
+    fun requestScreenshot(includeImage: Boolean, maxEdge: Int) {
         Log.d(TAG, "Sending ScreenshotRequest (includeImage=$includeImage, maxEdge=$maxEdge)")
         val req = "{\"ScreenshotRequest\":{\"include_image\":$includeImage,\"max_edge\":$maxEdge}}"
         webRtcManager.sendDataChannelMessage(req)

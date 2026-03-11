@@ -8,7 +8,7 @@ pub struct DictDownloader;
 impl DictDownloader {
     pub async fn ensure_latest(dest: &Path) -> Result<()> {
         let url =
-            "https://github.com/ryoha000/remoterg/releases/latest/download/vndb_titles.db.zst";
+            "https://github.com/ryoha000/remoterg/releases/download/vndb-latest/vndb_titles.db.zst";
         tracing::info!("Downloading dictionary from {}", url);
         Self::download_and_extract(url, dest).await
     }

@@ -1,77 +1,32 @@
-# RemoteRG Host Daemon
+# RemoteRG Host Daemon (`hostd`)
 
-ノベルゲームをリモートプレイするためのホスト側デーモンです。
+Windows上のノベルゲームをストリーミングし、WebRTC経由でリモートプレイ機能を提供するホスト側デーモンです。
 
-## ビルド
+## 他プロダクトからの起動方法
 
-```bash
-cargo build --release
-```
+別アプリケーション（ランチャーアプリやプレイ記録ツールなど）から `hostd` を起動する場合、対象となるゲームのウィンドウハンドル（HWND）や、連携用のセッションIDなどを引数として指定してプロセスを起動します。
 
-## 実行
+### 起動コマンド例
 
 ```bash
-cargo run --bin hostd
+# 基本的な起動（キャプチャ対象のHWNDと一意のセッションIDを指定）
+hostd.exe --hwnd <対象ウィンドウのHWND> --session-id <一意のセッションID>
+
+# カスタムシグナリングサーバーを利用する場合
+hostd.exe --hwnd <HWND> --session-id <SESSION_ID> --cloudflare-url wss://YOUR_WORKER_URL/api/signal
+
+# デバッグ用途（ログ出力の詳細化やモックの利用）
+hostd.exe --hwnd <HWND> --session-id <SESSION_ID> --log-level debug --mock
 ```
 
-オプション:
-- `-p, --port <PORT>`: HTTP/WebSocketサーバのポート番号（デフォルト: 8080）
-- `-l, --log-level <LEVEL>`: ログレベル（trace, debug, info, warn, error、デフォルト: info）
+### 主要なオプション
 
-例:
-```bash
-cargo run --bin hostd -- --port 9000 --log-level debug
-```
+連携時によく利用される実行時オプションは以下の通りです。その他の詳細なオプション（スクリーンショットの保存先やAI関連パスなど）は、`hostd.exe --help` で確認可能です。
 
-## 動作確認手順
-
-1. ホストデーモンを起動:
-   ```bash
-   cargo run --bin hostd
-   ```
-
-2. ブラウザで `http://localhost:8080` にアクセス
-
-3. 「接続」ボタンをクリック
-
-4. WebSocket接続が確立され、ダミーのSDP Answerが返されることを確認
-
-## アーキテクチャ
-
-### サービス構成
-
-- **CaptureService**: ウィンドウキャプチャ（現在はダミーフレーム生成）
-- **WebRtcService**: WebRTC接続管理（現在はスケルトン）
-- **SignalingService**: HTTP/WebSocketサーバによるシグナリング
-- **InputService**: クライアントからの入力処理（現在はログ出力のみ）
-
-### メッセージフロー
-
-```
-クライアント (ブラウザ)
-    ↓ WebSocket
-SignalingService
-    ↓ SDP Offer/Answer
-WebRtcService
-    ↓ フレーム
-CaptureService
-    ↓ DataChannel
-InputService
-```
-
-## 開発状況
-
-現在は最小限の実装が完了しています:
-
-- ✅ ワークスペースとクレート構造
-- ✅ ダミーフレーム生成（CaptureService）
-- ✅ WebSocketシグナリングサーバ（SignalingService）
-- ✅ WebRTCサービスのスケルトン
-- ✅ 単一バイナリでの起動
-
-次のステップ:
-- [ ] GraphicsCapture APIを使った実際のウィンドウキャプチャ
-- [ ] libwebrtcバインディングの統合
-- [ ] Win32 SendInputによる入力注入
-- [ ] スクリーンショット機能
-
+- `--hwnd <HWND>`: キャプチャ対象となるウィンドウのハンドル（整数値）。未指定の場合は0扱いとなります。環境変数 `REMOTERG_HWND` にも対応しています。
+- `--session-id <SESSION_ID>`: Web/Androidクライアントから接続するための合言葉となるセッションID。 [デフォルト: `fixed`]
+- `--cloudflare-url <CLOUDFLARE_URL>`: シグナリングサーバーの WebSocket URL。 [デフォルト: `ws://localhost:8787/api/signal`]
+- `-l, --log-level <LOG_LEVEL>`: ログの出力レベル (`trace`, `debug`, `info`, `warn`, `error`)。 [デフォルト: `info`]
+- `--mock`: 実際のウィンドウや音声のキャプチャの代わりにモック実装を使用します。キャプチャ対象がない環境での動作検証などに使用します。
+- `--llama-server-path <PATH>`: AI機能で利用する `llama-server.exe` へのパス。
+- `--character-identifier-models-dir <PATH>`: AIによるキャラクター識別用モデル群が格納されているディレクトリ。
